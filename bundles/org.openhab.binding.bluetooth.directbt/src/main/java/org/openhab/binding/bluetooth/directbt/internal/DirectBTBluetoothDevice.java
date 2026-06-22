@@ -19,6 +19,13 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 
+import org.direct_bt.BTDevice;
+import org.direct_bt.BTGattChar;
+import org.direct_bt.BTGattCharListener;
+import org.direct_bt.BTGattService;
+import org.direct_bt.EInfoReport;
+import org.direct_bt.GattCharPropertySet;
+import org.direct_bt.HCIStatusCode;
 import org.eclipse.jdt.annotation.NonNullByDefault;
 import org.eclipse.jdt.annotation.Nullable;
 import org.openhab.binding.bluetooth.BaseBluetoothDevice;
@@ -29,14 +36,6 @@ import org.openhab.binding.bluetooth.BluetoothService;
 import org.openhab.binding.bluetooth.notification.BluetoothConnectionStatusNotification;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-
-import org.direct_bt.BTDevice;
-import org.direct_bt.BTGattChar;
-import org.direct_bt.BTGattCharListener;
-import org.direct_bt.BTGattService;
-import org.direct_bt.EInfoReport;
-import org.direct_bt.GattCharPropertySet;
-import org.direct_bt.HCIStatusCode;
 
 /**
  * A {@link org.openhab.binding.bluetooth.BluetoothDevice} backed by a Direct-BT {@link BTDevice}.
@@ -199,8 +198,8 @@ public class DirectBTBluetoothDevice extends BaseBluetoothDevice {
     public CompletableFuture<byte[]> readCharacteristic(BluetoothCharacteristic characteristic) {
         BTGattChar gattChar = gattCharByUuid.get(characteristic.getUuid());
         if (gattChar == null) {
-            return CompletableFuture.failedFuture(new IllegalStateException("Characteristic not found: "
-                    + characteristic.getUuid()));
+            return CompletableFuture
+                    .failedFuture(new IllegalStateException("Characteristic not found: " + characteristic.getUuid()));
         }
         return CompletableFuture.supplyAsync(() -> {
             try {
@@ -212,12 +211,11 @@ public class DirectBTBluetoothDevice extends BaseBluetoothDevice {
     }
 
     @Override
-    public CompletableFuture<@Nullable Void> writeCharacteristic(BluetoothCharacteristic characteristic,
-            byte[] value) {
+    public CompletableFuture<@Nullable Void> writeCharacteristic(BluetoothCharacteristic characteristic, byte[] value) {
         BTGattChar gattChar = gattCharByUuid.get(characteristic.getUuid());
         if (gattChar == null) {
-            return CompletableFuture.failedFuture(new IllegalStateException("Characteristic not found: "
-                    + characteristic.getUuid()));
+            return CompletableFuture
+                    .failedFuture(new IllegalStateException("Characteristic not found: " + characteristic.getUuid()));
         }
         // withResponse=true (acknowledged write) unless only write-without-response is supported.
         boolean withResponse = gattChar.getProperties().isSet(GattCharPropertySet.Type.WriteWithAck);

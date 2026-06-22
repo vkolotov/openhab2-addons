@@ -12,21 +12,9 @@
  */
 package org.openhab.binding.bluetooth.directbt.internal;
 
-import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
-
-import org.eclipse.jdt.annotation.NonNullByDefault;
-import org.eclipse.jdt.annotation.Nullable;
-import org.openhab.binding.bluetooth.AbstractBluetoothBridgeHandler;
-import org.openhab.binding.bluetooth.BluetoothAddress;
-import org.openhab.core.common.ThreadPoolManager;
-import org.openhab.core.thing.Bridge;
-import org.openhab.core.thing.ThingStatus;
-import org.openhab.core.thing.ThingStatusDetail;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 import org.direct_bt.AdapterStatusListener;
 import org.direct_bt.BTAdapter;
@@ -39,6 +27,16 @@ import org.direct_bt.DiscoveryPolicy;
 import org.direct_bt.EIRDataTypeSet;
 import org.direct_bt.HCIStatusCode;
 import org.direct_bt.ScanType;
+import org.eclipse.jdt.annotation.NonNullByDefault;
+import org.eclipse.jdt.annotation.Nullable;
+import org.openhab.binding.bluetooth.AbstractBluetoothBridgeHandler;
+import org.openhab.binding.bluetooth.BluetoothAddress;
+import org.openhab.core.common.ThreadPoolManager;
+import org.openhab.core.thing.Bridge;
+import org.openhab.core.thing.ThingStatus;
+import org.openhab.core.thing.ThingStatusDetail;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * Bridge handler for a Direct-BT controlled Bluetooth adapter.
@@ -216,10 +214,10 @@ public class DirectBTBridgeHandler extends AbstractBluetoothBridgeHandler<Direct
             logger.debug("Direct-BT onAdapterAdded {} pre-state: initialized={} powered={}", wanted,
                     added.isInitialized(), added.isPowered());
             // Bring the adapter to a powered state FIRST. Three cases:
-            //  - never initialized  -> initialize() (power-cycles + powers on)
-            //  - initialized but off -> initialize() returns FAILED and setPowered() won't recover it, so
-            //                           reset() (brings the device up from standby into a POWERED state)
-            //  - already powered     -> nothing to do
+            // - never initialized -> initialize() (power-cycles + powers on)
+            // - initialized but off -> initialize() returns FAILED and setPowered() won't recover it, so
+            // reset() (brings the device up from standby into a POWERED state)
+            // - already powered -> nothing to do
             // Order matters: addStatusListener() / startDiscovery() must come AFTER the adapter is
             // initialized & powered. Calling addStatusListener() on a freshly-replayed, not-yet-initialized
             // adapter crashes the native layer with a null-reference (jaulib helper_jni.hpp:512).

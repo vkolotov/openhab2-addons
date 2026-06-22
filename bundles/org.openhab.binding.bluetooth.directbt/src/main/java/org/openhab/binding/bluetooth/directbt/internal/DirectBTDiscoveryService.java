@@ -16,6 +16,9 @@ import java.util.Set;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 
+import org.direct_bt.BTAdapter;
+import org.direct_bt.BTFactory;
+import org.direct_bt.BTManager;
 import org.eclipse.jdt.annotation.NonNullByDefault;
 import org.eclipse.jdt.annotation.Nullable;
 import org.openhab.core.config.discovery.AbstractDiscoveryService;
@@ -26,10 +29,6 @@ import org.osgi.service.component.annotations.Activate;
 import org.osgi.service.component.annotations.Component;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-
-import org.direct_bt.BTAdapter;
-import org.direct_bt.BTFactory;
-import org.direct_bt.BTManager;
 
 /**
  * Discovers the Direct-BT controllable Bluetooth adapters present on this host and offers them as
