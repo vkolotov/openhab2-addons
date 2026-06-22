@@ -13,6 +13,7 @@
 package org.openhab.binding.bluetooth.directbt.internal;
 
 import java.util.List;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 
@@ -20,6 +21,7 @@ import org.eclipse.jdt.annotation.NonNullByDefault;
 import org.eclipse.jdt.annotation.Nullable;
 import org.openhab.binding.bluetooth.AbstractBluetoothBridgeHandler;
 import org.openhab.binding.bluetooth.BluetoothAddress;
+import org.openhab.core.common.ThreadPoolManager;
 import org.openhab.core.thing.Bridge;
 import org.openhab.core.thing.ThingStatus;
 import org.openhab.core.thing.ThingStatusDetail;
@@ -61,6 +63,10 @@ public class DirectBTBridgeHandler extends AbstractBluetoothBridgeHandler<Direct
 
     private final Logger logger = LoggerFactory.getLogger(DirectBTBridgeHandler.class);
 
+    // Dedicated pool for the blocking Direct-BT GATT read/write/notify-setup calls, so they never block the
+    // scheduler or native callback threads.
+    private final ExecutorService executor = ThreadPoolManager.getPool("bluetooth-directbt");
+
     private @Nullable BluetoothAddress adapterAddress;
     private @Nullable BTManager manager;
     private @Nullable BTAdapter adapter;
@@ -98,6 +104,30 @@ public class DirectBTBridgeHandler extends AbstractBluetoothBridgeHandler<Direct
                 DiscoveryPolicy policy, long timestamp) {
             logger.debug("Direct-BT discoveringChanged: meta={} enabled={} policy={}", currentMeta, changedEnabled,
                     policy);
+        }
+
+        @Override
+        public void deviceConnected(BTDevice device, boolean discovered, long timestamp) {
+            DirectBTBluetoothDevice ohDevice = findDevice(device);
+            if (ohDevice != null) {
+                ohDevice.onConnected();
+            }
+        }
+
+        @Override
+        public void deviceReady(BTDevice device, long timestamp) {
+            DirectBTBluetoothDevice ohDevice = findDevice(device);
+            if (ohDevice != null) {
+                ohDevice.onReady();
+            }
+        }
+
+        @Override
+        public void deviceDisconnected(BTDevice device, HCIStatusCode reason, short handle, long timestamp) {
+            DirectBTBluetoothDevice ohDevice = findDevice(device);
+            if (ohDevice != null) {
+                ohDevice.onDisconnected();
+            }
         }
     }
 
@@ -298,10 +328,26 @@ public class DirectBTBridgeHandler extends AbstractBluetoothBridgeHandler<Direct
         if (disposed) {
             return;
         }
-        String mac = btDevice.getAddressAndType().address.toString().toUpperCase();
-        DirectBTBluetoothDevice device = getDevice(new BluetoothAddress(mac));
+        DirectBTBluetoothDevice device = getDevice(toAddress(btDevice));
         device.updateBTDevice(btDevice);
         deviceDiscovered(device);
+    }
+
+    /** Resolve the openHAB device for a Direct-BT device by address, or {@code null} if disposed. */
+    private @Nullable DirectBTBluetoothDevice findDevice(BTDevice btDevice) {
+        if (disposed) {
+            return null;
+        }
+        return getDevice(toAddress(btDevice));
+    }
+
+    private static BluetoothAddress toAddress(BTDevice btDevice) {
+        return new BluetoothAddress(btDevice.getAddressAndType().address.toString().toUpperCase());
+    }
+
+    /** Pool for the device's blocking GATT operations. */
+    ExecutorService getExecutor() {
+        return executor;
     }
 
     @Override
@@ -332,6 +378,7 @@ public class DirectBTBridgeHandler extends AbstractBluetoothBridgeHandler<Direct
             detachAdapter();
             managerReady = false;
         }
+        forEachDevice(DirectBTBluetoothDevice::close);
         super.dispose();
     }
 
