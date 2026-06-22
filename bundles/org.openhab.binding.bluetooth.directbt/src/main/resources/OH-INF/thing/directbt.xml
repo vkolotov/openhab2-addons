@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<thing:thing-descriptions bindingId="bluetooth"
+    xmlns:thing="https://openhab.org/schemas/thing-description/v1.0.0"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="https://openhab.org/schemas/thing-description/v1.0.0 https://openhab.org/schemas/thing-description-1.0.0.xsd">
+
+    <bridge-type id="directbt">
+        <label>Direct-BT Bluetooth Adapter</label>
+        <description>A Bluetooth adapter driven directly via the Direct-BT userspace stack (no BlueZ daemon).
+            Takes exclusive control of the adapter; bluetoothd must be disabled for that adapter.</description>
+
+        <representation-property>address</representation-property>
+
+        <config-description>
+            <parameter name="address" type="text" required="true">
+                <label>Address</label>
+                <description>The Bluetooth address of the adapter in format XX:XX:XX:XX:XX:XX</description>
+            </parameter>
+            <parameter name="backgroundDiscovery" type="boolean">
+                <label>Background Discovery</label>
+                <description>Whether this adapter performs background discovery of Bluetooth devices</description>
+                <advanced>true</advanced>
+                <default>false</default>
+            </parameter>
+        </config-description>
+
+    </bridge-type>
+
+</thing:thing-descriptions>
