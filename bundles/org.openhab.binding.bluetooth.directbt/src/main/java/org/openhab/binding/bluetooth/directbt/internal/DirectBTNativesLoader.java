@@ -25,16 +25,16 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * Loads the Direct-BT / jaulib native libraries that are bundled with this binding as classpath
- * resources, by copying each to a temp directory and {@code System.load()}-ing it in dependency order.
+ * Extracts the Direct-BT / jaulib native libraries that are bundled with this binding as classpath
+ * resources, copying them onto the JVM's {@code java.library.path} so Direct-BT's own loader can find
+ * and {@code System.load()} them by basename.
  * <p>
- * Direct-BT ships its own {@code TempJarCache}-based native loader, but that relies on locating its
- * containing jar on the filesystem, which is not reliable inside an OSGi framework. Loading the
- * libraries ourselves before {@code BTFactory} initializes guarantees they are present in the JVM
- * regardless; Direct-BT then finds them already loaded. (Same approach as the sputnikdev tinyb
- * transport, where it was the only option.)
- * <p>
- * Set {@code -Djau.pkg.UseTempJarCache=false} so Direct-BT does not also attempt its own extraction.
+ * Direct-BT ships a {@code TempJarCache}-based loader, but it relies on locating its containing jar on
+ * the filesystem, which is not reliable inside an OSGi framework. We therefore disable it
+ * ({@code -Djau.pkg.UseTempJarCache=false}) and pre-extract the libs ourselves. We deliberately do NOT
+ * {@code System.load()} them here: a load-by-absolute-path does not satisfy Direct-BT's later
+ * load-by-basename (the JVM tracks the two separately), which caused an {@code UnsatisfiedLinkError} —
+ * so we only place the files where Direct-BT's loader will find them.
  *
  * @author Vlad Kolotov - Initial contribution
  */
@@ -63,6 +63,9 @@ final class DirectBTNativesLoader {
         if (loaded) {
             return;
         }
+        // Process-global: tell Direct-BT's loader not to use its TempJarCache (unreliable in OSGi); it will
+        // load from java.library.path instead, where we extract the libs below. Set once.
+        System.setProperty("jau.pkg.UseTempJarCache", "false");
         String arch = getNativeArch();
         Path libDir = resolveLibraryPathDir();
         Files.createDirectories(libDir);
@@ -80,35 +83,47 @@ final class DirectBTNativesLoader {
         loaded = true;
     }
 
-    /** @return the first directory on {@code java.library.path} (where Direct-BT's loader searches). */
+    /**
+     * @return a WRITABLE directory on {@code java.library.path} where Direct-BT's loader will then find the
+     *         extracted libs by basename. The first entry may be a non-writable system dir (e.g. on a deb
+     *         install), so pick the first writable one; fall back to {@code java.io.tmpdir}. NOTE: if no
+     *         java.library.path dir is writable, Direct-BT's loader won't search tmpdir and load will fail —
+     *         document that the openHAB service must have a writable java.library.path entry.
+     */
     private static Path resolveLibraryPathDir() {
         String libPath = Objects.requireNonNullElse(System.getProperty("java.library.path"), "");
-        String dir = Objects.requireNonNullElse(System.getProperty("java.io.tmpdir"), "/tmp");
         for (String entry : libPath.split(File.pathSeparator)) {
             if (!entry.isBlank()) {
-                dir = entry;
-                break;
+                File dir = new File(entry);
+                if ((dir.isDirectory() && dir.canWrite()) || (!dir.exists() && canCreate(dir))) {
+                    return dir.toPath();
+                }
             }
         }
-        return new File(dir).toPath();
+        return new File(Objects.requireNonNullElse(System.getProperty("java.io.tmpdir"), "/tmp")).toPath();
     }
 
-    /** @return the {@code native/<arch>} folder name matching this JVM, mirroring Direct-BT's layout. */
+    private static boolean canCreate(File dir) {
+        File parent = dir.getParentFile();
+        return parent != null && parent.isDirectory() && parent.canWrite();
+    }
+
+    /**
+     * @return the {@code native/<arch>} folder name matching this JVM, mirroring Direct-BT's layout. Only
+     *         architectures whose natives are actually bundled with this binding are accepted.
+     */
     static String getNativeArch() throws UnsupportedOperationException {
         String os = System.getProperty("os.name", "").toLowerCase();
         String arch = System.getProperty("os.arch", "").toLowerCase();
         if (!os.startsWith("linux")) {
             throw new UnsupportedOperationException("Direct-BT binding supports Linux only, found: " + os);
         }
+        // Only linux-amd64 natives are currently bundled. Add aarch64/arm here once cross-built natives
+        // are included under src/main/resources/native/.
         if (arch.equals("amd64") || arch.equals("x86_64")) {
             return "linux-amd64";
         }
-        if (arch.equals("aarch64") || arch.equals("arm64")) {
-            return "linux-aarch64";
-        }
-        if (arch.startsWith("arm")) {
-            return "linux-arm";
-        }
-        throw new UnsupportedOperationException("Unsupported architecture for Direct-BT: " + arch);
+        throw new UnsupportedOperationException(
+                "No bundled Direct-BT natives for architecture '" + arch + "' (only linux-amd64 is bundled)");
     }
 }
