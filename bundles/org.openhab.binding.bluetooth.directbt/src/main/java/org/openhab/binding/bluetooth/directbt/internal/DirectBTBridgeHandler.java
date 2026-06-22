@@ -36,6 +36,7 @@ import org.direct_bt.BTMode;
 import org.direct_bt.DiscoveryPolicy;
 import org.direct_bt.EIRDataTypeSet;
 import org.direct_bt.HCIStatusCode;
+import org.direct_bt.ScanType;
 
 /**
  * Bridge handler for a Direct-BT controlled Bluetooth adapter.
@@ -66,7 +67,10 @@ public class DirectBTBridgeHandler extends AbstractBluetoothBridgeHandler<Direct
     private @Nullable ScheduledFuture<?> initJob;
     private boolean managerReady;
 
-    private final AdapterStatusListener statusListener = new DirectBTStatusListener();
+    // NOTE: AdapterStatusListener's constructor only builds its native peer if BTFactory.isInitialized();
+    // it must therefore be created AFTER getDirectBTManager(), not as a field initializer (otherwise its
+    // native instance is null and addStatusListener() crashes with a null-reference). Created lazily.
+    private @Nullable AdapterStatusListener statusListener;
     private final ChangedAdapterSetListener changedAdapterSetListener = new DirectBTChangedAdapterSetListener();
 
     /**
@@ -77,13 +81,22 @@ public class DirectBTBridgeHandler extends AbstractBluetoothBridgeHandler<Direct
     private class DirectBTStatusListener extends AdapterStatusListener {
         @Override
         public boolean deviceFound(BTDevice device, long timestamp) {
+            logger.debug("Direct-BT deviceFound: {}", device.getAddressAndType());
             onDeviceFound(device);
             return false; // false = keep the device in discovery (do not take exclusive ownership)
         }
 
         @Override
         public void deviceUpdated(BTDevice device, EIRDataTypeSet updateMask, long timestamp) {
+            logger.trace("Direct-BT deviceUpdated: {}", device.getAddressAndType());
             onDeviceFound(device);
+        }
+
+        @Override
+        public void discoveringChanged(BTAdapter a, ScanType currentMeta, ScanType changedType, boolean changedEnabled,
+                DiscoveryPolicy policy, long timestamp) {
+            logger.debug("Direct-BT discoveringChanged: meta={} enabled={} policy={}", currentMeta, changedEnabled,
+                    policy);
         }
     }
 
@@ -169,12 +182,14 @@ public class DirectBTBridgeHandler extends AbstractBluetoothBridgeHandler<Direct
         try {
             logger.debug("Direct-BT onAdapterAdded {} pre-state: initialized={} powered={}", wanted,
                     added.isInitialized(), added.isPowered());
-            added.addStatusListener(statusListener);
-            // Bring the adapter to a powered state. Three cases:
+            // Bring the adapter to a powered state FIRST. Three cases:
             //  - never initialized  -> initialize() (power-cycles + powers on)
             //  - initialized but off -> initialize() returns FAILED and setPowered() won't recover it, so
             //                           reset() (brings the device up from standby into a POWERED state)
             //  - already powered     -> nothing to do
+            // Order matters: addStatusListener() / startDiscovery() must come AFTER the adapter is
+            // initialized & powered. Calling addStatusListener() on a freshly-replayed, not-yet-initialized
+            // adapter crashes the native layer with a null-reference (jaulib helper_jni.hpp:512).
             if (!added.isPowered()) {
                 HCIStatusCode rc;
                 if (!added.isInitialized()) {
@@ -188,7 +203,6 @@ public class DirectBTBridgeHandler extends AbstractBluetoothBridgeHandler<Direct
                     }
                 }
                 if (rc != HCIStatusCode.SUCCESS) {
-                    added.removeStatusListener(statusListener);
                     updateStatus(ThingStatus.OFFLINE, ThingStatusDetail.COMMUNICATION_ERROR,
                             "Adapter power-up failed: " + rc + " (is bluetoothd disabled for this adapter?)");
                     return;
@@ -200,11 +214,18 @@ public class DirectBTBridgeHandler extends AbstractBluetoothBridgeHandler<Direct
                 Thread.sleep(POWER_ON_WAIT_MS);
             }
             if (!added.isPowered()) {
-                added.removeStatusListener(statusListener);
                 updateStatus(ThingStatus.OFFLINE, ThingStatusDetail.COMMUNICATION_ERROR,
                         "Adapter did not power on (is bluetoothd disabled for this adapter?)");
                 return;
             }
+            // Adapter is initialized & powered: now safe to create + attach the status listener. The listener
+            // MUST be created here (after BTFactory init), not as a field, so its native peer is built.
+            AdapterStatusListener listener = statusListener;
+            if (listener == null) {
+                listener = new DirectBTStatusListener();
+                statusListener = listener;
+            }
+            added.addStatusListener(listener);
             // Clear any prior discovery state first: startDiscovery() returns INTERNAL_FAILURE if the adapter
             // is already discovering (e.g. from a previous handler instance). stopDiscovery() is a safe no-op
             // otherwise.
@@ -215,7 +236,7 @@ public class DirectBTBridgeHandler extends AbstractBluetoothBridgeHandler<Direct
                     LE_SCAN_INTERVAL, LE_SCAN_WINDOW, FILTER_POLICY, FILTER_DUP);
             logger.debug("Direct-BT adapter {} startDiscovery: {} (powered={})", wanted, res, added.isPowered());
             if (res != HCIStatusCode.SUCCESS) {
-                added.removeStatusListener(statusListener);
+                added.removeStatusListener(listener);
                 updateStatus(ThingStatus.OFFLINE, ThingStatusDetail.COMMUNICATION_ERROR,
                         "startDiscovery failed: " + res);
                 return;
@@ -266,9 +287,12 @@ public class DirectBTBridgeHandler extends AbstractBluetoothBridgeHandler<Direct
             }
         }
         BTAdapter localAdapter = adapter;
+        AdapterStatusListener localListener = statusListener;
         if (localAdapter != null) {
             try {
-                localAdapter.removeStatusListener(statusListener);
+                if (localListener != null) {
+                    localAdapter.removeStatusListener(localListener);
+                }
                 localAdapter.stopDiscovery();
             } catch (Exception e) {
                 logger.debug("Error stopping Direct-BT discovery on dispose", e);
