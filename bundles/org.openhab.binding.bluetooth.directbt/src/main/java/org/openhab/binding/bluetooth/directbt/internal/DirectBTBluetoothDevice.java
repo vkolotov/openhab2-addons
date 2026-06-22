@@ -55,8 +55,8 @@ public class DirectBTBluetoothDevice extends BaseBluetoothDevice {
     // Scan-assisted LE connection parameters, tuned for reliability on marginal/weak-RSSI links (units of
     // 0.625ms for scan, 1.25ms for conn interval, 10ms for supervision). Rationale (see BLE connection-param
     // guidance): relaxed conn interval + zero peripheral latency + a long (2s) supervision timeout tolerate
-    // missed packets on a noisy/weak link instead of dropping immediately. These are the defaults; per-device
-    // overrides come from the Thing config (DirectBTGenericConfiguration).
+    // missed packets on a noisy/weak link instead of dropping immediately. TODO: make these overridable via
+    // bridge-level config (the generic device thing-type is core-owned, so per-device config isn't available).
     private static final short LE_SCAN_INTERVAL = (short) 24; // 15ms
     private static final short LE_SCAN_WINDOW = (short) 24; // 15ms
     private static final short CONN_INTERVAL_MIN = (short) 24; // 30ms
@@ -178,11 +178,15 @@ public class DirectBTBluetoothDevice extends BaseBluetoothDevice {
                     CONN_LATENCY, CONN_SUPERVISION_TIMEOUT);
             if (status != HCIStatusCode.SUCCESS) {
                 logger.debug("Direct-BT connect to {} failed: {}", address, status);
+                // A synchronous failure won't produce a deviceDisconnected callback, so reset the state here;
+                // otherwise getConnectionState() stays stuck at CONNECTING after a failed establishment.
+                setConnectionState(ConnectionState.DISCONNECTED);
                 return false;
             }
             return true;
         } catch (RuntimeException e) {
             logger.debug("Direct-BT connect to {} threw", address, e);
+            setConnectionState(ConnectionState.DISCONNECTED);
             return false;
         }
     }
