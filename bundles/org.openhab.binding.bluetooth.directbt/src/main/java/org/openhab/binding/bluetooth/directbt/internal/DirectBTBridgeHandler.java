@@ -65,6 +65,11 @@ public class DirectBTBridgeHandler extends AbstractBluetoothBridgeHandler<Direct
     // scheduler or native callback threads.
     private final ExecutorService executor = ThreadPoolManager.getPool("bluetooth-directbt");
 
+    // The HCI controller allows only ONE LE create-connection in flight at a time; concurrent connectLE
+    // calls (e.g. the core's discovery connect-probes) otherwise fail with COMMAND_DISALLOWED. Devices
+    // serialize their connect through this per-adapter lock.
+    private final java.util.concurrent.locks.ReentrantLock connectLock = new java.util.concurrent.locks.ReentrantLock();
+
     private @Nullable BluetoothAddress adapterAddress;
     private @Nullable BTManager manager;
     private @Nullable BTAdapter adapter;
@@ -346,6 +351,11 @@ public class DirectBTBridgeHandler extends AbstractBluetoothBridgeHandler<Direct
     /** Pool for the device's blocking GATT operations. */
     ExecutorService getExecutor() {
         return executor;
+    }
+
+    /** Per-adapter lock serializing LE create-connection (only one allowed in flight by the controller). */
+    java.util.concurrent.locks.ReentrantLock getConnectLock() {
+        return connectLock;
     }
 
     @Override

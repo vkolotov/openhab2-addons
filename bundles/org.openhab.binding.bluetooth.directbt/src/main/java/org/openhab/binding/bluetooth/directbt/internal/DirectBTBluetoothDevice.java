@@ -74,6 +74,7 @@ public class DirectBTBluetoothDevice extends BaseBluetoothDevice {
     private final Logger logger = LoggerFactory.getLogger(DirectBTBluetoothDevice.class);
 
     private final ExecutorService executor;
+    private final java.util.concurrent.locks.ReentrantLock connectLock;
 
     private volatile @Nullable BTDevice device;
 
@@ -85,6 +86,7 @@ public class DirectBTBluetoothDevice extends BaseBluetoothDevice {
     public DirectBTBluetoothDevice(DirectBTBridgeHandler adapter, BluetoothAddress address) {
         super(adapter, address);
         this.executor = adapter.getExecutor();
+        this.connectLock = adapter.getConnectLock();
     }
 
     /**
@@ -176,13 +178,19 @@ public class DirectBTBluetoothDevice extends BaseBluetoothDevice {
             return false;
         }
         setConnectionState(ConnectionState.CONNECTING);
+        // Serialize across all devices on this adapter: the controller permits only one LE create-connection
+        // in flight, so concurrent connects (e.g. the core's discovery connect-probes) otherwise all fail with
+        // COMMAND_DISALLOWED. Holding the lock also makes the stop-discovery -> connect sequence atomic.
+        connectLock.lock();
         try {
             // connectLE was observed to return NOT_POWERED even for strong-RSSI devices when the adapter is
-            // momentarily not in a powered/ready state at the instant the command is issued (a scan/connect
-            // coordination race). Validate the adapter state first and best-effort re-power; log the state so
-            // failures can be correlated. (A fuller fix - bridge-owned connect serialization + discovery
-            // coordination - is tracked separately.)
+            // momentarily not in a powered/ready state at the instant the command is issued. Validate adapter
+            // state first and best-effort re-power; log the state so failures can be correlated.
             BTAdapter adapter = dev.getAdapter();
+            // Re-check: another serialized connect may have already taken this device.
+            if (dev.getConnected()) {
+                return true;
+            }
             if (!adapter.isPowered()) {
                 logger.debug(
                         "Direct-BT adapter not powered before connect to {} (initialized={} discovering={} "
@@ -232,6 +240,8 @@ public class DirectBTBluetoothDevice extends BaseBluetoothDevice {
             logger.debug("Direct-BT connect to {} threw", address, e);
             setConnectionState(ConnectionState.DISCONNECTED);
             return false;
+        } finally {
+            connectLock.unlock();
         }
     }
 
