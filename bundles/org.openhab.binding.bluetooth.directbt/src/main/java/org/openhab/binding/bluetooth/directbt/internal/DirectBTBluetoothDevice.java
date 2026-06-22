@@ -23,6 +23,7 @@ import org.direct_bt.BTDevice;
 import org.direct_bt.BTGattChar;
 import org.direct_bt.BTGattCharListener;
 import org.direct_bt.BTGattService;
+import org.direct_bt.BTUtils;
 import org.direct_bt.EInfoReport;
 import org.direct_bt.GattCharPropertySet;
 import org.direct_bt.HCIStatusCode;
@@ -51,6 +52,13 @@ import org.slf4j.LoggerFactory;
  */
 @NonNullByDefault
 public class DirectBTBluetoothDevice extends BaseBluetoothDevice {
+
+    // Scan-assisted LE connection parameters, mirroring the Direct-BT reference defaults.
+    private static final short LE_SCAN_INTERVAL = (short) 24;
+    private static final short LE_SCAN_WINDOW = (short) 24;
+    private static final short CONN_INTERVAL_MIN = (short) 8; // 10ms
+    private static final short CONN_INTERVAL_MAX = (short) 12; // 15ms
+    private static final short CONN_LATENCY = (short) 0;
 
     private final Logger logger = LoggerFactory.getLogger(DirectBTBluetoothDevice.class);
 
@@ -158,7 +166,13 @@ public class DirectBTBluetoothDevice extends BaseBluetoothDevice {
         }
         setConnectionState(ConnectionState.CONNECTING);
         try {
-            HCIStatusCode status = dev.connectDefault();
+            // Use the scan-assisted connectLE() (not connectStart/whitelist): modern kernels establish LE
+            // connections by riding an active scan, which is far more reliable for marginal/intermittent
+            // peripherals than a background auto-connect. Params mirror the Direct-BT reference defaults.
+            short supervisionTimeout = BTUtils.getHCIConnSupervisorTimeout(CONN_LATENCY,
+                    (int) (CONN_INTERVAL_MAX * 1.25));
+            HCIStatusCode status = dev.connectLE(LE_SCAN_INTERVAL, LE_SCAN_WINDOW, CONN_INTERVAL_MIN, CONN_INTERVAL_MAX,
+                    CONN_LATENCY, supervisionTimeout);
             if (status != HCIStatusCode.SUCCESS) {
                 logger.debug("Direct-BT connect to {} failed: {}", address, status);
                 return false;
