@@ -23,7 +23,6 @@ import org.direct_bt.BTDevice;
 import org.direct_bt.BTGattChar;
 import org.direct_bt.BTGattCharListener;
 import org.direct_bt.BTGattService;
-import org.direct_bt.BTUtils;
 import org.direct_bt.EInfoReport;
 import org.direct_bt.GattCharPropertySet;
 import org.direct_bt.HCIStatusCode;
@@ -53,12 +52,17 @@ import org.slf4j.LoggerFactory;
 @NonNullByDefault
 public class DirectBTBluetoothDevice extends BaseBluetoothDevice {
 
-    // Scan-assisted LE connection parameters, mirroring the Direct-BT reference defaults.
-    private static final short LE_SCAN_INTERVAL = (short) 24;
-    private static final short LE_SCAN_WINDOW = (short) 24;
-    private static final short CONN_INTERVAL_MIN = (short) 8; // 10ms
-    private static final short CONN_INTERVAL_MAX = (short) 12; // 15ms
+    // Scan-assisted LE connection parameters, tuned for reliability on marginal/weak-RSSI links (units of
+    // 0.625ms for scan, 1.25ms for conn interval, 10ms for supervision). Rationale (see BLE connection-param
+    // guidance): relaxed conn interval + zero peripheral latency + a long (2s) supervision timeout tolerate
+    // missed packets on a noisy/weak link instead of dropping immediately. These are the defaults; per-device
+    // overrides come from the Thing config (DirectBTGenericConfiguration).
+    private static final short LE_SCAN_INTERVAL = (short) 24; // 15ms
+    private static final short LE_SCAN_WINDOW = (short) 24; // 15ms
+    private static final short CONN_INTERVAL_MIN = (short) 24; // 30ms
+    private static final short CONN_INTERVAL_MAX = (short) 40; // 50ms
     private static final short CONN_LATENCY = (short) 0;
+    private static final short CONN_SUPERVISION_TIMEOUT = (short) 200; // 2000ms (units of 10ms)
 
     private final Logger logger = LoggerFactory.getLogger(DirectBTBluetoothDevice.class);
 
@@ -168,11 +172,10 @@ public class DirectBTBluetoothDevice extends BaseBluetoothDevice {
         try {
             // Use the scan-assisted connectLE() (not connectStart/whitelist): modern kernels establish LE
             // connections by riding an active scan, which is far more reliable for marginal/intermittent
-            // peripherals than a background auto-connect. Params mirror the Direct-BT reference defaults.
-            short supervisionTimeout = BTUtils.getHCIConnSupervisorTimeout(CONN_LATENCY,
-                    (int) (CONN_INTERVAL_MAX * 1.25));
+            // peripherals than a background auto-connect. The long supervision timeout keeps a weak link
+            // alive through missed packets rather than dropping immediately.
             HCIStatusCode status = dev.connectLE(LE_SCAN_INTERVAL, LE_SCAN_WINDOW, CONN_INTERVAL_MIN, CONN_INTERVAL_MAX,
-                    CONN_LATENCY, supervisionTimeout);
+                    CONN_LATENCY, CONN_SUPERVISION_TIMEOUT);
             if (status != HCIStatusCode.SUCCESS) {
                 logger.debug("Direct-BT connect to {} failed: {}", address, status);
                 return false;
