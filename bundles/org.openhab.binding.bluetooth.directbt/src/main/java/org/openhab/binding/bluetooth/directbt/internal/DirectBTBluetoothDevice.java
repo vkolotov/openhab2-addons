@@ -56,7 +56,7 @@ public class DirectBTBluetoothDevice extends BaseBluetoothDevice {
 
     private final ExecutorService executor;
 
-    private @Nullable BTDevice device;
+    private volatile @Nullable BTDevice device;
 
     // Maps an openHAB characteristic UUID to the Direct-BT characteristic handle (populated on discovery).
     private final Map<UUID, BTGattChar> gattCharByUuid = new ConcurrentHashMap<>();
@@ -108,21 +108,44 @@ public class DirectBTBluetoothDevice extends BaseBluetoothDevice {
 
     /** Called by the bridge when Direct-BT reports this device connected. */
     void onConnected() {
-        notifyListeners(BluetoothEventType.CONNECTION_STATE,
-                new BluetoothConnectionStatusNotification(ConnectionState.CONNECTED));
+        setConnectionState(ConnectionState.CONNECTED);
     }
 
     /** Called by the bridge when Direct-BT reports this device ready (GATT resolved). */
     void onReady() {
-        discoverServices();
+        // Run GATT enumeration off the native callback thread so the callback returns quickly.
+        executor.execute(this::discoverServices);
     }
 
     /** Called by the bridge when Direct-BT reports this device disconnected. */
     void onDisconnected() {
+        releaseNotifyListeners();
         gattCharByUuid.clear();
+        setConnectionState(ConnectionState.DISCONNECTED);
+    }
+
+    /** Update the inherited connection-state field AND notify listeners (BaseBluetoothDevice does neither). */
+    private void setConnectionState(ConnectionState state) {
+        if (this.connectionState != state) {
+            this.connectionState = state;
+            notifyListeners(BluetoothEventType.CONNECTION_STATE, new BluetoothConnectionStatusNotification(state));
+        }
+    }
+
+    /** Best-effort unregister of all active notification listeners (native peers) before the map is cleared. */
+    private void releaseNotifyListeners() {
+        for (Map.Entry<UUID, BTGattCharListener> entry : notifyListeners.entrySet()) {
+            BTGattChar gattChar = gattCharByUuid.get(entry.getKey());
+            try {
+                if (gattChar != null) {
+                    gattChar.configNotificationIndication(false, false, new boolean[2]);
+                    gattChar.removeCharListener(entry.getValue());
+                }
+            } catch (RuntimeException e) {
+                logger.debug("Error removing char listener for {}", address, e);
+            }
+        }
         notifyListeners.clear();
-        notifyListeners(BluetoothEventType.CONNECTION_STATE,
-                new BluetoothConnectionStatusNotification(ConnectionState.DISCONNECTED));
     }
 
     // --- Connect / GATT operations -------------------------------------------------------------------
@@ -133,8 +156,7 @@ public class DirectBTBluetoothDevice extends BaseBluetoothDevice {
         if (dev == null || dev.getConnected()) {
             return false;
         }
-        notifyListeners(BluetoothEventType.CONNECTION_STATE,
-                new BluetoothConnectionStatusNotification(ConnectionState.CONNECTING));
+        setConnectionState(ConnectionState.CONNECTING);
         try {
             HCIStatusCode status = dev.connectDefault();
             if (status != HCIStatusCode.SUCCESS) {
@@ -169,20 +191,28 @@ public class DirectBTBluetoothDevice extends BaseBluetoothDevice {
             return false;
         }
         try {
+            // Always refresh the native handle map: on a reconnect the BTGattChar handles are new, so we must
+            // re-map every characteristic even for services already present in the openHAB model (otherwise
+            // gattCharByUuid stays empty after a reconnect and read/write/notify fail with "not found").
+            gattCharByUuid.clear();
             for (BTGattService gattService : dev.getGattServices()) {
                 UUID serviceUuid = UUID.fromString(gattService.getUUID());
-                if (getServices(serviceUuid) != null) {
-                    continue; // already mapped
+                BluetoothService existing = getServices(serviceUuid);
+                if (existing == null) {
+                    BluetoothService service = new BluetoothService(serviceUuid, true);
+                    for (BTGattChar gattChar : gattService.getChars()) {
+                        UUID charUuid = UUID.fromString(gattChar.getUUID());
+                        service.addCharacteristic(
+                                new BluetoothCharacteristic(charUuid, mapProperties(gattChar.getProperties())));
+                        gattCharByUuid.put(charUuid, gattChar);
+                    }
+                    addService(service);
+                } else {
+                    // Service already in the model (reconnect): just refresh the native handles.
+                    for (BTGattChar gattChar : gattService.getChars()) {
+                        gattCharByUuid.put(UUID.fromString(gattChar.getUUID()), gattChar);
+                    }
                 }
-                BluetoothService service = new BluetoothService(serviceUuid, true);
-                for (BTGattChar gattChar : gattService.getChars()) {
-                    UUID charUuid = UUID.fromString(gattChar.getUUID());
-                    BluetoothCharacteristic characteristic = new BluetoothCharacteristic(charUuid,
-                            mapProperties(gattChar.getProperties()));
-                    service.addCharacteristic(characteristic);
-                    gattCharByUuid.put(charUuid, gattChar);
-                }
-                addService(service);
             }
         } catch (RuntimeException e) {
             logger.debug("Direct-BT service discovery for {} failed", address, e);
@@ -194,12 +224,21 @@ public class DirectBTBluetoothDevice extends BaseBluetoothDevice {
         return true;
     }
 
+    /** @return the cached native characteristic, or {@code null} if not connected/known. */
+    private @Nullable BTGattChar connectedChar(UUID charUuid) {
+        BTDevice dev = device;
+        if (dev == null || !dev.getConnected()) {
+            return null;
+        }
+        return gattCharByUuid.get(charUuid);
+    }
+
     @Override
     public CompletableFuture<byte[]> readCharacteristic(BluetoothCharacteristic characteristic) {
-        BTGattChar gattChar = gattCharByUuid.get(characteristic.getUuid());
+        BTGattChar gattChar = connectedChar(characteristic.getUuid());
         if (gattChar == null) {
-            return CompletableFuture
-                    .failedFuture(new IllegalStateException("Characteristic not found: " + characteristic.getUuid()));
+            return CompletableFuture.failedFuture(new IllegalStateException(
+                    "Characteristic not available (disconnected?): " + characteristic.getUuid()));
         }
         return CompletableFuture.supplyAsync(() -> {
             try {
@@ -212,10 +251,10 @@ public class DirectBTBluetoothDevice extends BaseBluetoothDevice {
 
     @Override
     public CompletableFuture<@Nullable Void> writeCharacteristic(BluetoothCharacteristic characteristic, byte[] value) {
-        BTGattChar gattChar = gattCharByUuid.get(characteristic.getUuid());
+        BTGattChar gattChar = connectedChar(characteristic.getUuid());
         if (gattChar == null) {
-            return CompletableFuture
-                    .failedFuture(new IllegalStateException("Characteristic not found: " + characteristic.getUuid()));
+            return CompletableFuture.failedFuture(new IllegalStateException(
+                    "Characteristic not available (disconnected?): " + characteristic.getUuid()));
         }
         // withResponse=true (acknowledged write) unless only write-without-response is supported.
         boolean withResponse = gattChar.getProperties().isSet(GattCharPropertySet.Type.WriteWithAck);
@@ -239,28 +278,30 @@ public class DirectBTBluetoothDevice extends BaseBluetoothDevice {
     @Override
     public CompletableFuture<@Nullable Void> enableNotifications(BluetoothCharacteristic characteristic) {
         UUID charUuid = characteristic.getUuid();
-        BTGattChar gattChar = gattCharByUuid.get(charUuid);
+        BTGattChar gattChar = connectedChar(charUuid);
         if (gattChar == null) {
-            return CompletableFuture.failedFuture(new IllegalStateException("Characteristic not found: " + charUuid));
+            return CompletableFuture.failedFuture(
+                    new IllegalStateException("Characteristic not available (disconnected?): " + charUuid));
         }
-        if (notifyListeners.containsKey(charUuid)) {
-            return CompletableFuture.completedFuture(null);
+        // Reserve the slot atomically before native registration so two concurrent callers can't both
+        // register a native listener (the second put would orphan the first, making it unremovable).
+        BTGattCharListener listener = new DirectBTGattCharListener(charUuid);
+        if (notifyListeners.putIfAbsent(charUuid, listener) != null) {
+            return CompletableFuture.completedFuture(null); // already enabled / being enabled
         }
         return CompletableFuture.runAsync(() -> {
             try {
-                BTGattCharListener listener = new DirectBTGattCharListener(charUuid);
                 if (!gattChar.addCharListener(listener)) {
                     throw new java.util.concurrent.CompletionException(
                             new RuntimeException("addCharListener returned false"));
                 }
-                boolean[] enabledState = new boolean[2];
-                if (!gattChar.enableNotificationOrIndication(enabledState)) {
+                if (!gattChar.enableNotificationOrIndication(new boolean[2])) {
                     gattChar.removeCharListener(listener);
                     throw new java.util.concurrent.CompletionException(
                             new RuntimeException("enableNotificationOrIndication returned false"));
                 }
-                notifyListeners.put(charUuid, listener);
             } catch (RuntimeException e) {
+                notifyListeners.remove(charUuid, listener); // roll back the reservation on failure
                 throw new java.util.concurrent.CompletionException(e);
             }
         }, executor);
@@ -296,20 +337,10 @@ public class DirectBTBluetoothDevice extends BaseBluetoothDevice {
         return false;
     }
 
-    /** Best-effort release of native listeners; called from the bridge on device disposal. */
+    /** Best-effort release of native listeners + disconnect; called from the bridge on device disposal. */
     void close() {
         BTDevice dev = device;
-        for (Map.Entry<UUID, BTGattCharListener> entry : notifyListeners.entrySet()) {
-            BTGattChar gattChar = gattCharByUuid.get(entry.getKey());
-            try {
-                if (gattChar != null) {
-                    gattChar.removeCharListener(entry.getValue());
-                }
-            } catch (RuntimeException e) {
-                logger.debug("Error removing char listener on close for {}", address, e);
-            }
-        }
-        notifyListeners.clear();
+        releaseNotifyListeners();
         gattCharByUuid.clear();
         if (dev != null && dev.getConnected()) {
             try {
