@@ -177,6 +177,17 @@ public class DirectBTBluetoothDevice extends BaseBluetoothDevice {
         if (dev == null || dev.getConnected()) {
             return false;
         }
+        // ADMISSION CONTROL: only issue an LE create-connection for devices openHAB actually wants. The core's
+        // BluetoothDiscoveryProcess connect-probes EVERY discovered device (incl. the swarm of RPA-random
+        // advertisers) to fingerprint it, but does so without registering a device listener; a configured
+        // device (BeaconBluetoothHandler.initialize -> device.addListener(this)) always has one. Refusing the
+        // listener-less probes prevents pending-create-connection pile-ups that poison the controller with
+        // COMMAND_DISALLOWED. (Direct-BT's own reference impl likewise connects only an explicit allow-list.)
+        if (getListeners().isEmpty()) {
+            logger.trace("Direct-BT refusing connect to {}: no listeners (discovery probe, not a configured device)",
+                    address);
+            return false;
+        }
         setConnectionState(ConnectionState.CONNECTING);
         // Serialize across all devices on this adapter: the controller permits only one LE create-connection
         // in flight, so concurrent connects (e.g. the core's discovery connect-probes) otherwise all fail with
@@ -217,6 +228,10 @@ public class DirectBTBluetoothDevice extends BaseBluetoothDevice {
                     Thread.sleep(POWER_WAIT_MS);
                 }
             }
+            // Clear any create-connection left PENDING by a prior failed/abandoned connectLE: such a residue
+            // causes the controller to reject the next connect with COMMAND_DISALLOWED (Direct-BT exposes no
+            // explicit cancel; disconnect() is the lightest clear and a no-op when nothing is pending).
+            dev.disconnect();
             // Use the scan-assisted connectLE() (not connectStart/whitelist): modern kernels establish LE
             // connections by riding an active scan, which is far more reliable for marginal/intermittent
             // peripherals than a background auto-connect. The long supervision timeout keeps a weak link
@@ -226,6 +241,14 @@ public class DirectBTBluetoothDevice extends BaseBluetoothDevice {
             if (status != HCIStatusCode.SUCCESS) {
                 logger.debug("Direct-BT connect to {} failed: {} (adapter powered={} discovering={} scanType={})",
                         address, status, adapter.isPowered(), adapter.isDiscovering(), adapter.getCurrentScanType());
+                // COMMAND_DISALLOWED here means a create-connection is stuck pending in the controller and the
+                // disconnect() above didn't clear it. Last-resort: reset the adapter to clear its command state
+                // (Direct-BT has no connection-cancel API). The adapter's status listener re-arms discovery.
+                if (status == HCIStatusCode.COMMAND_DISALLOWED) {
+                    logger.debug("Direct-BT resetting adapter to clear stuck create-connection (connect to {})",
+                            address);
+                    adapter.reset();
+                }
                 // A synchronous failure won't produce a deviceDisconnected callback, so reset the state here;
                 // otherwise getConnectionState() stays stuck at CONNECTING after a failed establishment.
                 setConnectionState(ConnectionState.DISCONNECTED);
