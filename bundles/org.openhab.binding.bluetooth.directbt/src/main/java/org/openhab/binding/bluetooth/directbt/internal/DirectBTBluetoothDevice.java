@@ -19,6 +19,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 
+import org.direct_bt.BTAdapter;
 import org.direct_bt.BTDevice;
 import org.direct_bt.BTGattChar;
 import org.direct_bt.BTGattCharListener;
@@ -63,6 +64,12 @@ public class DirectBTBluetoothDevice extends BaseBluetoothDevice {
     private static final short CONN_INTERVAL_MAX = (short) 40; // 50ms
     private static final short CONN_LATENCY = (short) 0;
     private static final short CONN_SUPERVISION_TIMEOUT = (short) 200; // 2000ms (units of 10ms)
+
+    // Bounded wait for the adapter to (re)report powered before a connect, to ride out a transient
+    // NOT_POWERED race with discovery scan-pause.
+    private static final int POWER_WAIT_TRIES = 10;
+    private static final long POWER_WAIT_MS = 100;
+    private static final int DISCOVERY_STOP_WAIT_TRIES = 15;
 
     private final Logger logger = LoggerFactory.getLogger(DirectBTBluetoothDevice.class);
 
@@ -170,6 +177,38 @@ public class DirectBTBluetoothDevice extends BaseBluetoothDevice {
         }
         setConnectionState(ConnectionState.CONNECTING);
         try {
+            // connectLE was observed to return NOT_POWERED even for strong-RSSI devices when the adapter is
+            // momentarily not in a powered/ready state at the instant the command is issued (a scan/connect
+            // coordination race). Validate the adapter state first and best-effort re-power; log the state so
+            // failures can be correlated. (A fuller fix - bridge-owned connect serialization + discovery
+            // coordination - is tracked separately.)
+            BTAdapter adapter = dev.getAdapter();
+            if (!adapter.isPowered()) {
+                logger.debug(
+                        "Direct-BT adapter not powered before connect to {} (initialized={} discovering={} "
+                                + "scanType={}); attempting re-power",
+                        address, adapter.isInitialized(), adapter.isDiscovering(), adapter.getCurrentScanType());
+                adapter.setPowered(true);
+                for (int i = 0; i < POWER_WAIT_TRIES && !adapter.isPowered(); i++) {
+                    Thread.sleep(POWER_WAIT_MS);
+                }
+                if (!adapter.isPowered()) {
+                    logger.debug("Direct-BT adapter still not powered; aborting connect to {}", address);
+                    setConnectionState(ConnectionState.DISCONNECTED);
+                    return false;
+                }
+            }
+            // connectLE returns INTERNAL_FAILURE if the adapter is still actively discovering (observed
+            // powered=true discovering=true scanType=LE -> INTERNAL_FAILURE). PAUSE_CONNECTED_UNTIL_READY does
+            // not reliably pause discovery in time, so stop it explicitly and wait until it actually stops
+            // before issuing the connect. (Direct-BT re-arms discovery per its policy after the connection
+            // settles.)
+            if (adapter.isDiscovering()) {
+                adapter.stopDiscovery();
+                for (int i = 0; i < DISCOVERY_STOP_WAIT_TRIES && adapter.isDiscovering(); i++) {
+                    Thread.sleep(POWER_WAIT_MS);
+                }
+            }
             // Use the scan-assisted connectLE() (not connectStart/whitelist): modern kernels establish LE
             // connections by riding an active scan, which is far more reliable for marginal/intermittent
             // peripherals than a background auto-connect. The long supervision timeout keeps a weak link
@@ -177,13 +216,18 @@ public class DirectBTBluetoothDevice extends BaseBluetoothDevice {
             HCIStatusCode status = dev.connectLE(LE_SCAN_INTERVAL, LE_SCAN_WINDOW, CONN_INTERVAL_MIN, CONN_INTERVAL_MAX,
                     CONN_LATENCY, CONN_SUPERVISION_TIMEOUT);
             if (status != HCIStatusCode.SUCCESS) {
-                logger.debug("Direct-BT connect to {} failed: {}", address, status);
+                logger.debug("Direct-BT connect to {} failed: {} (adapter powered={} discovering={} scanType={})",
+                        address, status, adapter.isPowered(), adapter.isDiscovering(), adapter.getCurrentScanType());
                 // A synchronous failure won't produce a deviceDisconnected callback, so reset the state here;
                 // otherwise getConnectionState() stays stuck at CONNECTING after a failed establishment.
                 setConnectionState(ConnectionState.DISCONNECTED);
                 return false;
             }
             return true;
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            setConnectionState(ConnectionState.DISCONNECTED);
+            return false;
         } catch (RuntimeException e) {
             logger.debug("Direct-BT connect to {} threw", address, e);
             setConnectionState(ConnectionState.DISCONNECTED);
