@@ -17,7 +17,6 @@ import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 
 import org.direct_bt.BTAdapter;
-import org.direct_bt.BTFactory;
 import org.direct_bt.BTManager;
 import org.eclipse.jdt.annotation.NonNullByDefault;
 import org.eclipse.jdt.annotation.Nullable;
@@ -27,6 +26,7 @@ import org.openhab.core.config.discovery.DiscoveryService;
 import org.openhab.core.thing.ThingUID;
 import org.osgi.service.component.annotations.Activate;
 import org.osgi.service.component.annotations.Component;
+import org.osgi.service.component.annotations.Reference;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -50,9 +50,12 @@ public class DirectBTDiscoveryService extends AbstractDiscoveryService {
 
     private @Nullable Future<?> backgroundScan;
 
+    private final DirectBTManagerFactory managerFactory;
+
     @Activate
-    public DirectBTDiscoveryService() {
+    public DirectBTDiscoveryService(@Reference DirectBTManagerFactory managerFactory) {
         super(Set.of(DirectBTAdapterConstants.THING_TYPE_DIRECTBT), 10, true);
+        this.managerFactory = managerFactory;
     }
 
     @Override
@@ -71,16 +74,11 @@ public class DirectBTDiscoveryService extends AbstractDiscoveryService {
 
     @Override
     protected void startScan() {
-        BTManager manager;
-        try {
-            DirectBTNativesLoader.extractNatives();
-            manager = BTFactory.getDirectBTManager();
-        } catch (UnsupportedOperationException e) {
-            logger.debug("Direct-BT not supported on this platform: {}", e.getMessage());
-            return;
-        } catch (Exception e) {
-            // Most commonly: missing CAP_NET_ADMIN/CAP_NET_RAW, or bluetoothd owning the adapter.
-            logger.debug("Cannot enumerate Direct-BT adapters (caps/bluetoothd?): {}", e.getMessage());
+        // The manager (and its native libraries) is owned by the long-lived DirectBTManagerFactory; we only
+        // query it. It may not be ready yet (native loading / missing caps / bluetoothd owns the adapter).
+        BTManager manager = managerFactory.getManager();
+        if (manager == null) {
+            logger.debug("Direct-BT manager not ready; skipping adapter discovery scan");
             return;
         }
         var adapters = manager.getAdapters();

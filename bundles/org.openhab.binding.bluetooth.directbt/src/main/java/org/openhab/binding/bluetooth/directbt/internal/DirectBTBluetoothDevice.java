@@ -19,7 +19,6 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 
-import org.direct_bt.BTAdapter;
 import org.direct_bt.BTDevice;
 import org.direct_bt.BTGattChar;
 import org.direct_bt.BTGattCharListener;
@@ -34,6 +33,9 @@ import org.openhab.binding.bluetooth.BluetoothAddress;
 import org.openhab.binding.bluetooth.BluetoothCharacteristic;
 import org.openhab.binding.bluetooth.BluetoothDescriptor;
 import org.openhab.binding.bluetooth.BluetoothService;
+import org.openhab.binding.bluetooth.directbt.internal.reconcile.DeviceReconciler;
+import org.openhab.binding.bluetooth.directbt.internal.reconcile.DevicePort;
+import org.openhab.binding.bluetooth.directbt.internal.reconcile.DiscoveryReconciler;
 import org.openhab.binding.bluetooth.notification.BluetoothConnectionStatusNotification;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -43,15 +45,15 @@ import org.slf4j.LoggerFactory;
  * <p>
  * Carries the Direct-BT device handle, copies advertisement-derived fields into the openHAB model, and
  * maps connect / GATT service discovery / characteristic read-write-notify onto the Direct-BT API.
- * Connection-state transitions are driven by the adapter's {@code AdapterStatusListener} (forwarded from
- * {@link DirectBTBridgeHandler} via {@link #onConnected()} / {@link #onDisconnected()}); the blocking
- * Direct-BT read/write calls are run on the bridge's notification executor and surfaced as
- * {@link CompletableFuture}s.
+ * Connection-state transitions are driven by this device's {@link DeviceReconciler} (run by the bridge's
+ * single reconcile tick), which polls the native {@code BTDevice.getConnected()} truth rather than trusting
+ * Direct-BT's connection events; the blocking Direct-BT read/write calls are run on the bridge's notification
+ * executor and surfaced as {@link CompletableFuture}s.
  *
  * @author Vlad Kolotov - Initial contribution
  */
 @NonNullByDefault
-public class DirectBTBluetoothDevice extends BaseBluetoothDevice {
+public class DirectBTBluetoothDevice extends BaseBluetoothDevice implements DevicePort {
 
     // Scan-assisted LE connection parameters, tuned for reliability on marginal/weak-RSSI links (units of
     // 0.625ms for scan, 1.25ms for conn interval, 10ms for supervision). Rationale (see BLE connection-param
@@ -65,16 +67,12 @@ public class DirectBTBluetoothDevice extends BaseBluetoothDevice {
     private static final short CONN_LATENCY = (short) 0;
     private static final short CONN_SUPERVISION_TIMEOUT = (short) 200; // 2000ms (units of 10ms)
 
-    // Bounded wait for the adapter to (re)report powered before a connect, to ride out a transient
-    // NOT_POWERED race with discovery scan-pause.
-    private static final int POWER_WAIT_TRIES = 10;
-    private static final long POWER_WAIT_MS = 100;
-    private static final int DISCOVERY_STOP_WAIT_TRIES = 15;
-
     private final Logger logger = LoggerFactory.getLogger(DirectBTBluetoothDevice.class);
 
+    private final DirectBTBridgeHandler bridge;
     private final ExecutorService executor;
-    private final java.util.concurrent.locks.ReentrantLock connectLock;
+    // This device's reconciler (owns connect/state-flag/gatt). Driven by the bridge's single reconcile tick.
+    private final DeviceReconciler reconciler;
 
     private volatile @Nullable BTDevice device;
 
@@ -85,8 +83,18 @@ public class DirectBTBluetoothDevice extends BaseBluetoothDevice {
 
     public DirectBTBluetoothDevice(DirectBTBridgeHandler adapter, BluetoothAddress address) {
         super(adapter, address);
+        this.bridge = adapter;
         this.executor = adapter.getExecutor();
-        this.connectLock = adapter.getConnectLock();
+        this.reconciler = new DeviceReconciler(logger, this,
+                () -> {
+                    DiscoveryReconciler dr = bridge.getDiscoveryReconciler();
+                    return dr != null && dr.isScanOff();
+                }, adapter.getResetBudget(), bridge::requestAdapterReset);
+    }
+
+    /** @return this device's reconciler (driven by the bridge's reconcile tick). */
+    DeviceReconciler getReconciler() {
+        return reconciler;
     }
 
     /**
@@ -125,24 +133,29 @@ public class DirectBTBluetoothDevice extends BaseBluetoothDevice {
         return device;
     }
 
-    // --- Connection-state callbacks (forwarded from the adapter status listener) ---------------------
+    // --- openHAB connection API: INTENT setters only (the reconciler does the actual work) ----------
+    // The core's ConnectedBluetoothHandler calls connect()/disconnect() and reconciles against
+    // getConnectionState(). In the eventually-consistent model we do NOT issue connectLE here (that races a
+    // stuck controller into COMMAND_DISALLOWED). We only record intent and requeue a reconcile tick; the
+    // bridge's single-threaded reconciler issues the real connectLE when it observes the scan is off.
 
-    /** Called by the bridge when Direct-BT reports this device connected. */
-    void onConnected() {
-        setConnectionState(ConnectionState.CONNECTED);
+    @Override
+    public boolean connect() {
+        // Admission control: only wanted (listener-having) devices ever connect. The core connect-probes every
+        // discovered device without a listener to fingerprint it; refusing those keeps the controller clean.
+        if (getListeners().isEmpty()) {
+            return false;
+        }
+        bridge.requeueReconcile();
+        // Return true (intent accepted) so the core's reconnect loop treats this as "connecting in progress" and
+        // stops hammering; the reconciler drives the real state and getConnectionState() reflects native truth.
+        return true;
     }
 
-    /** Called by the bridge when Direct-BT reports this device ready (GATT resolved). */
-    void onReady() {
-        // Run GATT enumeration off the native callback thread so the callback returns quickly.
-        executor.execute(this::discoverServices);
-    }
-
-    /** Called by the bridge when Direct-BT reports this device disconnected. */
-    void onDisconnected() {
-        releaseNotifyListeners();
-        gattCharByUuid.clear();
-        setConnectionState(ConnectionState.DISCONNECTED);
+    @Override
+    public boolean disconnect() {
+        bridge.requeueReconcile();
+        return true;
     }
 
     /** Update the inherited connection-state field AND notify listeners (BaseBluetoothDevice does neither). */
@@ -169,117 +182,101 @@ public class DirectBTBluetoothDevice extends BaseBluetoothDevice {
         notifyListeners.clear();
     }
 
-    // --- Connect / GATT operations -------------------------------------------------------------------
+    // --- DevicePort: the operations the DeviceReconciler drives (all polled native truth / idempotent) ----
 
     @Override
-    public boolean connect() {
+    public boolean isWanted() {
+        return !getListeners().isEmpty();
+    }
+
+    @Override
+    public boolean hasNativeDevice() {
+        return device != null;
+    }
+
+    @Override
+    public boolean isNativeConnected() {
         BTDevice dev = device;
-        if (dev == null || dev.getConnected()) {
-            return false;
-        }
-        // ADMISSION CONTROL: only issue an LE create-connection for devices openHAB actually wants. The core's
-        // BluetoothDiscoveryProcess connect-probes EVERY discovered device (incl. the swarm of RPA-random
-        // advertisers) to fingerprint it, but does so without registering a device listener; a configured
-        // device (BeaconBluetoothHandler.initialize -> device.addListener(this)) always has one. Refusing the
-        // listener-less probes prevents pending-create-connection pile-ups that poison the controller with
-        // COMMAND_DISALLOWED. (Direct-BT's own reference impl likewise connects only an explicit allow-list.)
-        if (getListeners().isEmpty()) {
-            logger.trace("Direct-BT refusing connect to {}: no listeners (discovery probe, not a configured device)",
-                    address);
-            return false;
-        }
-        setConnectionState(ConnectionState.CONNECTING);
-        // Serialize across all devices on this adapter: the controller permits only one LE create-connection
-        // in flight, so concurrent connects (e.g. the core's discovery connect-probes) otherwise all fail with
-        // COMMAND_DISALLOWED. Holding the lock also makes the stop-discovery -> connect sequence atomic.
-        connectLock.lock();
         try {
-            // connectLE was observed to return NOT_POWERED even for strong-RSSI devices when the adapter is
-            // momentarily not in a powered/ready state at the instant the command is issued. Validate adapter
-            // state first and best-effort re-power; log the state so failures can be correlated.
-            BTAdapter adapter = dev.getAdapter();
-            // Re-check: another serialized connect may have already taken this device.
-            if (dev.getConnected()) {
-                return true;
-            }
-            if (!adapter.isPowered()) {
-                logger.debug(
-                        "Direct-BT adapter not powered before connect to {} (initialized={} discovering={} "
-                                + "scanType={}); attempting re-power",
-                        address, adapter.isInitialized(), adapter.isDiscovering(), adapter.getCurrentScanType());
-                adapter.setPowered(true);
-                for (int i = 0; i < POWER_WAIT_TRIES && !adapter.isPowered(); i++) {
-                    Thread.sleep(POWER_WAIT_MS);
-                }
-                if (!adapter.isPowered()) {
-                    logger.debug("Direct-BT adapter still not powered; aborting connect to {}", address);
-                    setConnectionState(ConnectionState.DISCONNECTED);
-                    return false;
-                }
-            }
-            // connectLE returns INTERNAL_FAILURE if the adapter is still actively discovering (observed
-            // powered=true discovering=true scanType=LE -> INTERNAL_FAILURE). PAUSE_CONNECTED_UNTIL_READY does
-            // not reliably pause discovery in time, so stop it explicitly and wait until it actually stops
-            // before issuing the connect. (Direct-BT re-arms discovery per its policy after the connection
-            // settles.)
-            if (adapter.isDiscovering()) {
-                adapter.stopDiscovery();
-                for (int i = 0; i < DISCOVERY_STOP_WAIT_TRIES && adapter.isDiscovering(); i++) {
-                    Thread.sleep(POWER_WAIT_MS);
-                }
-            }
-            // Clear any create-connection left PENDING by a prior failed/abandoned connectLE: such a residue
-            // causes the controller to reject the next connect with COMMAND_DISALLOWED (Direct-BT exposes no
-            // explicit cancel; disconnect() is the lightest clear and a no-op when nothing is pending).
-            dev.disconnect();
-            // Use the scan-assisted connectLE() (not connectStart/whitelist): modern kernels establish LE
-            // connections by riding an active scan, which is far more reliable for marginal/intermittent
-            // peripherals than a background auto-connect. The long supervision timeout keeps a weak link
-            // alive through missed packets rather than dropping immediately.
-            HCIStatusCode status = dev.connectLE(LE_SCAN_INTERVAL, LE_SCAN_WINDOW, CONN_INTERVAL_MIN, CONN_INTERVAL_MAX,
-                    CONN_LATENCY, CONN_SUPERVISION_TIMEOUT);
-            if (status != HCIStatusCode.SUCCESS) {
-                logger.debug("Direct-BT connect to {} failed: {} (adapter powered={} discovering={} scanType={})",
-                        address, status, adapter.isPowered(), adapter.isDiscovering(), adapter.getCurrentScanType());
-                // COMMAND_DISALLOWED here means a create-connection is stuck pending in the controller and the
-                // disconnect() above didn't clear it. Last-resort: reset the adapter to clear its command state
-                // (Direct-BT has no connection-cancel API). The adapter's status listener re-arms discovery.
-                if (status == HCIStatusCode.COMMAND_DISALLOWED) {
-                    logger.debug("Direct-BT resetting adapter to clear stuck create-connection (connect to {})",
-                            address);
-                    adapter.reset();
-                }
-                // A synchronous failure won't produce a deviceDisconnected callback, so reset the state here;
-                // otherwise getConnectionState() stays stuck at CONNECTING after a failed establishment.
-                setConnectionState(ConnectionState.DISCONNECTED);
-                return false;
-            }
-            return true;
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            setConnectionState(ConnectionState.DISCONNECTED);
-            return false;
+            return dev != null && dev.getConnected();
         } catch (RuntimeException e) {
-            logger.debug("Direct-BT connect to {} threw", address, e);
-            setConnectionState(ConnectionState.DISCONNECTED);
             return false;
-        } finally {
-            connectLock.unlock();
         }
     }
 
     @Override
-    public boolean disconnect() {
+    public boolean isGattResolved() {
+        return !gattCharByUuid.isEmpty();
+    }
+
+    @Override
+    public boolean isFlagConnected() {
+        return connectionState == ConnectionState.CONNECTED;
+    }
+
+    @Override
+    public boolean isFlagConnecting() {
+        return connectionState == ConnectionState.CONNECTING;
+    }
+
+    @Override
+    public void markConnected() {
+        setConnectionState(ConnectionState.CONNECTED);
+    }
+
+    @Override
+    public void markConnecting() {
+        setConnectionState(ConnectionState.CONNECTING);
+    }
+
+    @Override
+    public void markDisconnected() {
+        releaseNotifyListeners();
+        clearServices();
+        gattCharByUuid.clear();
+        setConnectionState(ConnectionState.DISCONNECTED);
+    }
+
+    @Override
+    public HCIStatusCode connectNative() {
         BTDevice dev = device;
-        if (dev == null || !dev.getConnected()) {
-            return false;
+        if (dev == null) {
+            return HCIStatusCode.INTERNAL_FAILURE;
         }
         try {
-            return dev.disconnect() == HCIStatusCode.SUCCESS;
+            // The reconciler has already ensured the adapter scan is OFF (the controller rejects create-connection
+            // while scanning). Clear any create-connection residue first (no-op if none pending), then issue the
+            // scan-assisted connectLE with a long supervision timeout to ride out missed packets on a weak link.
+            dev.disconnect();
+            return dev.connectLE(LE_SCAN_INTERVAL, LE_SCAN_WINDOW, CONN_INTERVAL_MIN, CONN_INTERVAL_MAX, CONN_LATENCY,
+                    CONN_SUPERVISION_TIMEOUT);
         } catch (RuntimeException e) {
-            logger.debug("Direct-BT disconnect from {} threw", address, e);
-            return false;
+            logger.debug("Direct-BT connectNative to {} threw", address, e);
+            return HCIStatusCode.INTERNAL_FAILURE;
         }
+    }
+
+    @Override
+    public void disconnectNative() {
+        BTDevice dev = device;
+        if (dev == null) {
+            return;
+        }
+        try {
+            dev.disconnect();
+        } catch (RuntimeException e) {
+            logger.debug("Direct-BT disconnectNative from {} threw", address, e);
+        }
+    }
+
+    @Override
+    public void resolveGatt() {
+        discoverServices();
+    }
+
+    @Override
+    public String id() {
+        return address.toString();
     }
 
     @Override
@@ -300,8 +297,9 @@ public class DirectBTBluetoothDevice extends BaseBluetoothDevice {
                     BluetoothService service = new BluetoothService(serviceUuid, true);
                     for (BTGattChar gattChar : gattService.getChars()) {
                         UUID charUuid = UUID.fromString(gattChar.getUUID());
-                        service.addCharacteristic(
-                                new BluetoothCharacteristic(charUuid, mapProperties(gattChar.getProperties())));
+                        BluetoothCharacteristic characteristic = new BluetoothCharacteristic(charUuid, 0);
+                        characteristic.setProperties(mapProperties(gattChar.getProperties()));
+                        service.addCharacteristic(characteristic);
                         gattCharByUuid.put(charUuid, gattChar);
                     }
                     addService(service);
@@ -319,6 +317,10 @@ public class DirectBTBluetoothDevice extends BaseBluetoothDevice {
         if (!getServices().isEmpty()) {
             notifyListeners(BluetoothEventType.SERVICES_DISCOVERED);
         }
+        // Do NOT resume scanning while this device is connected: an active LE scan concurrent with a live ACL is
+        // a classic single-radio ACL-killer. The DiscoveryReconciler computes scanWanted from device state, so it
+        // keeps the scan off as long as this device stays connected, and turns it back on (to rediscover) only
+        // when the device reconciler observes the native link is gone.
         return true;
     }
 
@@ -326,6 +328,12 @@ public class DirectBTBluetoothDevice extends BaseBluetoothDevice {
     private @Nullable BTGattChar connectedChar(UUID charUuid) {
         BTDevice dev = device;
         if (dev == null || !dev.getConnected()) {
+            // The native link is gone while a read/write is attempted. Requeue a reconcile so the device
+            // reconciler observes native!=flag and drives the disconnect transition (the reconciler is the single
+            // owner of the state flag, so we do not mutate it from here).
+            if (connectionState == ConnectionState.CONNECTED) {
+                bridge.requeueReconcile();
+            }
             return null;
         }
         return gattCharByUuid.get(charUuid);
@@ -340,7 +348,14 @@ public class DirectBTBluetoothDevice extends BaseBluetoothDevice {
         }
         return CompletableFuture.supplyAsync(() -> {
             try {
-                return gattChar.readValue();
+                byte[] value = gattChar.readValue();
+                if (value.length == 0) {
+                    logger.debug("Direct-BT read of {} on {} returned empty value; suppressing update",
+                            characteristic.getUuid(), address);
+                    return value;
+                }
+                notifyListeners(BluetoothEventType.CHARACTERISTIC_UPDATED, characteristic, value);
+                return value;
             } catch (RuntimeException e) {
                 throw new java.util.concurrent.CompletionException(e);
             }

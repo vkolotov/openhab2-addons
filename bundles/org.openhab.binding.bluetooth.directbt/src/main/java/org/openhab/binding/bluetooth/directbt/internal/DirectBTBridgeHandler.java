@@ -19,7 +19,6 @@ import java.util.concurrent.TimeUnit;
 import org.direct_bt.AdapterStatusListener;
 import org.direct_bt.BTAdapter;
 import org.direct_bt.BTDevice;
-import org.direct_bt.BTFactory;
 import org.direct_bt.BTManager;
 import org.direct_bt.BTManager.ChangedAdapterSetListener;
 import org.direct_bt.BTMode;
@@ -31,6 +30,10 @@ import org.eclipse.jdt.annotation.NonNullByDefault;
 import org.eclipse.jdt.annotation.Nullable;
 import org.openhab.binding.bluetooth.AbstractBluetoothBridgeHandler;
 import org.openhab.binding.bluetooth.BluetoothAddress;
+import org.openhab.binding.bluetooth.directbt.internal.reconcile.AdapterReconciler;
+import org.openhab.binding.bluetooth.directbt.internal.reconcile.DeviceReconciler;
+import org.openhab.binding.bluetooth.directbt.internal.reconcile.DiscoveryReconciler;
+import org.openhab.binding.bluetooth.directbt.internal.reconcile.ResetBudget;
 import org.openhab.core.common.ThreadPoolManager;
 import org.openhab.core.thing.Bridge;
 import org.openhab.core.thing.ThingStatus;
@@ -53,27 +56,33 @@ public class DirectBTBridgeHandler extends AbstractBluetoothBridgeHandler<Direct
     private static final int POWER_ON_WAIT_TRIES = 20;
     private static final long POWER_ON_WAIT_MS = 100;
 
-    // Discovery scan parameters, matching the Direct-BT reference defaults.
-    private static final short LE_SCAN_INTERVAL = (short) 24;
-    private static final short LE_SCAN_WINDOW = (short) 24;
-    private static final byte FILTER_POLICY = (byte) 0;
-    private static final boolean FILTER_DUP = true;
-
     private final Logger logger = LoggerFactory.getLogger(DirectBTBridgeHandler.class);
 
     // Dedicated pool for the blocking Direct-BT GATT read/write/notify-setup calls, so they never block the
     // scheduler or native callback threads.
     private final ExecutorService executor = ThreadPoolManager.getPool("bluetooth-directbt");
 
-    // The HCI controller allows only ONE LE create-connection in flight at a time; concurrent connectLE
-    // calls (e.g. the core's discovery connect-probes) otherwise fail with COMMAND_DISALLOWED. Devices
-    // serialize their connect through this per-adapter lock.
-    private final java.util.concurrent.locks.ReentrantLock connectLock = new java.util.concurrent.locks.ReentrantLock();
+    // --- Level-triggered reconciler -----------------------------------------------------------------
+    // Direct-BT is eventually-consistent: a command returning SUCCESS means only "accepted", not "done",
+    // and its status events (deviceConnected/deviceDisconnected) are HINTS that may be dropped (the silent
+    // controller-side ACL drop). So we do not sequence commands off events; instead one periodic reconciler
+    // owns the radio: it polls the NATIVE truth (adapter.isDiscovering(), dev.getConnected()), compares to the
+    // desired state, and issues the idempotent corrective command to close the gap. Events merely requeue an
+    // immediate reconcile so we react fast; if an event is missed the next tick heals it anyway.
+    private static final long RECONCILE_INTERVAL_MS = 2000;
 
     private @Nullable BluetoothAddress adapterAddress;
     private @Nullable BTManager manager;
     private @Nullable BTAdapter adapter;
     private @Nullable ScheduledFuture<?> initJob;
+    // The level-triggered reconciler job (the only thing that drives discovery on/off and reconciles device state).
+    private @Nullable ScheduledFuture<?> reconcileJob;
+    // The single driver lock: the reconcile tick runs under it so reconcilers are effectively single-threaded
+    // (at most one connectLE/startDiscovery in flight by construction). Event hints also requeue under it.
+    private final Object reconcileLock = new Object();
+    private final ResetBudget resetBudget = new ResetBudget(LoggerFactory.getLogger(ResetBudget.class));
+    private @Nullable AdapterReconciler adapterReconciler;
+    private @Nullable DiscoveryReconciler discoveryReconciler;
     private boolean managerReady;
     private volatile boolean disposed;
 
@@ -93,6 +102,7 @@ public class DirectBTBridgeHandler extends AbstractBluetoothBridgeHandler<Direct
         public boolean deviceFound(BTDevice device, long timestamp) {
             logger.debug("Direct-BT deviceFound: {}", device.getAddressAndType());
             onDeviceFound(device);
+            requeueReconcile(); // hint: a wanted device may now be connectable
             return false; // false = keep the device in discovery (do not take exclusive ownership)
         }
 
@@ -107,30 +117,25 @@ public class DirectBTBridgeHandler extends AbstractBluetoothBridgeHandler<Direct
                 DiscoveryPolicy policy, long timestamp) {
             logger.debug("Direct-BT discoveringChanged: meta={} enabled={} policy={}", currentMeta, changedEnabled,
                     policy);
+            requeueReconcile(); // hint: scan state changed; reconcile in case it diverged from desired
         }
 
+        // The connection-state callbacks are HINTS ONLY. We do not drive openHAB state from them (they may be
+        // dropped -- the silent controller-side drop delivers no deviceDisconnected). The reconciler polls
+        // dev.getConnected() each tick and is the single source of truth; an event just makes it react sooner.
         @Override
         public void deviceConnected(BTDevice device, boolean discovered, long timestamp) {
-            DirectBTBluetoothDevice ohDevice = findDevice(device);
-            if (ohDevice != null) {
-                ohDevice.onConnected();
-            }
+            requeueReconcile();
         }
 
         @Override
         public void deviceReady(BTDevice device, long timestamp) {
-            DirectBTBluetoothDevice ohDevice = findDevice(device);
-            if (ohDevice != null) {
-                ohDevice.onReady();
-            }
+            requeueReconcile();
         }
 
         @Override
         public void deviceDisconnected(BTDevice device, HCIStatusCode reason, short handle, long timestamp) {
-            DirectBTBluetoothDevice ohDevice = findDevice(device);
-            if (ohDevice != null) {
-                ohDevice.onDisconnected();
-            }
+            requeueReconcile();
         }
     }
 
@@ -151,8 +156,11 @@ public class DirectBTBridgeHandler extends AbstractBluetoothBridgeHandler<Direct
         }
     }
 
-    public DirectBTBridgeHandler(Bridge bridge) {
+    private final DirectBTManagerFactory managerFactory;
+
+    public DirectBTBridgeHandler(Bridge bridge, DirectBTManagerFactory managerFactory) {
         super(bridge);
+        this.managerFactory = managerFactory;
     }
 
     @Override
@@ -180,25 +188,26 @@ public class DirectBTBridgeHandler extends AbstractBluetoothBridgeHandler<Direct
      */
     private synchronized void initializeDirectBT() {
         if (managerReady) {
+            // Manager already up; this recurring tick only serves to (re)acquire the adapter if it was not present
+            // yet (dongle plugged in later). Discovery + connection are owned entirely by the reconcile driver,
+            // which is started from bringUpAdapter() once the adapter is up.
             return;
         }
         try {
-            // Direct-BT's jar-cache native loader is unreliable inside OSGi (can't locate its own jar).
-            // The loader extracts the bundled libs to java.library.path (and disables the jar-cache) so
-            // Direct-BT's loader finds them there by basename.
-            DirectBTNativesLoader.extractNatives();
-
-            BTManager mgr = BTFactory.getDirectBTManager();
+            // The BTManager singleton (and the native libraries it loads) is owned by the long-lived
+            // DirectBTManagerFactory DS component / the Direct-BT lib bundle, NOT by this handler. We only
+            // acquire a reference here. It may not be ready yet (native still loading, missing caps, no adapter
+            // present) -> null; the recurring 10s job keeps retrying until it is.
+            BTManager mgr = managerFactory.getManager();
+            if (mgr == null) {
+                logger.debug("Direct-BT manager not ready yet; will retry");
+                return;
+            }
             this.manager = mgr;
             // Registering the listener immediately invokes adapterAdded() for adapters already present.
             mgr.addChangedAdapterSetListener(changedAdapterSetListener);
             managerReady = true;
-            // Adapter arrival is event-driven via the listener from here on; the retry poll is no longer
-            // needed (it only existed to get the manager up).
-            cancelInitJob();
-        } catch (UnsupportedOperationException e) {
-            updateStatus(ThingStatus.OFFLINE, ThingStatusDetail.CONFIGURATION_ERROR, e.getMessage());
-            cancelInitJob();
+            // Job intentionally NOT cancelled: it keeps retrying adapter acquisition if not present yet.
         } catch (Exception e) {
             logger.debug("Direct-BT initialization failed, will retry", e);
             updateStatus(ThingStatus.OFFLINE, ThingStatusDetail.COMMUNICATION_ERROR, "Direct-BT init failed");
@@ -215,6 +224,113 @@ public class DirectBTBridgeHandler extends AbstractBluetoothBridgeHandler<Direct
         if (!mac.equals(wanted.toString())) {
             return; // not our adapter
         }
+        bringUpAdapter(added, wanted);
+    }
+
+    // ============================================================================================
+    // Level-triggered reconciler driver. See docs/directbt-reconciler-design.md.
+    // The reconcilers (adapter, discovery, per-device) are the ONLY things that drive the radio; no timer or
+    // event ever issues start/stopDiscovery or connectLE directly. Events merely requeue a tick.
+    // ============================================================================================
+
+    /** Start (idempotently) the single-threaded reconcile driver once the adapter is up. */
+    private void startReconciler() {
+        synchronized (reconcileLock) {
+            if (adapterReconciler == null) {
+                adapterReconciler = new AdapterReconciler(logger, () -> adapter, resetBudget);
+                discoveryReconciler = new DiscoveryReconciler(logger, () -> adapter, this::isScanWanted, resetBudget);
+            }
+            if (reconcileJob == null) {
+                reconcileJob = scheduler.scheduleWithFixedDelay(this::reconcileTick, 0, RECONCILE_INTERVAL_MS,
+                        TimeUnit.MILLISECONDS);
+            }
+        }
+    }
+
+    /** One driver tick: adapter -> (gate) -> devices -> discovery. Single-threaded via reconcileLock. */
+    private void reconcileTick() {
+        synchronized (reconcileLock) {
+            if (disposed) {
+                return;
+            }
+            AdapterReconciler ar = adapterReconciler;
+            DiscoveryReconciler dr = discoveryReconciler;
+            if (ar == null || dr == null) {
+                return;
+            }
+            boolean adapterOk = ar.reconcile();
+            if (!adapterOk) {
+                // Prerequisite not in sync: pause dependents (freeze their timers) so a long adapter outage does
+                // not age devices toward escalation (which would storm on recovery).
+                dr.pause();
+                forEachDevice(d -> d.getReconciler().pause());
+                return;
+            }
+            dr.unpause();
+            // Devices first (they update connected/connecting state that discovery's desired is computed from),
+            // then discovery. The flag-sync sub-step inside a device runs even right after an adapter reset.
+            forEachDevice(d -> {
+                DeviceReconciler rec = d.getReconciler();
+                rec.unpause();
+                rec.reconcile();
+            });
+            dr.reconcile();
+        }
+    }
+
+    /** Run a reconcile tick now (event hint). Safe to call from native callback threads. */
+    void requeueReconcile() {
+        if (disposed) {
+            return;
+        }
+        // Hop onto the scheduler so we never block a native callback thread on the reconcileLock / native calls.
+        scheduler.execute(this::reconcileTick);
+    }
+
+    /** @return the adapter's reset budget (shared by reconcilers + device-requested resets). */
+    public ResetBudget getResetBudget() {
+        return resetBudget;
+    }
+
+    /** @return the discovery reconciler (devices query its observed scan state to gate connectLE). */
+    @Nullable
+    DiscoveryReconciler getDiscoveryReconciler() {
+        return discoveryReconciler;
+    }
+
+    /**
+     * Desired discovery state, computed from device state: scan ON iff some wanted device is unconnected AND no
+     * device is currently establishing a connection (the controller rejects create-connection while scanning).
+     */
+    private boolean isScanWanted() {
+        boolean[] unconnected = { false };
+        boolean[] connecting = { false };
+        forEachDevice(d -> {
+            DeviceReconciler rec = d.getReconciler();
+            if (rec.wantsConnectWindow()) {
+                unconnected[0] = true;
+            }
+            DeviceReconciler.Observed o = rec.lastObserved();
+            if (o != null && o.flagConnecting) {
+                connecting[0] = true;
+            }
+        });
+        return unconnected[0] && !connecting[0];
+    }
+
+    /** Ask the adapter reconciler to reset (via the shared budget). Called by a device with a wedged connect. */
+    void requestAdapterReset() {
+        BTAdapter a = adapter;
+        if (a != null && resetBudget.tryReset("device-request")) {
+            HCIStatusCode rc = a.reset();
+            logger.warn("Direct-BT adapter reset on device request -> {} (powered={})", rc, a.isPowered());
+            if (rc == HCIStatusCode.SUCCESS && !a.isPowered()) {
+                a.setPowered(true);
+            }
+        }
+    }
+
+    private void bringUpAdapter(BTAdapter added, BluetoothAddress wanted) {
         try {
             logger.debug("Direct-BT onAdapterAdded {} pre-state: initialized={} powered={}", wanted,
                     added.isInitialized(), added.isPowered());
@@ -275,22 +391,12 @@ public class DirectBTBridgeHandler extends AbstractBluetoothBridgeHandler<Direct
             statusListener = listener;
             // Clear any prior discovery state first: startDiscovery() returns INTERNAL_FAILURE if the adapter
             // is already discovering (e.g. from a previous handler instance). stopDiscovery() is a safe no-op
-            // otherwise.
+            // otherwise. We do NOT start discovery here -- the level-triggered reconciler owns discovery on/off
+            // and will turn the scan on at its first tick because no wanted device is connected yet.
             added.stopDiscovery();
-            // Use the explicit scan-parameter form (matching the Direct-BT reference defaults): the short
-            // 2-arg overload can return INTERNAL_FAILURE on some controllers/states.
-            HCIStatusCode res = added.startDiscovery(null, DiscoveryPolicy.PAUSE_CONNECTED_UNTIL_READY, true,
-                    LE_SCAN_INTERVAL, LE_SCAN_WINDOW, FILTER_POLICY, FILTER_DUP);
-            logger.debug("Direct-BT adapter {} startDiscovery: {} (powered={})", wanted, res, added.isPowered());
-            if (res != HCIStatusCode.SUCCESS) {
-                added.removeStatusListener(listener);
-                statusListener = null;
-                updateStatus(ThingStatus.OFFLINE, ThingStatusDetail.COMMUNICATION_ERROR,
-                        "startDiscovery failed: " + res);
-                return;
-            }
             this.adapter = added;
             updateStatus(ThingStatus.ONLINE);
+            startReconciler();
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         } catch (RuntimeException e) {
@@ -353,11 +459,6 @@ public class DirectBTBridgeHandler extends AbstractBluetoothBridgeHandler<Direct
         return executor;
     }
 
-    /** Per-adapter lock serializing LE create-connection (only one allowed in flight by the controller). */
-    java.util.concurrent.locks.ReentrantLock getConnectLock() {
-        return connectLock;
-    }
-
     @Override
     protected DirectBTBluetoothDevice createDevice(BluetoothAddress address) {
         return new DirectBTBluetoothDevice(this, address);
@@ -374,6 +475,13 @@ public class DirectBTBridgeHandler extends AbstractBluetoothBridgeHandler<Direct
         // out, then take the monitor to clean up without racing onAdapterAdded/onDeviceFound.
         disposed = true;
         cancelInitJob();
+        synchronized (reconcileLock) {
+            ScheduledFuture<?> rec = reconcileJob;
+            if (rec != null) {
+                rec.cancel(false);
+                reconcileJob = null;
+            }
+        }
         synchronized (this) {
             BTManager localManager = manager;
             if (localManager != null) {
