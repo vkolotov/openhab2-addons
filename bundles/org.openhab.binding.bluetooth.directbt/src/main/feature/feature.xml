@@ -4,10 +4,11 @@
 
 	<feature name="openhab-binding-bluetooth-directbt" description="Bluetooth Binding Direct-BT" version="${project.version}">
 		<feature>openhab-runtime-base</feature>
-		<!-- Direct-BT native/transport lib bundle. Lower start-level than the binding so its Bundle-Activator
-			extracts + prepares the native libs before the binding tries to acquire the BTManager. This is the
-			bundle that owns the JNI; it is NOT hot-swapped, so the binding above can be reloaded freely. -->
-		<bundle dependency="true" start-level="75">mvn:org.direct_bt/direct-bt/3.3.5</bundle>
+		<!-- Direct-BT native/transport lib bundle (the OSGi wrapper of org.direct_bt:direct-bt). Lower
+			start-level than the binding so its Bundle-Activator extracts + prepares the native libs before the
+			binding tries to acquire the BTManager. This is the bundle that owns the JNI; it is NOT hot-swapped,
+			so the binding above can be reloaded freely. -->
+		<bundle dependency="true" start-level="75">mvn:org.direct_bt/direct-bt-osgi/3.3.5</bundle>
 		<bundle start-level="80">mvn:org.openhab.addons.bundles/org.openhab.binding.bluetooth/${project.version}</bundle>
 		<bundle start-level="80">mvn:org.openhab.addons.bundles/org.openhab.binding.bluetooth.directbt/${project.version}</bundle>
 	</feature>

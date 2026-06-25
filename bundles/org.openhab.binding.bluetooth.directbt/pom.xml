@@ -23,8 +23,9 @@
       <scope>provided</scope>
     </dependency>
 
-    <!-- Direct-BT userspace BLE stack (MIT). Self-contained fat jar incl. jaulib + native libs.
-         Provided as a separate OSGi feature bundle at runtime (see src/main/feature/feature.xml). -->
+    <!-- Direct-BT userspace BLE stack (MIT). Compile against the plain library API (org.direct_bt,
+         org.jau.net). At runtime the OSGi wrapper of this library (org.direct_bt:direct-bt-osgi) supplies
+         it as a bundle with the natives; see src/main/feature/feature.xml. -->
     <dependency>
       <groupId>org.direct_bt</groupId>
       <artifactId>direct-bt</artifactId>
