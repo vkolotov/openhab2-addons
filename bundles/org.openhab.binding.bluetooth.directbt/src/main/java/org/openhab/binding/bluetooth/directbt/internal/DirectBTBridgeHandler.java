@@ -299,33 +299,37 @@ public class DirectBTBridgeHandler extends AbstractBluetoothBridgeHandler<Direct
     }
 
     /**
-     * Desired discovery state, computed from device state. The scan and a create-connection cannot run at the same
-     * time (the controller rejects connectLE while scanning, and a scan concurrent with a live ACL is the suspected
-     * single-radio drop cause), so they hand off:
+     * Desired discovery state, computed from device state:
      * <ul>
      * <li>scan ON iff some wanted device still needs to be <em>discovered</em> ({@link DeviceReconciler#wantsDiscovery()}
      * — no native handle yet: the cold-start bootstrap, and the re-find after a drop clears the handle), AND</li>
-     * <li>no device is currently <em>connecting</em> (we must drop the scan to let a pending create-connection
-     * proceed) or already <em>connected</em> (don't scan over a live ACL).</li>
+     * <li>no device is currently <em>connecting</em> — the controller rejects create-connection while scanning, so
+     * the device establishing a link needs the scan off; we hand the radio to it, then resume scanning.</li>
      * </ul>
      * A device that already has a native handle but isn't connected does NOT keep the scan on: it wants the scan
      * OFF so {@link DeviceReconciler} can issue connectLE. That is the handoff that breaks the discover/connect
      * deadlock — the scan runs only until the device is found, then stops so the connect can fire.
+     * <p>
+     * Note we do NOT suppress the scan merely because another device is already connected: with multiple wanted
+     * devices on one adapter, a still-undiscovered device would otherwise never be found (the first to connect would
+     * pin the scan off forever). Direct-BT's {@link DiscoveryPolicy#PAUSE_CONNECTED_UNTIL_READY} discovery policy
+     * exists precisely to keep connected devices stable while a scan runs, so scanning to find device B while
+     * device A holds a live ACL is safe. Only an in-flight create-connection blocks the scan.
      */
     private boolean isScanWanted() {
         boolean[] needsDiscovery = { false };
-        boolean[] busy = { false };
+        boolean[] connecting = { false };
         forEachDevice(d -> {
             DeviceReconciler rec = d.getReconciler();
             if (rec.wantsDiscovery()) {
                 needsDiscovery[0] = true;
             }
             DeviceReconciler.Observed o = rec.lastObserved();
-            if (o != null && (o.flagConnecting || o.nativeConnected)) {
-                busy[0] = true;
+            if (o != null && o.flagConnecting) {
+                connecting[0] = true;
             }
         });
-        return needsDiscovery[0] && !busy[0];
+        return needsDiscovery[0] && !connecting[0];
     }
 
     /** Ask the adapter reconciler to reset (via the shared budget). Called by a device with a wedged connect. */
