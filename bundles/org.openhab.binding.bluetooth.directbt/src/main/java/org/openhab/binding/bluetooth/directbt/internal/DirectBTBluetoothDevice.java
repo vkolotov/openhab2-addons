@@ -254,6 +254,14 @@ public class DirectBTBluetoothDevice extends BaseBluetoothDevice implements Devi
         if (dev == null) {
             return HCIStatusCode.INTERNAL_FAILURE;
         }
+        // Reset the GATT model + the servicesDiscovered latch at the START of every connect, mirroring the BlueZ
+        // transport (BlueZBluetoothDevice.connect() clears services up front; see openhab-addons #20985). This
+        // guarantees that after the connection is established the post-connect discovery re-fires
+        // SERVICES_DISCOVERED, so the generic device handler's onServicesDiscovered() runs and re-populates its
+        // channel/poll map. Without it, a handler re-bound to an already-resolved device (a hot binding redeploy,
+        // or any reconnect where the latch stayed true) sits on an empty channel map and silently never polls.
+        clearServices();
+        gattCharByUuid.clear();
         try {
             // The reconciler has already ensured the adapter scan is OFF (the controller rejects create-connection
             // while scanning) and owns the connect lifecycle, so no inline pre-connect cleanup is needed. A former
@@ -462,18 +470,30 @@ public class DirectBTBluetoothDevice extends BaseBluetoothDevice implements Devi
         return false;
     }
 
-    /** Best-effort release of native listeners + disconnect; called from the bridge on device disposal. */
+    /**
+     * Best-effort teardown on bridge/handler disposal (OH shutdown or a hot binding redeploy): release native
+     * notification listeners, drop the native ACL, and reset the openHAB-model connection + service-discovery
+     * state. Resetting the model state (via {@link #markDisconnected()}, which calls {@code clearServices()} and
+     * nulls the handle) is the important part: if we left the link up and {@code servicesDiscovered} latched true,
+     * a freshly re-bound generic device handler after a redeploy would never receive {@code onServicesDiscovered()}
+     * again (neither the core nor our reconciler re-discovers while the latch is true), so its poll loop would sit
+     * on an empty channel map and silently never read. Disconnecting cleanly here means the next incarnation
+     * starts from DISCONNECTED and runs a full fresh discover -> SERVICES_DISCOVERED -> polling resumes.
+     */
     void close() {
         BTDevice dev = device;
         releaseNotifyListeners();
-        gattCharByUuid.clear();
-        if (dev != null && dev.getConnected()) {
+        if (dev != null) {
             try {
-                dev.disconnect();
+                if (dev.getConnected()) {
+                    dev.disconnect();
+                }
             } catch (RuntimeException e) {
                 logger.debug("Error disconnecting {} on close", address, e);
             }
         }
+        // Reset the openHAB-model state (clears services + the servicesDiscovered latch, nulls the handle).
+        markDisconnected();
     }
 
     private static int mapProperties(GattCharPropertySet props) {

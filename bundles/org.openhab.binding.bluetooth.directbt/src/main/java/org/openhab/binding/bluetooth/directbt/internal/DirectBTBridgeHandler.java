@@ -505,10 +505,16 @@ public class DirectBTBridgeHandler extends AbstractBluetoothBridgeHandler<Direct
                     logger.debug("Error removing Direct-BT adapter-set listener on dispose", e);
                 }
             }
+            // Cleanly disconnect every device BEFORE detaching the adapter. This is the OH shutdown / hot-redeploy
+            // hook: dispose() runs on bundle stop and on OH shutdown. Tearing the ACLs down here means we never
+            // leave a half-open link the controller has to time out (a contributor to the CSR coming back wedged),
+            // and it resets each device's openHAB-model state so a re-bound handler after a redeploy gets a fresh
+            // discover -> SERVICES_DISCOVERED -> polling, instead of sitting on a stale servicesDiscovered latch.
+            // Must precede detachAdapter(): close() issues a native dev.disconnect() that needs the live adapter.
+            forEachDevice(DirectBTBluetoothDevice::close);
             detachAdapter();
             managerReady = false;
         }
-        forEachDevice(DirectBTBluetoothDevice::close);
         super.dispose();
     }
 
