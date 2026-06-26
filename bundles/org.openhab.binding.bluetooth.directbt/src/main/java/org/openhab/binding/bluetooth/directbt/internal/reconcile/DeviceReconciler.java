@@ -92,11 +92,17 @@ public class DeviceReconciler extends Reconciler<Boolean, DeviceReconciler.Obser
         this.requestAdapterReset = requestAdapterReset;
     }
 
-    /** @return true iff this device wants a connect window now (so discovery suppresses the scan). */
-    public boolean wantsConnectWindow() {
-        // Recompute from native truth so this is correct even between ticks: we want a connect window iff the
-        // device is wanted and not currently connected.
-        return port.isWanted() && port.hasNativeDevice() && !port.isNativeConnected();
+    /**
+     * @return true iff this device needs the scan ON to make progress, i.e. it is wanted and we do not yet hold a
+     *         usable native handle for it (cold start: never discovered; or the handle was cleared on a drop). Once
+     *         we hold a handle the device wants the scan OFF instead (connectLE is rejected while scanning), so it
+     *         stops wanting discovery and the connect step takes over. This split is what breaks the cold-start
+     *         deadlock: the older single "wantsConnectWindow" predicate required a native handle to want the scan,
+     *         so a never-seen device could never trigger the scan that would have discovered it (no handle -> no
+     *         scan -> never discovered -> never a handle).
+     */
+    public boolean wantsDiscovery() {
+        return port.isWanted() && !port.hasNativeDevice();
     }
 
     /** @return true iff the device is wanted and natively connected (steady state). */
@@ -133,17 +139,16 @@ public class DeviceReconciler extends Reconciler<Boolean, DeviceReconciler.Obser
             }
             connectingSince = 0;
             port.markConnected();
-        } else if ((!o.hasNative || !o.nativeConnected) && (o.flagConnected || o.flagConnecting)) {
-            // Native says not-connected while we think connected/connecting -> the silent-drop / failed-establish
-            // case. Drive the disconnect transition so the core's reconnect loop resumes.
-            if (o.flagConnected) {
-                logger.debug("[reconcile:{}] native not connected but flag connected; marking disconnected", name);
-            }
+        } else if ((!o.hasNative || !o.nativeConnected) && o.flagConnected) {
+            // Native says not-connected while we think CONNECTED -> the silent-drop case. Drive the disconnect
+            // transition so the core's reconnect loop resumes. markDisconnected() also clears the stale native
+            // handle, so this tick's observed snapshot is now out of date: return and let the next tick re-observe
+            // (it will see hasNative==false and route through discovery before any reconnect).
+            logger.debug("[reconcile:{}] native not connected but flag connected; marking disconnected", name);
             connectedSince = 0;
-            if (o.flagConnected) {
-                connectingSince = 0;
-            }
+            connectingSince = 0;
             port.markDisconnected();
+            return;
         }
 
         if (!port.isWanted()) {
@@ -181,14 +186,17 @@ public class DeviceReconciler extends Reconciler<Boolean, DeviceReconciler.Obser
         }
 
         // (4) CONNECTION — issue connectLE only when the scan is observed OFF (controller rejects it otherwise).
-        if (!o.hasNative) {
-            return; // no native handle yet; discovery must surface it first
+        if (!port.hasNativeDevice()) {
+            // No native handle yet (cold start, or just cleared on a drop). Discovery must surface it first; the
+            // discovery reconciler keeps the scan ON for us because wantsDiscovery() is true.
+            return;
         }
         if (now - lastConnectAttemptAt < CONNECT_RETRY_MS) {
             return; // space out attempts
         }
         if (!scanIsOff.getAsBoolean()) {
-            // Discovery still has the scan on; it will turn it off because wantsConnectWindow() is true. Wait.
+            // We hold a native handle now, so the device no longer wants discovery; the discovery reconciler will
+            // stop the scan (its desired flips to OFF), which then lets this connect fire on a later tick. Wait.
             logger.trace("[reconcile:{}] waiting for scan to stop before connect", name);
             return;
         }

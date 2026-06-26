@@ -299,23 +299,33 @@ public class DirectBTBridgeHandler extends AbstractBluetoothBridgeHandler<Direct
     }
 
     /**
-     * Desired discovery state, computed from device state: scan ON iff some wanted device is unconnected AND no
-     * device is currently establishing a connection (the controller rejects create-connection while scanning).
+     * Desired discovery state, computed from device state. The scan and a create-connection cannot run at the same
+     * time (the controller rejects connectLE while scanning, and a scan concurrent with a live ACL is the suspected
+     * single-radio drop cause), so they hand off:
+     * <ul>
+     * <li>scan ON iff some wanted device still needs to be <em>discovered</em> ({@link DeviceReconciler#wantsDiscovery()}
+     * — no native handle yet: the cold-start bootstrap, and the re-find after a drop clears the handle), AND</li>
+     * <li>no device is currently <em>connecting</em> (we must drop the scan to let a pending create-connection
+     * proceed) or already <em>connected</em> (don't scan over a live ACL).</li>
+     * </ul>
+     * A device that already has a native handle but isn't connected does NOT keep the scan on: it wants the scan
+     * OFF so {@link DeviceReconciler} can issue connectLE. That is the handoff that breaks the discover/connect
+     * deadlock — the scan runs only until the device is found, then stops so the connect can fire.
      */
     private boolean isScanWanted() {
-        boolean[] unconnected = { false };
-        boolean[] connecting = { false };
+        boolean[] needsDiscovery = { false };
+        boolean[] busy = { false };
         forEachDevice(d -> {
             DeviceReconciler rec = d.getReconciler();
-            if (rec.wantsConnectWindow()) {
-                unconnected[0] = true;
+            if (rec.wantsDiscovery()) {
+                needsDiscovery[0] = true;
             }
             DeviceReconciler.Observed o = rec.lastObserved();
-            if (o != null && o.flagConnecting) {
-                connecting[0] = true;
+            if (o != null && (o.flagConnecting || o.nativeConnected)) {
+                busy[0] = true;
             }
         });
-        return unconnected[0] && !connecting[0];
+        return needsDiscovery[0] && !busy[0];
     }
 
     /** Ask the adapter reconciler to reset (via the shared budget). Called by a device with a wedged connect. */

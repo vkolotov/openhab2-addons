@@ -238,6 +238,13 @@ public class DirectBTBluetoothDevice extends BaseBluetoothDevice implements Devi
         releaseNotifyListeners();
         clearServices();
         gattCharByUuid.clear();
+        // Drop the stale native handle: after a disconnect the BTDevice no longer represents a usable link, and a
+        // reconnect attempt on the old handle is exactly the path that wedges (CSR COMMAND_DISALLOWED / a connectLE
+        // that the controller silently never completes). Clearing it makes the device hasNativeDevice()==false, so
+        // the discovery reconciler turns the scan back on and re-finds the device from a FRESH advertisement before
+        // the next connect -- the same "trust the fresh frame, not a cached object" discipline the rest of the
+        // stack relies on. updateBTDevice() installs the new handle when the scan rediscovers it.
+        device = null;
         setConnectionState(ConnectionState.DISCONNECTED);
     }
 
