@@ -31,12 +31,14 @@ import org.eclipse.jdt.annotation.NonNullByDefault;
 import org.eclipse.jdt.annotation.Nullable;
 import org.openhab.binding.bluetooth.AbstractBluetoothBridgeHandler;
 import org.openhab.binding.bluetooth.BluetoothAddress;
+import org.openhab.binding.bluetooth.BluetoothBindingConstants;
 import org.openhab.binding.bluetooth.directbt.internal.reconcile.AdapterReconciler;
 import org.openhab.binding.bluetooth.directbt.internal.reconcile.DeviceReconciler;
 import org.openhab.binding.bluetooth.directbt.internal.reconcile.DiscoveryReconciler;
 import org.openhab.binding.bluetooth.directbt.internal.reconcile.ResetBudget;
 import org.openhab.core.common.ThreadPoolManager;
 import org.openhab.core.thing.Bridge;
+import org.openhab.core.thing.Thing;
 import org.openhab.core.thing.ThingStatus;
 import org.openhab.core.thing.ThingStatusDetail;
 import org.slf4j.Logger;
@@ -489,6 +491,25 @@ public class DirectBTBridgeHandler extends AbstractBluetoothBridgeHandler<Direct
         DirectBTBluetoothDevice device = getDevice(toAddress(btDevice));
         device.updateBTDevice(btDevice);
         deviceDiscovered(device);
+    }
+
+    /**
+     * @return whether the device Thing for {@code address} is ENABLED (registry truth). The device thing-type is
+     *         core-owned (we have no device handler), so we read the enabled bit off the child Thing the bridge
+     *         already tracks — by address, mirroring {@code hasHandlerForDevice}. Polled per reconcile tick while
+     *         the handler is alive (unlike the dispose-edge, this read of the level is reliable). Defaults to true
+     *         for an address with no matching child Thing (an unconfigured/discovery-probe device), preserving the
+     *         prior behaviour where such a device was treated as wanted iff it had listeners.
+     */
+    boolean isDeviceEnabled(BluetoothAddress address) {
+        String addrStr = address.toString();
+        for (Thing childThing : getThing().getThings()) {
+            Object childAddr = childThing.getConfiguration().get(BluetoothBindingConstants.CONFIGURATION_ADDRESS);
+            if (addrStr.equalsIgnoreCase(String.valueOf(childAddr))) {
+                return childThing.isEnabled();
+            }
+        }
+        return true; // no configured Thing for this address: leave wanted-ness to the listener/connect gate
     }
 
     /** Resolve the openHAB device for a Direct-BT device by address, or {@code null} if disposed. */

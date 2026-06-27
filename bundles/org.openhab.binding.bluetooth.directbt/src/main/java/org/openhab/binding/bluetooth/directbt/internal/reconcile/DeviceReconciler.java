@@ -142,6 +142,14 @@ public class DeviceReconciler extends Reconciler<Boolean, DeviceReconciler.Obser
         }
 
         if (!port.isWanted()) {
+            // Not wanted (Thing disabled, or the core asked us to disconnect via disconnect() -> wantConnected
+            // false). If we are still natively connected, tear the ACL down so we honour the intent; this is the
+            // idle-disconnect path for alwaysConnected=false that the old listener-presence proxy never exercised.
+            if (o.hasNative && o.nativeConnected) {
+                logger.debug("[reconcile:{}] no longer wanted but still connected; disconnecting", name);
+                port.disconnectNative();
+                port.markDisconnected();
+            }
             return; // nothing more to do for an unwanted device
         }
 
