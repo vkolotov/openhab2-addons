@@ -332,10 +332,16 @@ public class DirectBTBridgeHandler extends AbstractBluetoothBridgeHandler<Direct
         return needsDiscovery[0] && !connecting[0];
     }
 
-    /** Ask the adapter reconciler to reset (via the shared budget). Called by a device with a wedged connect. */
+    /**
+     * Reset the adapter on a device's behalf (wedged create-connection / COMMAND_DISALLOWED). The caller
+     * (DeviceReconciler) has ALREADY consumed the shared reset budget via its own {@code tryReset(name)} before
+     * invoking this, so we must NOT gate on {@code tryReset} again here: doing so double-consumed the budget and
+     * the second check always failed, so {@code adapter.reset()} never actually ran (observed live on the CSR as
+     * 100+ COMMAND_DISALLOWED with 0 resets, the device pair never recovering). Just perform the reset.
+     */
     void requestAdapterReset() {
         BTAdapter a = adapter;
-        if (a != null && resetBudget.tryReset("device-request")) {
+        if (a != null) {
             HCIStatusCode rc = a.reset();
             logger.warn("Direct-BT adapter reset on device request -> {} (powered={})", rc, a.isPowered());
             if (rc == HCIStatusCode.SUCCESS && !a.isPowered()) {
