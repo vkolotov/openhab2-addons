@@ -33,9 +33,9 @@ import org.openhab.binding.bluetooth.BluetoothAddress;
 import org.openhab.binding.bluetooth.BluetoothCharacteristic;
 import org.openhab.binding.bluetooth.BluetoothDescriptor;
 import org.openhab.binding.bluetooth.BluetoothService;
+import org.openhab.binding.bluetooth.directbt.internal.reconcile.AdapterReconciler;
 import org.openhab.binding.bluetooth.directbt.internal.reconcile.DeviceReconciler;
 import org.openhab.binding.bluetooth.directbt.internal.reconcile.DevicePort;
-import org.openhab.binding.bluetooth.directbt.internal.reconcile.DiscoveryReconciler;
 import org.openhab.binding.bluetooth.notification.BluetoothConnectionStatusNotification;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -98,8 +98,8 @@ public class DirectBTBluetoothDevice extends BaseBluetoothDevice implements Devi
         this.executor = adapter.getExecutor();
         this.reconciler = new DeviceReconciler(logger, this,
                 () -> {
-                    DiscoveryReconciler dr = bridge.getDiscoveryReconciler();
-                    return dr != null && dr.isScanOff();
+                    AdapterReconciler ar = bridge.getAdapterReconciler();
+                    return ar != null && ar.isScanOff();
                 }, adapter.getResetBudget(), bridge::requestAdapterReset);
     }
 

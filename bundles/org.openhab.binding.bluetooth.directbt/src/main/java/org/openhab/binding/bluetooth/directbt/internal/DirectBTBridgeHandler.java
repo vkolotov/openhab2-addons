@@ -34,7 +34,6 @@ import org.openhab.binding.bluetooth.BluetoothAddress;
 import org.openhab.binding.bluetooth.BluetoothBindingConstants;
 import org.openhab.binding.bluetooth.directbt.internal.reconcile.AdapterReconciler;
 import org.openhab.binding.bluetooth.directbt.internal.reconcile.DeviceReconciler;
-import org.openhab.binding.bluetooth.directbt.internal.reconcile.DiscoveryReconciler;
 import org.openhab.binding.bluetooth.directbt.internal.reconcile.ResetBudget;
 import org.openhab.core.common.ThreadPoolManager;
 import org.openhab.core.thing.Bridge;
@@ -97,7 +96,6 @@ public class DirectBTBridgeHandler extends AbstractBluetoothBridgeHandler<Direct
     private volatile long lastTickAt;
     private final ResetBudget resetBudget = new ResetBudget(LoggerFactory.getLogger(ResetBudget.class));
     private @Nullable AdapterReconciler adapterReconciler;
-    private @Nullable DiscoveryReconciler discoveryReconciler;
     private boolean managerReady;
     private volatile boolean disposed;
 
@@ -253,7 +251,6 @@ public class DirectBTBridgeHandler extends AbstractBluetoothBridgeHandler<Direct
         synchronized (reconcileLock) {
             if (adapterReconciler == null) {
                 adapterReconciler = new AdapterReconciler(logger, () -> adapter, resetBudget);
-                discoveryReconciler = new DiscoveryReconciler(logger, () -> adapter, this::isScanWanted, resetBudget);
             }
             if (reconcileJob == null) {
                 reconcileJob = scheduler.scheduleWithFixedDelay(this::reconcileTick, 0, RECONCILE_INTERVAL_MS,
@@ -262,7 +259,11 @@ public class DirectBTBridgeHandler extends AbstractBluetoothBridgeHandler<Direct
         }
     }
 
-    /** One driver tick: adapter -> (gate) -> devices -> discovery. Single-threaded via reconcileLock. */
+    /**
+     * One driver tick: adapter-power -> (gate) -> devices -> adapter-scan. Single-threaded via reconcileLock.
+     * Scan is a field of the adapter resource (not a separate reconciler), but it reconciles AFTER the devices
+     * because its desired state ({@link #isScanWanted()}) is a rollup of device state.
+     */
     private void reconcileTick() {
         synchronized (reconcileLock) {
             if (disposed) {
@@ -274,27 +275,26 @@ public class DirectBTBridgeHandler extends AbstractBluetoothBridgeHandler<Direct
             reconcilePending.set(false);
             lastTickAt = System.currentTimeMillis();
             AdapterReconciler ar = adapterReconciler;
-            DiscoveryReconciler dr = discoveryReconciler;
-            if (ar == null || dr == null) {
+            if (ar == null) {
                 return;
             }
-            boolean adapterOk = ar.reconcile();
+            boolean adapterOk = ar.reconcile(); // power phase (the prerequisite gate)
             if (!adapterOk) {
                 // Prerequisite not in sync: pause dependents (freeze their timers) so a long adapter outage does
-                // not age devices toward escalation (which would storm on recovery).
-                dr.pause();
+                // not age devices toward escalation (which would storm on recovery). The scan field is reset so a
+                // stale "scan off" can't let a connect fire against an un-powered adapter.
+                ar.resetScanState();
                 forEachDevice(d -> d.getReconciler().pause());
                 return;
             }
-            dr.unpause();
-            // Devices first (they update connected/connecting state that discovery's desired is computed from),
-            // then discovery. The flag-sync sub-step inside a device runs even right after an adapter reset.
+            // Devices first (they update connected/connecting state that the scan's desired is computed from),
+            // then the adapter scan field. The flag-sync sub-step inside a device runs even right after a reset.
             forEachDevice(d -> {
                 DeviceReconciler rec = d.getReconciler();
                 rec.unpause();
                 rec.reconcile();
             });
-            dr.reconcile();
+            ar.reconcileScan(isScanWanted()); // scan phase (the adapter's second field)
         }
     }
 
@@ -323,10 +323,10 @@ public class DirectBTBridgeHandler extends AbstractBluetoothBridgeHandler<Direct
         return resetBudget;
     }
 
-    /** @return the discovery reconciler (devices query its observed scan state to gate connectLE). */
+    /** @return the adapter reconciler (devices query its observed scan state via isScanOff() to gate connectLE). */
     @Nullable
-    DiscoveryReconciler getDiscoveryReconciler() {
-        return discoveryReconciler;
+    AdapterReconciler getAdapterReconciler() {
+        return adapterReconciler;
     }
 
     /**
