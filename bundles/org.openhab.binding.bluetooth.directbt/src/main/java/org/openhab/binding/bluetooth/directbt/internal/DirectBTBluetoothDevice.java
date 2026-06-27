@@ -80,13 +80,6 @@ public class DirectBTBluetoothDevice extends BaseBluetoothDevice implements Devi
 
     private volatile @Nullable BTDevice device;
 
-    // The openHAB core's connection INTENT, captured from connect()/disconnect(). The core's
-    // ConnectedBluetoothHandler calls connect() when it wants an ACL (driven by the alwaysConnected config) and
-    // disconnect() for its idle-disconnect on alwaysConnected=false. We record that intent here (instead of
-    // discarding it) so the reconciler's wanted-spec honours a core-requested disconnect, not just listener
-    // presence. Starts false: the reconciler connects once the core asks (its reconnect loop calls connect()).
-    private volatile boolean wantConnected;
-
     // Maps an openHAB characteristic UUID to the Direct-BT characteristic handle (populated on discovery).
     private final Map<UUID, BTGattChar> gattCharByUuid = new ConcurrentHashMap<>();
     // Active notification listeners per characteristic UUID, so we can unregister on disable/dispose.
@@ -152,13 +145,11 @@ public class DirectBTBluetoothDevice extends BaseBluetoothDevice implements Devi
 
     @Override
     public boolean connect() {
-        // Admission control: only listener-having devices ever connect. The core connect-probes every discovered
-        // device without a listener to fingerprint it; refusing those keeps the controller clean.
+        // Admission control: only wanted (listener-having) devices ever connect. The core connect-probes every
+        // discovered device without a listener to fingerprint it; refusing those keeps the controller clean.
         if (getListeners().isEmpty()) {
             return false;
         }
-        // Record the core's connect INTENT as the reconciler's wanted-spec (see wantConnected / isWanted()).
-        wantConnected = true;
         bridge.requeueReconcile();
         // Return true (intent accepted) so the core's reconnect loop treats this as "connecting in progress" and
         // stops hammering; the reconciler drives the real state and getConnectionState() reflects native truth.
@@ -167,10 +158,6 @@ public class DirectBTBluetoothDevice extends BaseBluetoothDevice implements Devi
 
     @Override
     public boolean disconnect() {
-        // Record the core's disconnect intent (its idle-disconnect for alwaysConnected=false): the reconciler will
-        // observe wantConnected==false and tear the ACL down, instead of holding it open as the old listener proxy
-        // would have.
-        wantConnected = false;
         bridge.requeueReconcile();
         return true;
     }
@@ -203,12 +190,7 @@ public class DirectBTBluetoothDevice extends BaseBluetoothDevice implements Devi
 
     @Override
     public boolean isWanted() {
-        // Desired-connected spec = the device Thing is ENABLED (registry truth, read off the child Thing by the
-        // bridge) AND the core has asked us to hold a connection (wantConnected, from connect()/disconnect()).
-        // We still require a listener as admission control (an enabled Thing with no bound handler has nothing to
-        // serve). This replaces the bare listener-presence proxy: it survives bridge-offline/redeploy (the Thing
-        // stays enabled) and honours the core's idle-disconnect for alwaysConnected=false devices.
-        return wantConnected && !getListeners().isEmpty() && bridge.isDeviceEnabled(address);
+        return !getListeners().isEmpty();
     }
 
     @Override

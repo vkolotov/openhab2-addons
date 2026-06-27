@@ -25,14 +25,7 @@ import org.eclipse.jdt.annotation.NonNullByDefault;
 @NonNullByDefault
 public interface DevicePort {
 
-    /**
-     * @return the device's desired-connected spec: it is ENABLED (the device Thing is not disabled) AND the
-     *         openHAB core has asked us to connect (via {@code connect()}, not yet countermanded by
-     *         {@code disconnect()}). This is the level the reconciler drives toward — true means "hold an ACL".
-     *         Replaces the older listener-presence proxy: it reads the real Thing-enabled bit (so it survives
-     *         bridge-offline / redeploy transients) and honours the core's idle-disconnect intent for
-     *         {@code alwaysConnected=false} devices (which the listener proxy missed).
-     */
+    /** @return true iff this device currently has openHAB listeners, i.e. it is a wanted/configured device. */
     boolean isWanted();
 
     /** @return true iff the native device handle is present/usable. */
