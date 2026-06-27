@@ -58,13 +58,10 @@ public abstract class Reconciler<D, O> {
     private boolean paused;
 
     // Bookkeeping (all in epoch millis unless noted). Frozen while paused.
-    private long lastObservedAt;
-    private long lastActAt;
     private long inSyncSince;
     private long outOfSyncSince;
     private long nextActNotBefore;
     private int consecutiveActs;
-    private @Nullable String lastError;
 
     protected Reconciler(String name, Logger logger, D initialDesired) {
         this.name = name;
@@ -105,7 +102,6 @@ public abstract class Reconciler<D, O> {
         O obs = observe();
         this.observed = obs;
         long now = System.currentTimeMillis();
-        this.lastObservedAt = now;
         D des = desired;
         if (inSync(des, obs)) {
             if (inSyncSince == 0) {
@@ -115,7 +111,6 @@ public abstract class Reconciler<D, O> {
             consecutiveActs = 0;
             outOfSyncSince = 0;
             nextActNotBefore = 0;
-            lastError = null;
             return true;
         }
         inSyncSince = 0;
@@ -128,10 +123,8 @@ public abstract class Reconciler<D, O> {
         try {
             act(des, obs);
         } catch (RuntimeException e) {
-            lastError = e.getMessage();
             logger.debug("[reconcile:{}] act threw", name, e);
         }
-        lastActAt = now;
         consecutiveActs++;
         nextActNotBefore = now + backoffMillis(consecutiveActs);
         if (now - outOfSyncSince > escalateAfterMillis()) {
@@ -139,16 +132,10 @@ public abstract class Reconciler<D, O> {
                 logger.warn("[reconcile:{}] delta persisted {}ms; escalating", name, now - outOfSyncSince);
                 escalate(des, obs);
             } catch (RuntimeException e) {
-                lastError = e.getMessage();
                 logger.debug("[reconcile:{}] escalate threw", name, e);
             }
         }
         return false;
-    }
-
-    /** Run a reconcile tick now, on the calling (driver) thread. Convenience for event-driven requeue. */
-    public final void requeue() {
-        reconcile();
     }
 
     // --- pause/freeze (dependency gating) --------------------------------------------------------
@@ -180,14 +167,6 @@ public abstract class Reconciler<D, O> {
 
     public final void setDesired(D newDesired) {
         this.desired = newDesired;
-    }
-
-    public final @Nullable O getObserved() {
-        return observed;
-    }
-
-    public final @Nullable String getLastError() {
-        return lastError;
     }
 
     /** Exponential backoff with a cap: BASE * 2^(n-1), capped. */

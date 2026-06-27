@@ -76,7 +76,6 @@ public class DeviceReconciler extends Reconciler<Boolean, DeviceReconciler.Obser
 
     // Timestamps (epoch millis). connectingSince drives the stuck deadline; lastConnectAttemptAt spaces retries.
     private long connectingSince;
-    private long connectedSince;
     private long lastConnectAttemptAt;
 
     /**
@@ -105,11 +104,6 @@ public class DeviceReconciler extends Reconciler<Boolean, DeviceReconciler.Obser
         return port.isWanted() && !port.hasNativeDevice();
     }
 
-    /** @return true iff the device is wanted and natively connected (steady state). */
-    public boolean isConnected() {
-        return port.isNativeConnected();
-    }
-
     @Override
     protected Observed observe() {
         return new Observed(port.hasNativeDevice(), port.isNativeConnected(), port.isGattResolved(),
@@ -134,9 +128,6 @@ public class DeviceReconciler extends Reconciler<Boolean, DeviceReconciler.Obser
         // (5) STATE-FLAG SYNC — always reconcile our flag to native truth first.
         if (o.hasNative && o.nativeConnected && !o.flagConnected) {
             logger.debug("[reconcile:{}] native connected but flag not; marking connected", name);
-            if (connectedSince == 0) {
-                connectedSince = now;
-            }
             connectingSince = 0;
             port.markConnected();
         } else if ((!o.hasNative || !o.nativeConnected) && o.flagConnected) {
@@ -145,7 +136,6 @@ public class DeviceReconciler extends Reconciler<Boolean, DeviceReconciler.Obser
             // handle, so this tick's observed snapshot is now out of date: return and let the next tick re-observe
             // (it will see hasNative==false and route through discovery before any reconnect).
             logger.debug("[reconcile:{}] native not connected but flag connected; marking disconnected", name);
-            connectedSince = 0;
             connectingSince = 0;
             port.markDisconnected();
             return;
@@ -215,11 +205,6 @@ public class DeviceReconciler extends Reconciler<Boolean, DeviceReconciler.Obser
                 requestAdapterReset.run();
             }
         }
-    }
-
-    /** @return when this device's current native connection was first observed, or 0 if not connected. */
-    public long getConnectedSince() {
-        return connectedSince;
     }
 
     public @Nullable Observed lastObserved() {
