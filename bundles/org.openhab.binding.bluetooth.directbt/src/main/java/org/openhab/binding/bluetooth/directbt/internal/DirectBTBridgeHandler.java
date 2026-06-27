@@ -15,6 +15,7 @@ package org.openhab.binding.bluetooth.directbt.internal;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import org.direct_bt.AdapterStatusListener;
 import org.direct_bt.BTAdapter;
@@ -70,6 +71,12 @@ public class DirectBTBridgeHandler extends AbstractBluetoothBridgeHandler<Direct
     // desired state, and issues the idempotent corrective command to close the gap. Events merely requeue an
     // immediate reconcile so we react fast; if an event is missed the next tick heals it anyway.
     private static final long RECONCILE_INTERVAL_MS = 2000;
+    // Floor on event-driven native-observe frequency. An event may make a tick happen SOONER than the periodic
+    // interval, but never MORE OFTEN than this: a reconcile tick polls native truth (adapter.isPowered/isValid,
+    // per-device getConnected, isDiscovering), and those native reads are expensive and can themselves wedge a
+    // marginal controller. Events burst precisely when the radio is unhealthy (a connect/disconnect storm, a
+    // per-advert deviceFound flood), so capping observe frequency under load is a reliability requirement.
+    private static final long MIN_OBSERVE_INTERVAL_MS = 300;
 
     private @Nullable BluetoothAddress adapterAddress;
     private @Nullable BTManager manager;
@@ -80,6 +87,12 @@ public class DirectBTBridgeHandler extends AbstractBluetoothBridgeHandler<Direct
     // The single driver lock: the reconcile tick runs under it so reconcilers are effectively single-threaded
     // (at most one connectLE/startDiscovery in flight by construction). Event hints also requeue under it.
     private final Object reconcileLock = new Object();
+    // Event-requeue coalescing: at most ONE event-driven tick may be queued/in-flight at a time. A burst of
+    // events (OH connect/disconnect + native deviceFound/Connected/Disconnected/discoveringChanged) collapses
+    // to a single tick that observes the latest native truth; the surplus requests do ZERO native reads.
+    private final AtomicBoolean reconcilePending = new AtomicBoolean();
+    // When the last reconcile tick (periodic or event-driven) last ran, for the MIN_OBSERVE_INTERVAL_MS floor.
+    private volatile long lastTickAt;
     private final ResetBudget resetBudget = new ResetBudget(LoggerFactory.getLogger(ResetBudget.class));
     private @Nullable AdapterReconciler adapterReconciler;
     private @Nullable DiscoveryReconciler discoveryReconciler;
@@ -253,6 +266,11 @@ public class DirectBTBridgeHandler extends AbstractBluetoothBridgeHandler<Direct
             if (disposed) {
                 return;
             }
+            // Any queued event-driven tick is now being serviced by THIS run (which observes the latest native
+            // truth), so clear the pending flag BEFORE doing work: an event arriving during this tick will then
+            // schedule a fresh follow-up rather than being lost.
+            reconcilePending.set(false);
+            lastTickAt = System.currentTimeMillis();
             AdapterReconciler ar = adapterReconciler;
             DiscoveryReconciler dr = discoveryReconciler;
             if (ar == null || dr == null) {
@@ -278,13 +296,24 @@ public class DirectBTBridgeHandler extends AbstractBluetoothBridgeHandler<Direct
         }
     }
 
-    /** Run a reconcile tick now (event hint). Safe to call from native callback threads. */
+    /**
+     * Request a reconcile tick (event hint). Safe to call from native callback threads. COALESCES: a burst of
+     * events collapses to a single queued tick (the surplus do zero native reads), and event-driven ticks are
+     * floored to {@link #MIN_OBSERVE_INTERVAL_MS} so an event storm cannot drive expensive native polling faster
+     * than that. The periodic job is the backstop, so even a fully-throttled burst is reconciled within one
+     * interval. Events may make a tick happen SOONER than the periodic interval, never MORE OFTEN than the floor.
+     */
     void requeueReconcile() {
         if (disposed) {
             return;
         }
+        if (!reconcilePending.compareAndSet(false, true)) {
+            return; // a tick is already queued/in-flight; it will observe the latest truth. No native read here.
+        }
+        long sinceLast = System.currentTimeMillis() - lastTickAt;
+        long delay = Math.max(0, MIN_OBSERVE_INTERVAL_MS - sinceLast);
         // Hop onto the scheduler so we never block a native callback thread on the reconcileLock / native calls.
-        scheduler.execute(this::reconcileTick);
+        scheduler.schedule(this::reconcileTick, delay, TimeUnit.MILLISECONDS);
     }
 
     /** @return the adapter's reset budget (shared by reconcilers + device-requested resets). */
