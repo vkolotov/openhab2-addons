@@ -393,17 +393,17 @@ public class DirectBTBluetoothDevice extends BaseBluetoothDevice implements Devi
 
     @Override
     public CompletableFuture<byte[]> readCharacteristic(BluetoothCharacteristic characteristic) {
-        BTGattChar gattChar = connectedChar(characteristic.getUuid());
-        if (gattChar == null) {
-            return CompletableFuture.failedFuture(new IllegalStateException(
-                    "Characteristic not available (disconnected?): " + characteristic.getUuid()));
-        }
+        UUID charUuid = characteristic.getUuid();
         return CompletableFuture.supplyAsync(() -> {
             try {
+                BTGattChar gattChar = connectedChar(charUuid);
+                if (gattChar == null) {
+                    throw new IllegalStateException("Characteristic not available (disconnected?): " + charUuid);
+                }
                 byte[] value = gattChar.readValue();
                 if (value.length == 0) {
-                    logger.debug("Direct-BT read of {} on {} returned empty value; suppressing update",
-                            characteristic.getUuid(), address);
+                    logger.debug("Direct-BT read of {} on {} returned empty value; suppressing update", charUuid,
+                            address);
                     return value;
                 }
                 notifyListeners(BluetoothEventType.CHARACTERISTIC_UPDATED, characteristic, value);
@@ -416,15 +416,15 @@ public class DirectBTBluetoothDevice extends BaseBluetoothDevice implements Devi
 
     @Override
     public CompletableFuture<@Nullable Void> writeCharacteristic(BluetoothCharacteristic characteristic, byte[] value) {
-        BTGattChar gattChar = connectedChar(characteristic.getUuid());
-        if (gattChar == null) {
-            return CompletableFuture.failedFuture(new IllegalStateException(
-                    "Characteristic not available (disconnected?): " + characteristic.getUuid()));
-        }
-        // withResponse=true (acknowledged write) unless only write-without-response is supported.
-        boolean withResponse = gattChar.getProperties().isSet(GattCharPropertySet.Type.WriteWithAck);
+        UUID charUuid = characteristic.getUuid();
         return CompletableFuture.runAsync(() -> {
             try {
+                BTGattChar gattChar = connectedChar(charUuid);
+                if (gattChar == null) {
+                    throw new IllegalStateException("Characteristic not available (disconnected?): " + charUuid);
+                }
+                // withResponse=true (acknowledged write) unless only write-without-response is supported.
+                boolean withResponse = gattChar.getProperties().isSet(GattCharPropertySet.Type.WriteWithAck);
                 if (!gattChar.writeValue(value, withResponse)) {
                     throw new java.util.concurrent.CompletionException(
                             new RuntimeException("writeValue returned false"));
@@ -443,11 +443,6 @@ public class DirectBTBluetoothDevice extends BaseBluetoothDevice implements Devi
     @Override
     public CompletableFuture<@Nullable Void> enableNotifications(BluetoothCharacteristic characteristic) {
         UUID charUuid = characteristic.getUuid();
-        BTGattChar gattChar = connectedChar(charUuid);
-        if (gattChar == null) {
-            return CompletableFuture.failedFuture(
-                    new IllegalStateException("Characteristic not available (disconnected?): " + charUuid));
-        }
         // Reserve the slot atomically before native registration so two concurrent callers can't both
         // register a native listener (the second put would orphan the first, making it unremovable).
         BTGattCharListener listener = new DirectBTGattCharListener(charUuid);
@@ -456,6 +451,10 @@ public class DirectBTBluetoothDevice extends BaseBluetoothDevice implements Devi
         }
         return CompletableFuture.runAsync(() -> {
             try {
+                BTGattChar gattChar = connectedChar(charUuid);
+                if (gattChar == null) {
+                    throw new IllegalStateException("Characteristic not available (disconnected?): " + charUuid);
+                }
                 if (!gattChar.addCharListener(listener)) {
                     throw new java.util.concurrent.CompletionException(
                             new RuntimeException("addCharListener returned false"));

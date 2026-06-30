@@ -233,12 +233,16 @@ public class DirectBTBridgeHandler extends AbstractBluetoothBridgeHandler<Direct
     /** Brings up the matching adapter: initialize (claim HCI user channel + power on) + scan. */
     private synchronized void onAdapterAdded(BTAdapter added) {
         BluetoothAddress wanted = adapterAddress;
-        if (disposed || wanted == null || adapter != null) {
+        if (disposed || wanted == null) {
             return;
         }
         String mac = added.getAddressAndType().address.toString().toUpperCase();
         if (!mac.equals(wanted.toString())) {
+            logger.trace("Direct-BT ignoring adapter {}; bridge wants {}", mac, wanted);
             return; // not our adapter
+        }
+        if (adapter != null) {
+            return;
         }
         bringUpAdapter(added, wanted);
     }
@@ -369,10 +373,8 @@ public class DirectBTBridgeHandler extends AbstractBluetoothBridgeHandler<Direct
 
     /**
      * Reset the adapter on a device's behalf (wedged create-connection / COMMAND_DISALLOWED). The caller
-     * (DeviceReconciler) has ALREADY consumed the shared reset budget via its own {@code tryReset(name)} before
-     * invoking this, so we must NOT gate on {@code tryReset} again here: doing so double-consumed the budget and
-     * the second check always failed, so {@code adapter.reset()} never actually ran (observed live on the CSR as
-     * 100+ COMMAND_DISALLOWED with 0 resets, the device pair never recovering). Just perform the reset.
+     * (DeviceReconciler) has already consumed the shared reset budget via its own {@code tryReset(name)} before
+     * invoking this, so do not gate on {@code tryReset} again here.
      */
     void requestAdapterReset() {
         BTAdapter a = adapter;
@@ -391,8 +393,7 @@ public class DirectBTBridgeHandler extends AbstractBluetoothBridgeHandler<Direct
                     added.isInitialized(), added.isPowered());
             // Bring the adapter to an initialized + powered state FIRST. Three cases:
             // - never initialized -> initialize(), then power on if needed
-            // - initialized but off -> initialize() returns FAILED and setPowered() won't recover it, so
-            // reset() (brings the device up from standby into a POWERED state)
+            // - initialized but off -> reset() (some controllers do not recover from setPowered(true) alone)
             // - already powered -> nothing to do
             // Order matters: addStatusListener() / startDiscovery() must come AFTER the adapter is
             // initialized & powered. Calling addStatusListener() on a freshly-replayed, not-yet-initialized
@@ -467,6 +468,7 @@ public class DirectBTBridgeHandler extends AbstractBluetoothBridgeHandler<Direct
 
     private synchronized void onAdapterRemoved(BTAdapter removed) {
         if (adapter == removed) {
+            forEachDevice(DirectBTBluetoothDevice::close);
             detachAdapter();
             updateStatus(ThingStatus.OFFLINE, ThingStatusDetail.COMMUNICATION_ERROR, "Adapter removed");
         }
