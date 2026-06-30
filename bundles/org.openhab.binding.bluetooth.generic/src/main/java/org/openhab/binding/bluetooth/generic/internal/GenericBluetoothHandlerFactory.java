@@ -56,6 +56,10 @@ public class GenericBluetoothHandlerFactory extends BaseThingHandlerFactory {
      */
     private static final String DEFAULT_GATT_EXTENSIONS_FOLDER = "gatt-extensions";
 
+    /** Binding config keys for the two behaviour switches (both default ON = the fixed behaviour). */
+    private static final String CONFIG_POLL_ONLY_LINKED = "pollOnlyLinkedCharacteristics";
+    private static final String CONFIG_RECONNECT_UNRESOLVED = "reconnectOnUnresolvedServices";
+
     private final Logger logger = LoggerFactory.getLogger(GenericBluetoothHandlerFactory.class);
 
     private static final Set<ThingTypeUID> SUPPORTED_THING_TYPES_UIDS = Set
@@ -63,13 +67,29 @@ public class GenericBluetoothHandlerFactory extends BaseThingHandlerFactory {
 
     private final CharacteristicChannelTypeProvider channelTypeProvider;
     private final ItemChannelLinkRegistry itemChannelLinkRegistry;
+    private final boolean pollOnlyLinkedCharacteristics;
+    private final boolean reconnectOnUnresolvedServices;
 
     @Activate
     public GenericBluetoothHandlerFactory(@Reference CharacteristicChannelTypeProvider channelTypeProvider,
             @Reference ItemChannelLinkRegistry itemChannelLinkRegistry, Map<String, Object> config) {
         this.channelTypeProvider = channelTypeProvider;
         this.itemChannelLinkRegistry = itemChannelLinkRegistry;
+        this.pollOnlyLinkedCharacteristics = configBoolean(config, CONFIG_POLL_ONLY_LINKED, true);
+        this.reconnectOnUnresolvedServices = configBoolean(config, CONFIG_RECONNECT_UNRESOLVED, true);
         loadGattExtensions(config);
+    }
+
+    /** Reads a boolean binding-config value (accepting Boolean or String), falling back to {@code defaultValue}. */
+    private static boolean configBoolean(Map<String, Object> config, String key, boolean defaultValue) {
+        Object value = config.get(key);
+        if (value instanceof Boolean b) {
+            return b;
+        }
+        if (value instanceof String s && !s.isBlank()) {
+            return Boolean.parseBoolean(s.trim());
+        }
+        return defaultValue;
     }
 
     /**
@@ -119,7 +139,8 @@ public class GenericBluetoothHandlerFactory extends BaseThingHandlerFactory {
         ThingTypeUID thingTypeUID = thing.getThingTypeUID();
 
         if (GenericBindingConstants.THING_TYPE_GENERIC.equals(thingTypeUID)) {
-            return new GenericBluetoothHandler(thing, channelTypeProvider, itemChannelLinkRegistry);
+            return new GenericBluetoothHandler(thing, channelTypeProvider, itemChannelLinkRegistry,
+                    pollOnlyLinkedCharacteristics, reconnectOnUnresolvedServices);
         }
 
         return null;

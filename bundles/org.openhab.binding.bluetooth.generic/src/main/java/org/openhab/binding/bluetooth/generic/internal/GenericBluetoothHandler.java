@@ -72,15 +72,22 @@ public class GenericBluetoothHandler extends ConnectedBluetoothHandler {
     private final BluetoothGattParser gattParser = BluetoothGattParserFactory.getDefault();
     private final CharacteristicChannelTypeProvider channelTypeProvider;
     private final ItemChannelLinkRegistry itemChannelLinkRegistry;
+    // Binding-level behaviour switches (binding.bluetooth.generic config, both default ON = the fixed behaviour;
+    // turn OFF to fall back to the legacy behaviour if the fix misbehaves on some device/transport).
+    private final boolean pollOnlyLinkedCharacteristics;
+    private final boolean reconnectOnUnresolvedServices;
     private final Map<CharacteristicHandler, List<ChannelUID>> handlerToChannels = new ConcurrentHashMap<>();
 
     private @Nullable ScheduledFuture<?> readCharacteristicJob = null;
 
     public GenericBluetoothHandler(Thing thing, CharacteristicChannelTypeProvider channelTypeProvider,
-            ItemChannelLinkRegistry itemChannelLinkRegistry) {
+            ItemChannelLinkRegistry itemChannelLinkRegistry, boolean pollOnlyLinkedCharacteristics,
+            boolean reconnectOnUnresolvedServices) {
         super(thing);
         this.channelTypeProvider = channelTypeProvider;
         this.itemChannelLinkRegistry = itemChannelLinkRegistry;
+        this.pollOnlyLinkedCharacteristics = pollOnlyLinkedCharacteristics;
+        this.reconnectOnUnresolvedServices = reconnectOnUnresolvedServices;
     }
 
     @Override
@@ -92,7 +99,10 @@ public class GenericBluetoothHandler extends ConnectedBluetoothHandler {
             if (device.getConnectionState() == ConnectionState.CONNECTED) {
                 if (device.isServicesDiscovered()) {
                     handlerToChannels.forEach((charHandler, channelUids) -> {
-                        boolean linked = channelUids.stream().anyMatch(this::hasItemLink);
+                        // When pollOnlyLinkedCharacteristics is OFF (legacy), treat every channel as "linked" so we
+                        // poll/notify all readable characteristics regardless of item links.
+                        boolean linked = !pollOnlyLinkedCharacteristics
+                                || channelUids.stream().anyMatch(this::hasItemLink);
                         // Only read the value manually if notification is not on.
                         // Also read it the first time before we activate notifications below.
                         if (linked && !device.isNotifying(charHandler.characteristic) && charHandler.canRead()) {
@@ -121,9 +131,15 @@ public class GenericBluetoothHandler extends ConnectedBluetoothHandler {
                         }
                     });
                 } else {
-                    // if we are connected and still haven't been able to resolve the services, try disconnecting and
-                    // then connecting again
-                    device.disconnect();
+                    // Connected at the link level but services still unresolved: bounce the link and retry service
+                    // discovery. reconnect() keeps the caller's connection intent (so an intent-tracking transport
+                    // like Direct-BT does not read this recovery as "stop wanting the device" -> connect/disconnect
+                    // flap). When reconnectOnUnresolvedServices is OFF (legacy), fall back to plain disconnect().
+                    if (reconnectOnUnresolvedServices) {
+                        device.reconnect();
+                    } else {
+                        device.disconnect();
+                    }
                 }
             }
         }, 15, config.pollingInterval, TimeUnit.SECONDS);

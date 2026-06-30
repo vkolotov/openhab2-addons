@@ -165,17 +165,24 @@ public class DirectBTBluetoothDevice extends BaseBluetoothDevice implements Devi
 
     @Override
     public boolean disconnect() {
-        if (isResolveRetryDisconnect()) {
-            logger.debug("Ignoring unresolved-GATT disconnect retry for {}; keeping connection intent", address);
-        } else {
-            wantConnected = false;
-        }
+        // disconnect() is a real intent change: the core no longer wants this device connected (user disabled it,
+        // or alwaysConnected=false idle-disconnect). Clear the intent so the reconciler tears the ACL down.
+        wantConnected = false;
         bridge.requeueReconcile();
         return true;
     }
 
-    private boolean isResolveRetryDisconnect() {
-        return (isFlagConnected() || isFlagConnecting() || isNativeConnected()) && !isGattResolved();
+    @Override
+    public boolean reconnect() {
+        // reconnect() = "bounce the link, KEEP the connection intent" (the generic handler's GATT-unresolved
+        // recovery). Do NOT clear wantConnected. Drop the live ACL so the next reconcile re-discovers and
+        // re-connects from a fresh advert (markDisconnected nulls the native handle + resets the GATT model).
+        logger.debug("Reconnect requested for {} (GATT recovery); keeping connection intent", address);
+        if (isNativeConnected() || isFlagConnected() || isFlagConnecting()) {
+            markDisconnected();
+        }
+        bridge.requeueReconcile();
+        return true;
     }
 
     /** Update the inherited connection-state field AND notify listeners (BaseBluetoothDevice does neither). */
