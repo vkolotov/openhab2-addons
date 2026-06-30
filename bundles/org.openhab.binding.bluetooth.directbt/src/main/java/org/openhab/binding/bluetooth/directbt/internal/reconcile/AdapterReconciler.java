@@ -38,10 +38,9 @@ import org.slf4j.Logger;
  * scan's desired = {@code anyDeviceNeedsDiscovery && noDeviceConnecting}, computed from device state). scan ON
  * only to find a device we still need to (re)connect; OFF the moment any device is establishing a connection
  * (single-radio exclusion) — that handoff is what breaks the discover/connect deadlock. escalate = the
- * {@code [native LE, meta NONE]} desync wedge -> reset.</li>
+ * {@code [native LE, meta NONE]} desync wedge -> stop/retry; no adapter reset from scan reconciliation.</li>
  * </ol>
- * All resets funnel through the shared {@link ResetBudget} so power-recovery and scan-desync recovery cannot
- * both reset within the cooldown (which previously un-powered the CSR).
+ * Power resets funnel through the shared {@link ResetBudget} so recovery attempts are bounded.
  *
  * @author Vlad Kolotov - Initial contribution
  */
@@ -129,8 +128,7 @@ public class AdapterReconciler extends Reconciler<Boolean, AdapterReconciler.Obs
                 a.setPowered(true);
             }
         } else if (!o.powered) {
-            HCIStatusCode rc;
-            rc = a.reset();
+            HCIStatusCode rc = a.reset();
             logger.debug("[reconcile:adapter] reset -> {} (powered={} initialized={})", rc, a.isPowered(),
                     a.isInitialized());
             if (rc == HCIStatusCode.SUCCESS && !a.isPowered()) {
@@ -205,16 +203,13 @@ public class AdapterReconciler extends Reconciler<Boolean, AdapterReconciler.Obs
                 }
                 return;
             }
-            // scanWanted ON but not discovering. If the scan never engaged for a while (startDiscovery accepted but
-            // isDiscovering stays false; the [native LE, meta NONE] desync), only a reset clears the stuck scan.
-            if (now - scanOutOfSyncSince > SCAN_DESYNC_RESET_AFTER_MS && type == ScanType.NONE
-                    && resetBudget.tryReset("adapter:scan")) {
-                HCIStatusCode rc = a.reset();
-                logger.warn("[reconcile:adapter:scan] scan desync; escalation reset -> {} (powered={})", rc,
-                        a.isPowered());
-                if (rc == HCIStatusCode.SUCCESS && !a.isPowered()) {
-                    a.setPowered(true);
-                }
+            // scanWanted ON but not discovering. If startDiscovery keeps being accepted without the adapter moving
+            // to a discovering state, do not reset the controller: field testing showed resets can wedge CSR/Realtek
+            // adapters. Stop once and let the periodic loop retry from observed state.
+            if (now - scanOutOfSyncSince > SCAN_DESYNC_RESET_AFTER_MS && type == ScanType.NONE) {
+                logger.warn("[reconcile:adapter:scan] scan desync persisted; stopping scan without adapter reset");
+                a.stopDiscovery();
+                scanOutOfSyncSince = now;
                 return;
             }
             // Ensure we start from a clean stopped state (avoid the [native LE, meta NONE] split), then start.
