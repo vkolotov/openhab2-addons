@@ -78,6 +78,10 @@ public class DirectBTBridgeHandler extends AbstractBluetoothBridgeHandler<Direct
     // marginal controller. Events burst precisely when the radio is unhealthy (a connect/disconnect storm, a
     // per-advert deviceFound flood), so capping observe frequency under load is a reliability requirement.
     private static final long MIN_OBSERVE_INTERVAL_MS = 300;
+    // Hard cap on the best-effort native teardown in dispose() (device disconnect + adapter detach). The native
+    // dev.disconnect() joins the L2CAP reader thread and can block forever on a wedged controller; capping it
+    // keeps dispose() bounded so a JVM shutdown cannot hang (which previously got openHAB SIGKILLed by systemd).
+    private static final long DISPOSE_NATIVE_TIMEOUT_MS = 3000;
 
     private @Nullable BluetoothAddress adapterAddress;
     private @Nullable BTManager manager;
@@ -565,14 +569,22 @@ public class DirectBTBridgeHandler extends AbstractBluetoothBridgeHandler<Direct
                     logger.debug("Error removing Direct-BT adapter-set listener on dispose", e);
                 }
             }
-            // Cleanly disconnect every device BEFORE detaching the adapter. This is the OH shutdown / hot-redeploy
-            // hook: dispose() runs on bundle stop and on OH shutdown. Tearing the ACLs down here means we never
-            // leave a half-open link the controller has to time out (a contributor to the CSR coming back wedged),
-            // and it resets each device's openHAB-model state so a re-bound handler after a redeploy gets a fresh
-            // discover -> SERVICES_DISCOVERED -> polling, instead of sitting on a stale servicesDiscovered latch.
-            // Must precede detachAdapter(): close() issues a native dev.disconnect() that needs the live adapter.
-            forEachDevice(DirectBTBluetoothDevice::close);
-            detachAdapter();
+            // BEST-EFFORT, TIME-BOXED native teardown. Cleanly disconnecting every device (close() ->
+            // dev.disconnect()) before detaching the adapter is the right thing for a hot redeploy (avoids
+            // leaving a half-open link the controller must time out, and resets the openHAB model so a re-bound
+            // handler re-discovers). BUT the native dev.disconnect() can BLOCK INDEFINITELY: it joins the
+            // Direct-BT L2CAP reader thread (BTGattHandler::disconnect -> l2cap_reader_service.join()), and on a
+            // wedged controller / unresponsive socket that read never returns. Running it inline on dispose()
+            // hangs the whole JVM on shutdown -> karaf 'stop' never completes -> systemd SIGKILLs openHAB and
+            // leaves the service 'failed' (observed on the production NUC). openHAB gives no reliable
+            // "this is a full JVM shutdown vs a redeploy" signal at dispose() time, so we do NOT try to detect
+            // shutdown; instead we cap the blocking work with a timeout. If it doesn't finish, we abandon it:
+            // on a real shutdown the OS reclaims the sockets/threads anyway, and on a redeploy only a genuinely
+            // wedged device is skipped (which is exactly the case where blocking would hang us).
+            runTimeBoxed("device close + adapter detach", DISPOSE_NATIVE_TIMEOUT_MS, () -> {
+                forEachDevice(DirectBTBluetoothDevice::close);
+                detachAdapter();
+            });
             managerReady = false;
         }
         super.dispose();
@@ -583,6 +595,34 @@ public class DirectBTBridgeHandler extends AbstractBluetoothBridgeHandler<Direct
         if (job != null) {
             job.cancel(true);
             initJob = null;
+        }
+    }
+
+    /**
+     * Run a potentially-blocking native cleanup action on a throwaway daemon thread and wait at most
+     * {@code timeoutMs} for it. If it does not finish in time we ABANDON it (the thread is a daemon, so it does
+     * not keep the JVM alive) and return — the caller must treat the work as best-effort. Used for dispose()'s
+     * native teardown, which can block indefinitely joining the Direct-BT L2CAP reader thread on a wedged radio.
+     */
+    private void runTimeBoxed(String what, long timeoutMs, Runnable action) {
+        Thread worker = new Thread(() -> {
+            try {
+                action.run();
+            } catch (RuntimeException | LinkageError e) {
+                logger.debug("Direct-BT dispose: {} threw", what, e);
+            }
+        }, "directbt-dispose-" + getThing().getUID().getId());
+        worker.setDaemon(true);
+        worker.start();
+        try {
+            worker.join(timeoutMs);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+        if (worker.isAlive()) {
+            logger.warn("Direct-BT dispose: {} did not finish within {}ms; abandoning (best-effort). The native "
+                    + "disconnect is likely blocked on a wedged controller; the JVM/OS will reclaim it.", what,
+                    timeoutMs);
         }
     }
 }
