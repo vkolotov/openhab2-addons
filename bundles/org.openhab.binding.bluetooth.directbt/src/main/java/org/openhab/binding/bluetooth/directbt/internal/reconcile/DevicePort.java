@@ -25,7 +25,7 @@ import org.eclipse.jdt.annotation.NonNullByDefault;
 @NonNullByDefault
 public interface DevicePort {
 
-    /** @return true iff this device currently has openHAB listeners, i.e. it is a wanted/configured device. */
+    /** @return true iff this device is enabled and the core currently wants a connection held. */
     boolean isWanted();
 
     /** @return true iff the native device handle is present/usable. */

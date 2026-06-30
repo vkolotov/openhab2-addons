@@ -31,11 +31,13 @@ import org.eclipse.jdt.annotation.NonNullByDefault;
 import org.eclipse.jdt.annotation.Nullable;
 import org.openhab.binding.bluetooth.AbstractBluetoothBridgeHandler;
 import org.openhab.binding.bluetooth.BluetoothAddress;
+import org.openhab.binding.bluetooth.BluetoothBindingConstants;
 import org.openhab.binding.bluetooth.directbt.internal.reconcile.AdapterReconciler;
 import org.openhab.binding.bluetooth.directbt.internal.reconcile.DeviceReconciler;
 import org.openhab.binding.bluetooth.directbt.internal.reconcile.ResetBudget;
 import org.openhab.core.common.ThreadPoolManager;
 import org.openhab.core.thing.Bridge;
+import org.openhab.core.thing.Thing;
 import org.openhab.core.thing.ThingStatus;
 import org.openhab.core.thing.ThingStatusDetail;
 import org.slf4j.Logger;
@@ -112,9 +114,12 @@ public class DirectBTBridgeHandler extends AbstractBluetoothBridgeHandler<Direct
         @Override
         public boolean deviceFound(BTDevice device, long timestamp) {
             logger.debug("Direct-BT deviceFound: {}", device.getAddressAndType());
-            onDeviceFound(device);
+            DirectBTBluetoothDevice btDevice = onDeviceFound(device);
             requeueReconcile(); // hint: a wanted device may now be connectable
-            return false; // false = keep the device in discovery (do not take exclusive ownership)
+            // Direct-BT's return value is ownership, not discovery flow-control: false removes the native device
+            // from the shared list and the BTDevice can no longer be used for a later connect. Keep only devices
+            // with active connection intent; background advertisements can stay cheap/non-persistent.
+            return btDevice != null && btDevice.isWanted();
         }
 
         @Override
@@ -330,7 +335,8 @@ public class DirectBTBridgeHandler extends AbstractBluetoothBridgeHandler<Direct
     /**
      * Desired discovery state, computed from device state:
      * <ul>
-     * <li>scan ON iff some wanted device still needs to be <em>discovered</em> ({@link DeviceReconciler#wantsDiscovery()}
+     * <li>scan ON iff some wanted device still needs to be <em>discovered</em>
+     * ({@link DeviceReconciler#wantsDiscovery()}
      * — no native handle yet: the cold-start bootstrap, and the re-find after a drop clears the handle), AND</li>
      * <li>no device is currently <em>connecting</em> — the controller rejects create-connection while scanning, so
      * the device establishing a link needs the scan off; we hand the radio to it, then resume scanning.</li>
@@ -383,25 +389,30 @@ public class DirectBTBridgeHandler extends AbstractBluetoothBridgeHandler<Direct
         try {
             logger.debug("Direct-BT onAdapterAdded {} pre-state: initialized={} powered={}", wanted,
                     added.isInitialized(), added.isPowered());
-            // Bring the adapter to a powered state FIRST. Three cases:
-            // - never initialized -> initialize() (power-cycles + powers on)
+            // Bring the adapter to an initialized + powered state FIRST. Three cases:
+            // - never initialized -> initialize(), then power on if needed
             // - initialized but off -> initialize() returns FAILED and setPowered() won't recover it, so
             // reset() (brings the device up from standby into a POWERED state)
             // - already powered -> nothing to do
             // Order matters: addStatusListener() / startDiscovery() must come AFTER the adapter is
             // initialized & powered. Calling addStatusListener() on a freshly-replayed, not-yet-initialized
             // adapter crashes the native layer with a null-reference (jaulib helper_jni.hpp:512).
+            if (!added.isInitialized()) {
+                HCIStatusCode rc = added.initialize(BTMode.DUAL, false);
+                logger.debug("Direct-BT adapter {} initialize: {} (powered={} initialized={})", wanted, rc,
+                        added.isPowered(), added.isInitialized());
+                if (rc != HCIStatusCode.SUCCESS) {
+                    updateStatus(ThingStatus.OFFLINE, ThingStatusDetail.COMMUNICATION_ERROR,
+                            "Adapter initialization failed: " + rc + " (is bluetoothd disabled for this adapter?)");
+                    return;
+                }
+            }
             if (!added.isPowered()) {
-                HCIStatusCode rc;
-                if (!added.isInitialized()) {
-                    rc = added.initialize(BTMode.DUAL, true);
-                    logger.debug("Direct-BT adapter {} initialize: {} (powered={})", wanted, rc, added.isPowered());
-                } else {
-                    rc = added.reset();
-                    logger.debug("Direct-BT adapter {} reset: {} (powered={})", wanted, rc, added.isPowered());
-                    if (rc == HCIStatusCode.SUCCESS && !added.isPowered()) {
-                        added.setPowered(true);
-                    }
+                HCIStatusCode rc = added.reset();
+                logger.debug("Direct-BT adapter {} reset: {} (powered={} initialized={})", wanted, rc,
+                        added.isPowered(), added.isInitialized());
+                if (rc == HCIStatusCode.SUCCESS && !added.isPowered()) {
+                    added.setPowered(true);
                 }
                 if (rc != HCIStatusCode.SUCCESS) {
                     updateStatus(ThingStatus.OFFLINE, ThingStatusDetail.COMMUNICATION_ERROR,
@@ -482,13 +493,25 @@ public class DirectBTBridgeHandler extends AbstractBluetoothBridgeHandler<Direct
         statusListener = null;
     }
 
-    private void onDeviceFound(BTDevice btDevice) {
+    private @Nullable DirectBTBluetoothDevice onDeviceFound(BTDevice btDevice) {
         if (disposed) {
-            return;
+            return null;
         }
         DirectBTBluetoothDevice device = getDevice(toAddress(btDevice));
         device.updateBTDevice(btDevice);
         deviceDiscovered(device);
+        return device;
+    }
+
+    boolean isDeviceEnabled(BluetoothAddress address) {
+        String addrStr = address.toString();
+        for (Thing childThing : getThing().getThings()) {
+            Object childAddr = childThing.getConfiguration().get(BluetoothBindingConstants.CONFIGURATION_ADDRESS);
+            if (addrStr.equalsIgnoreCase(String.valueOf(childAddr))) {
+                return childThing.isEnabled();
+            }
+        }
+        return true;
     }
 
     /** Resolve the openHAB device for a Direct-BT device by address, or {@code null} if disposed. */

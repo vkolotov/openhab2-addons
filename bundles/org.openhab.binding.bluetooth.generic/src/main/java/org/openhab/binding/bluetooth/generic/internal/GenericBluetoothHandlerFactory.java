@@ -25,6 +25,7 @@ import org.openhab.core.thing.ThingTypeUID;
 import org.openhab.core.thing.binding.BaseThingHandlerFactory;
 import org.openhab.core.thing.binding.ThingHandler;
 import org.openhab.core.thing.binding.ThingHandlerFactory;
+import org.openhab.core.thing.link.ItemChannelLinkRegistry;
 import org.osgi.service.component.annotations.Activate;
 import org.osgi.service.component.annotations.Component;
 import org.osgi.service.component.annotations.Reference;
@@ -61,11 +62,13 @@ public class GenericBluetoothHandlerFactory extends BaseThingHandlerFactory {
             .of(GenericBindingConstants.THING_TYPE_GENERIC);
 
     private final CharacteristicChannelTypeProvider channelTypeProvider;
+    private final ItemChannelLinkRegistry itemChannelLinkRegistry;
 
     @Activate
     public GenericBluetoothHandlerFactory(@Reference CharacteristicChannelTypeProvider channelTypeProvider,
-            Map<String, Object> config) {
+            @Reference ItemChannelLinkRegistry itemChannelLinkRegistry, Map<String, Object> config) {
         this.channelTypeProvider = channelTypeProvider;
+        this.itemChannelLinkRegistry = itemChannelLinkRegistry;
         loadGattExtensions(config);
     }
 
@@ -116,7 +119,7 @@ public class GenericBluetoothHandlerFactory extends BaseThingHandlerFactory {
         ThingTypeUID thingTypeUID = thing.getThingTypeUID();
 
         if (GenericBindingConstants.THING_TYPE_GENERIC.equals(thingTypeUID)) {
-            return new GenericBluetoothHandler(thing, channelTypeProvider);
+            return new GenericBluetoothHandler(thing, channelTypeProvider, itemChannelLinkRegistry);
         }
 
         return null;

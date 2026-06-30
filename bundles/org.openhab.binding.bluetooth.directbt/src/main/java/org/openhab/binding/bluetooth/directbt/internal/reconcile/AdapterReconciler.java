@@ -12,7 +12,6 @@
  */
 package org.openhab.binding.bluetooth.directbt.internal.reconcile;
 
-import java.util.function.BooleanSupplier;
 import java.util.function.Supplier;
 
 import org.direct_bt.BTAdapter;
@@ -110,7 +109,7 @@ public class AdapterReconciler extends Reconciler<Boolean, AdapterReconciler.Obs
 
     @Override
     protected boolean inSync(Boolean wantPowered, Observed o) {
-        return o.present && o.valid && (!wantPowered || o.powered);
+        return o.present && o.valid && o.initialized && (!wantPowered || o.powered);
     }
 
     @Override
@@ -122,17 +121,20 @@ public class AdapterReconciler extends Reconciler<Boolean, AdapterReconciler.Obs
             logger.debug("[reconcile:adapter] no valid adapter handle yet");
             return;
         }
-        if (!o.powered) {
+        if (!o.initialized) {
+            HCIStatusCode rc = a.initialize(BTMode.DUAL, false);
+            logger.debug("[reconcile:adapter] initialize -> {} (powered={} initialized={})", rc, a.isPowered(),
+                    a.isInitialized());
+            if (rc == HCIStatusCode.SUCCESS && wantPowered && !a.isPowered()) {
+                a.setPowered(true);
+            }
+        } else if (!o.powered) {
             HCIStatusCode rc;
-            if (!o.initialized) {
-                rc = a.initialize(BTMode.DUAL, true);
-                logger.debug("[reconcile:adapter] initialize -> {} (powered={})", rc, a.isPowered());
-            } else {
-                rc = a.reset();
-                logger.debug("[reconcile:adapter] reset -> {} (powered={})", rc, a.isPowered());
-                if (rc == HCIStatusCode.SUCCESS && !a.isPowered()) {
-                    a.setPowered(true);
-                }
+            rc = a.reset();
+            logger.debug("[reconcile:adapter] reset -> {} (powered={} initialized={})", rc, a.isPowered(),
+                    a.isInitialized());
+            if (rc == HCIStatusCode.SUCCESS && !a.isPowered()) {
+                a.setPowered(true);
             }
         }
     }

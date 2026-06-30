@@ -46,6 +46,7 @@ import org.openhab.core.thing.ThingStatus;
 import org.openhab.core.thing.ThingStatusDetail;
 import org.openhab.core.thing.binding.builder.ChannelBuilder;
 import org.openhab.core.thing.binding.builder.ThingBuilder;
+import org.openhab.core.thing.link.ItemChannelLinkRegistry;
 import org.openhab.core.thing.type.ChannelTypeUID;
 import org.openhab.core.types.Command;
 import org.openhab.core.types.RefreshType;
@@ -70,13 +71,16 @@ public class GenericBluetoothHandler extends ConnectedBluetoothHandler {
     private final Map<ChannelUID, CharacteristicHandler> channelHandlers = new ConcurrentHashMap<>();
     private final BluetoothGattParser gattParser = BluetoothGattParserFactory.getDefault();
     private final CharacteristicChannelTypeProvider channelTypeProvider;
+    private final ItemChannelLinkRegistry itemChannelLinkRegistry;
     private final Map<CharacteristicHandler, List<ChannelUID>> handlerToChannels = new ConcurrentHashMap<>();
 
     private @Nullable ScheduledFuture<?> readCharacteristicJob = null;
 
-    public GenericBluetoothHandler(Thing thing, CharacteristicChannelTypeProvider channelTypeProvider) {
+    public GenericBluetoothHandler(Thing thing, CharacteristicChannelTypeProvider channelTypeProvider,
+            ItemChannelLinkRegistry itemChannelLinkRegistry) {
         super(thing);
         this.channelTypeProvider = channelTypeProvider;
+        this.itemChannelLinkRegistry = itemChannelLinkRegistry;
     }
 
     @Override
@@ -88,9 +92,10 @@ public class GenericBluetoothHandler extends ConnectedBluetoothHandler {
             if (device.getConnectionState() == ConnectionState.CONNECTED) {
                 if (device.isServicesDiscovered()) {
                     handlerToChannels.forEach((charHandler, channelUids) -> {
+                        boolean linked = channelUids.stream().anyMatch(this::hasItemLink);
                         // Only read the value manually if notification is not on.
                         // Also read it the first time before we activate notifications below.
-                        if (!device.isNotifying(charHandler.characteristic) && charHandler.canRead()) {
+                        if (linked && !device.isNotifying(charHandler.characteristic) && charHandler.canRead()) {
                             device.readCharacteristic(charHandler.characteristic);
                             try {
                                 // TODO the ideal solution would be to use locks/conditions and timeouts
@@ -104,8 +109,7 @@ public class GenericBluetoothHandler extends ConnectedBluetoothHandler {
                         }
                         if (charHandler.characteristic.canNotify()) {
                             // Enabled/Disable notifications dependent on if the channel is linked.
-                            // TODO check why isLinked() is true for not linked channels
-                            if (channelUids.stream().anyMatch(this::isLinked)) {
+                            if (linked) {
                                 if (!device.isNotifying(charHandler.characteristic)) {
                                     device.enableNotifications(charHandler.characteristic);
                                 }
@@ -123,6 +127,10 @@ public class GenericBluetoothHandler extends ConnectedBluetoothHandler {
                 }
             }
         }, 15, config.pollingInterval, TimeUnit.SECONDS);
+    }
+
+    private boolean hasItemLink(ChannelUID channelUID) {
+        return !itemChannelLinkRegistry.getLinkedItemNames(channelUID).isEmpty();
     }
 
     @Override

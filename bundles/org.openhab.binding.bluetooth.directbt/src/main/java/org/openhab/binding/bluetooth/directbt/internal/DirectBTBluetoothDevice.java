@@ -12,6 +12,7 @@
  */
 package org.openhab.binding.bluetooth.directbt.internal;
 
+import java.lang.reflect.Field;
 import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
@@ -23,9 +24,11 @@ import org.direct_bt.BTDevice;
 import org.direct_bt.BTGattChar;
 import org.direct_bt.BTGattCharListener;
 import org.direct_bt.BTGattService;
+import org.direct_bt.BTSecurityLevel;
 import org.direct_bt.EInfoReport;
 import org.direct_bt.GattCharPropertySet;
 import org.direct_bt.HCIStatusCode;
+import org.direct_bt.SMPIOCapability;
 import org.eclipse.jdt.annotation.NonNullByDefault;
 import org.eclipse.jdt.annotation.Nullable;
 import org.openhab.binding.bluetooth.BaseBluetoothDevice;
@@ -34,8 +37,8 @@ import org.openhab.binding.bluetooth.BluetoothCharacteristic;
 import org.openhab.binding.bluetooth.BluetoothDescriptor;
 import org.openhab.binding.bluetooth.BluetoothService;
 import org.openhab.binding.bluetooth.directbt.internal.reconcile.AdapterReconciler;
-import org.openhab.binding.bluetooth.directbt.internal.reconcile.DeviceReconciler;
 import org.openhab.binding.bluetooth.directbt.internal.reconcile.DevicePort;
+import org.openhab.binding.bluetooth.directbt.internal.reconcile.DeviceReconciler;
 import org.openhab.binding.bluetooth.notification.BluetoothConnectionStatusNotification;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -79,6 +82,10 @@ public class DirectBTBluetoothDevice extends BaseBluetoothDevice implements Devi
     private final DeviceReconciler reconciler;
 
     private volatile @Nullable BTDevice device;
+    // The openHAB core's connection intent, captured from connect()/disconnect(). The core uses disconnect() for
+    // two different cases: a real idle disconnect after services are resolved, and a generic "connected but GATT
+    // unresolved" retry. Only the former should clear this flag.
+    private volatile boolean wantConnected;
 
     // Maps an openHAB characteristic UUID to the Direct-BT characteristic handle (populated on discovery).
     private final Map<UUID, BTGattChar> gattCharByUuid = new ConcurrentHashMap<>();
@@ -89,11 +96,10 @@ public class DirectBTBluetoothDevice extends BaseBluetoothDevice implements Devi
         super(adapter, address);
         this.bridge = adapter;
         this.executor = adapter.getExecutor();
-        this.reconciler = new DeviceReconciler(logger, this,
-                () -> {
-                    AdapterReconciler ar = bridge.getAdapterReconciler();
-                    return ar != null && ar.isScanOff();
-                }, adapter.getResetBudget(), bridge::requestAdapterReset);
+        this.reconciler = new DeviceReconciler(logger, this, () -> {
+            AdapterReconciler ar = bridge.getAdapterReconciler();
+            return ar != null && ar.isScanOff();
+        }, adapter.getResetBudget(), bridge::requestAdapterReset);
     }
 
     /** @return this device's reconciler (driven by the bridge's reconcile tick). */
@@ -150,6 +156,7 @@ public class DirectBTBluetoothDevice extends BaseBluetoothDevice implements Devi
         if (getListeners().isEmpty()) {
             return false;
         }
+        wantConnected = true;
         bridge.requeueReconcile();
         // Return true (intent accepted) so the core's reconnect loop treats this as "connecting in progress" and
         // stops hammering; the reconciler drives the real state and getConnectionState() reflects native truth.
@@ -158,8 +165,17 @@ public class DirectBTBluetoothDevice extends BaseBluetoothDevice implements Devi
 
     @Override
     public boolean disconnect() {
+        if (isResolveRetryDisconnect()) {
+            logger.debug("Ignoring unresolved-GATT disconnect retry for {}; keeping connection intent", address);
+        } else {
+            wantConnected = false;
+        }
         bridge.requeueReconcile();
         return true;
+    }
+
+    private boolean isResolveRetryDisconnect() {
+        return (isFlagConnected() || isFlagConnecting() || isNativeConnected()) && !isGattResolved();
     }
 
     /** Update the inherited connection-state field AND notify listeners (BaseBluetoothDevice does neither). */
@@ -186,11 +202,26 @@ public class DirectBTBluetoothDevice extends BaseBluetoothDevice implements Devi
         notifyListeners.clear();
     }
 
+    /**
+     * Reset the inherited GATT model. Some 5.2.0-SNAPSHOT bluetooth-core artifacts do not expose the newer
+     * clearServices() helper, so clear the protected map directly and reset the private discovery latch reflectively.
+     */
+    private void resetGattModel() {
+        supportedServices.clear();
+        try {
+            Field servicesDiscovered = BaseBluetoothDevice.class.getDeclaredField("servicesDiscovered");
+            servicesDiscovered.setAccessible(true);
+            servicesDiscovered.setBoolean(this, false);
+        } catch (ReflectiveOperationException | RuntimeException e) {
+            logger.debug("Unable to reset servicesDiscovered latch for {}", address, e);
+        }
+    }
+
     // --- DevicePort: the operations the DeviceReconciler drives (all polled native truth / idempotent) ----
 
     @Override
     public boolean isWanted() {
-        return !getListeners().isEmpty();
+        return bridge.isDeviceEnabled(address) && wantConnected;
     }
 
     @Override
@@ -236,7 +267,7 @@ public class DirectBTBluetoothDevice extends BaseBluetoothDevice implements Devi
     @Override
     public void markDisconnected() {
         releaseNotifyListeners();
-        clearServices();
+        resetGattModel();
         gattCharByUuid.clear();
         // Drop the stale native handle: after a disconnect the BTDevice no longer represents a usable link, and a
         // reconnect attempt on the old handle is exactly the path that wedges (CSR COMMAND_DISALLOWED / a connectLE
@@ -260,7 +291,7 @@ public class DirectBTBluetoothDevice extends BaseBluetoothDevice implements Devi
         // SERVICES_DISCOVERED, so the generic device handler's onServicesDiscovered() runs and re-populates its
         // channel/poll map. Without it, a handler re-bound to an already-resolved device (a hot binding redeploy,
         // or any reconnect where the latch stayed true) sits on an empty channel map and silently never polls.
-        clearServices();
+        resetGattModel();
         gattCharByUuid.clear();
         try {
             // The reconciler has already ensured the adapter scan is OFF (the controller rejects create-connection
@@ -268,6 +299,7 @@ public class DirectBTBluetoothDevice extends BaseBluetoothDevice implements Devi
             // dev.disconnect() residue-clear here was ablated (2026-06-26, from-scratch CSR rebuild) and proven
             // redundant: connect succeeds first-try and holds dead-stable (45/45 reads, 0 disconnects) without it,
             // and the reconciler recovers from the CSR COMMAND_DISALLOWED/INTERNAL_TIMEOUT quirk on its own.
+            dev.setConnSecurity(BTSecurityLevel.NONE, SMPIOCapability.NO_INPUT_NO_OUTPUT);
             return dev.connectLE(LE_SCAN_INTERVAL, LE_SCAN_WINDOW, CONN_INTERVAL_MIN, CONN_INTERVAL_MAX, CONN_LATENCY,
                     CONN_SUPERVISION_TIMEOUT);
         } catch (RuntimeException e) {

@@ -22,9 +22,9 @@ import org.slf4j.Logger;
 /**
  * Reconciles one device's connection lifecycle (design table rows 4-7), owned 1:1 by a Direct-BT device.
  * <p>
- * Desired = CONNECTED iff the device is wanted (has openHAB listeners). Observed = polled native truth
- * ({@link DevicePort#isNativeConnected()} etc.), never the remembered flag or a command return-code. Each tick
- * does, in order:
+ * Desired = CONNECTED iff the device is enabled and the core currently wants a connection. Observed = polled
+ * native truth ({@link DevicePort#isNativeConnected()} etc.), never the remembered flag or a command return-code.
+ * Each tick does, in order:
  * <ol>
  * <li><b>state-flag sync</b> — drive our openHAB flag to match native truth (this is what makes the core's
  * reconnect loop fire on a silent drop, since the core reconciles against our flag);</li>
@@ -114,8 +114,9 @@ public class DeviceReconciler extends Reconciler<Boolean, DeviceReconciler.Obser
     protected boolean inSync(Boolean unusedDesired, Observed o) {
         boolean wanted = port.isWanted();
         if (!wanted) {
-            // Not wanted: in sync as long as our flag is not stuck "connected".
-            return !o.flagConnected || !o.hasNative;
+            // Not wanted: in sync once both the native ACL and our openHAB flag are down. A native handle may
+            // remain cached for later reconnect/discovery; the live connection must not.
+            return !o.nativeConnected && !o.flagConnected && !o.flagConnecting;
         }
         // Wanted: in sync iff natively connected, flag agrees, and GATT resolved.
         return o.hasNative && o.nativeConnected && o.flagConnected && o.gattResolved;
@@ -142,6 +143,13 @@ public class DeviceReconciler extends Reconciler<Boolean, DeviceReconciler.Obser
         }
 
         if (!port.isWanted()) {
+            if (o.hasNative && o.nativeConnected) {
+                logger.debug("[reconcile:{}] no longer wanted but still connected; disconnecting", name);
+                port.disconnectNative();
+                port.markDisconnected();
+            } else if (o.flagConnected || o.flagConnecting) {
+                port.markDisconnected();
+            }
             return; // nothing more to do for an unwanted device
         }
 
