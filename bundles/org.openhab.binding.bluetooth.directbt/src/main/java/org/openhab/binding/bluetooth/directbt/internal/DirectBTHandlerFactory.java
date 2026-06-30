@@ -32,6 +32,8 @@ import org.osgi.framework.ServiceRegistration;
 import org.osgi.service.component.annotations.Activate;
 import org.osgi.service.component.annotations.Component;
 import org.osgi.service.component.annotations.Reference;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * Creates Direct-BT adapter bridge handlers.
@@ -44,6 +46,8 @@ public class DirectBTHandlerFactory extends BaseThingHandlerFactory {
 
     private static final Set<ThingTypeUID> SUPPORTED_THING_TYPES_UIDS = Set
             .of(DirectBTAdapterConstants.THING_TYPE_DIRECTBT);
+
+    private final Logger logger = LoggerFactory.getLogger(DirectBTHandlerFactory.class);
 
     private final Map<ThingUID, ServiceRegistration<?>> serviceRegs = new HashMap<>();
 
@@ -61,6 +65,7 @@ public class DirectBTHandlerFactory extends BaseThingHandlerFactory {
 
     @Override
     protected @Nullable ThingHandler createHandler(Thing thing) {
+        logger.debug("Creating Direct-BT handler for {} with config {}", thing.getUID(), thing.getConfiguration());
         if (thing.getThingTypeUID().equals(DirectBTAdapterConstants.THING_TYPE_DIRECTBT)) {
             DirectBTBridgeHandler handler = new DirectBTBridgeHandler((Bridge) thing, managerFactory);
             registerBluetoothAdapter(handler);
