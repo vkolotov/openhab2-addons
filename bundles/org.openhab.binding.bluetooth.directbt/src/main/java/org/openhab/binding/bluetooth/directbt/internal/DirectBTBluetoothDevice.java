@@ -23,11 +23,11 @@ import org.direct_bt.BTDevice;
 import org.direct_bt.BTGattChar;
 import org.direct_bt.BTGattCharListener;
 import org.direct_bt.BTGattService;
-import org.direct_bt.BTSecurityLevel;
 import org.direct_bt.EInfoReport;
 import org.direct_bt.GattCharPropertySet;
 import org.direct_bt.HCIStatusCode;
 import org.direct_bt.SMPIOCapability;
+import org.direct_bt.SMPPairingState;
 import org.eclipse.jdt.annotation.NonNullByDefault;
 import org.eclipse.jdt.annotation.Nullable;
 import org.openhab.binding.bluetooth.BaseBluetoothDevice;
@@ -254,6 +254,44 @@ public class DirectBTBluetoothDevice extends BaseBluetoothDevice implements Devi
     }
 
     @Override
+    public boolean isPairing() {
+        BTDevice dev = device;
+        if (dev == null) {
+            return false;
+        }
+        try {
+            return isNegotiating(dev.getPairingState());
+        } catch (RuntimeException e) {
+            return false;
+        }
+    }
+
+    /**
+     * @return true iff {@code state} is one of the SMP "actively negotiating" values — the band during which
+     *         {@code setConnSecurityAuto} is still doing its connect/disconnect cycles to negotiate keys. The three
+     *         terminal states ({@code NONE}, {@code FAILED}, {@code COMPLETED}) return false so the reconciler's
+     *         connect deadline resumes: on COMPLETED the link is up and the state-flag sync takes over; on
+     *         FAILED/NONE the deadline expires normally and the device is retried (unbonded devices simply never
+     *         enter this band, so their behaviour is unchanged). This is intentionally a pure classification of the
+     *         transport enum so the reconciler stays transport-agnostic.
+     */
+    private static boolean isNegotiating(SMPPairingState state) {
+        switch (state) {
+            case REQUESTED_BY_RESPONDER:
+            case FEATURE_EXCHANGE_STARTED:
+            case FEATURE_EXCHANGE_COMPLETED:
+            case PASSKEY_EXPECTED:
+            case NUMERIC_COMPARE_EXPECTED:
+            case PASSKEY_NOTIFY:
+            case OOB_EXPECTED:
+            case KEY_DISTRIBUTION:
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    @Override
     public void markConnected() {
         setConnectionState(ConnectionState.CONNECTED);
     }
@@ -299,15 +337,17 @@ public class DirectBTBluetoothDevice extends BaseBluetoothDevice implements Devi
             // redundant: connect succeeds first-try and holds dead-stable (45/45 reads, 0 disconnects) without it,
             // and the reconciler recovers from the CSR COMMAND_DISALLOWED/INTERNAL_TIMEOUT quirk on its own.
             //
-            // Pin security to NONE / NO_INPUT_NO_OUTPUT (unbonded). We tried auto-negotiation
-            // (setConnSecurityAuto) to gain Just-Works encryption for bonded devices, but it is incompatible with
-            // this reconciler: setConnSecurityAuto "may perform multiple connection and disconnect actions until
-            // successful pairing" (its own javadoc), and that churn fights the reconciler's connect lifecycle --
-            // live on the CSR it turned a clean first-try connect into an endless connect/clear-pending flap
-            // (NANOTEST never reached "in sync"). Enabling encryption therefore needs the reconciler to be aware
-            // of the negotiation's multi-connect behaviour (a separate piece of work, see the parity notes); until
-            // then NONE is the proven, dead-stable profile and all our devices are unbonded read-only sensors.
-            dev.setConnSecurity(BTSecurityLevel.NONE, SMPIOCapability.NO_INPUT_NO_OUTPUT);
+            // Auto-negotiate security (Just-Works, NO_INPUT_NO_OUTPUT). setConnSecurityAuto iterates the security
+            // ladder and "may perform multiple connection and disconnect actions until successful pairing" (its own
+            // javadoc): for an OPEN device it settles on NONE first-try, and for a device with an
+            // encryption-required characteristic it negotiates LE Secure Connections up. That multi-connect churn
+            // USED to fight the reconciler's connect deadline (an endless connect/clear-pending flap when this was
+            // first tried), but the DeviceReconciler is now pairing-aware: it FREEZES its connect deadline while
+            // BTDevice.getPairingState() reports an actively-negotiating state (see DeviceReconciler act() and
+            // DirectBTBluetoothDevice.isPairing()), so SMP is allowed to run to completion. NO_INPUT_NO_OUTPUT keeps
+            // it to Just-Works (no passkey/MITM); authenticated pairing + persistent bonds are a separate effort
+            // (SMPKeyBin management, see docs/directbt-encryption-pairing-findings.md).
+            dev.setConnSecurityAuto(SMPIOCapability.NO_INPUT_NO_OUTPUT);
             return dev.connectLE(LE_SCAN_INTERVAL, LE_SCAN_WINDOW, CONN_INTERVAL_MIN, CONN_INTERVAL_MAX, CONN_LATENCY,
                     CONN_SUPERVISION_TIMEOUT);
         } catch (RuntimeException e) {

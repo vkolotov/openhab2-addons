@@ -48,6 +48,8 @@ class FakeDevicePort implements DevicePort {
     boolean gattResolved;
     boolean flagConnected;
     boolean flagConnecting;
+    // Whether an SMP negotiation is currently in progress (true while setConnSecurityAuto iterates the ladder).
+    boolean pairing;
 
     // --- scripted connectNative() result ---
     HCIStatusCode connectResult = HCIStatusCode.SUCCESS;
@@ -88,6 +90,11 @@ class FakeDevicePort implements DevicePort {
     @Override
     public boolean isFlagConnecting() {
         return flagConnecting;
+    }
+
+    @Override
+    public boolean isPairing() {
+        return pairing;
     }
 
     @Override

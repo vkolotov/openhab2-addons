@@ -25,10 +25,10 @@ import java.util.concurrent.Executors;
 import org.direct_bt.BTDevice;
 import org.direct_bt.BTGattChar;
 import org.direct_bt.BTGattService;
-import org.direct_bt.BTSecurityLevel;
 import org.direct_bt.GattCharPropertySet;
 import org.direct_bt.HCIStatusCode;
 import org.direct_bt.SMPIOCapability;
+import org.direct_bt.SMPPairingState;
 import org.eclipse.jdt.annotation.NonNullByDefault;
 import org.eclipse.jdt.annotation.Nullable;
 import org.junit.jupiter.api.BeforeEach;
@@ -173,17 +173,18 @@ class DirectBTBluetoothDeviceTest {
     }
 
     @Test
-    void connectNativePinsUnbondedSecurityThenConnects() {
+    void connectNativeAutoNegotiatesJustWorksSecurityThenConnects() {
         device().updateBTDevice(nativeDevice());
         when(nativeDevice().connectLE(anyShort(), anyShort(), anyShort(), anyShort(), anyShort(), anyShort()))
                 .thenReturn(HCIStatusCode.SUCCESS);
 
         assertEquals(HCIStatusCode.SUCCESS, device().connectNative());
 
-        // Security is pinned to NONE / NO_INPUT_NO_OUTPUT (unbonded) and connectLE is issued with the field-tested
-        // dead-stable profile. (Auto-negotiation was tried and reverted: it is incompatible with the reconciler's
-        // connect lifecycle -- see DirectBTBluetoothDevice.connectNative.)
-        verify(nativeDevice()).setConnSecurity(BTSecurityLevel.NONE, SMPIOCapability.NO_INPUT_NO_OUTPUT);
+        // Security auto-negotiates Just-Works (NO_INPUT_NO_OUTPUT): open devices settle on NONE, encryption-required
+        // ones negotiate up. The reconciler is now pairing-aware so this multi-connect churn no longer flaps (see
+        // DirectBTBluetoothDevice.connectNative + DeviceReconciler's pairing-freeze). connectLE is issued with the
+        // field-tested dead-stable profile.
+        verify(nativeDevice()).setConnSecurityAuto(SMPIOCapability.NO_INPUT_NO_OUTPUT);
         verify(nativeDevice()).connectLE(anyShort(), anyShort(), anyShort(), anyShort(), anyShort(), anyShort());
     }
 
@@ -200,6 +201,42 @@ class DirectBTBluetoothDeviceTest {
     @Test
     void disconnectNativeWithoutHandleIsANoOp() {
         assertDoesNotThrow(() -> device().disconnectNative());
+    }
+
+    // --- isPairing: classify the SMP negotiation band (the pairing-aware reconciler's freeze signal) ----------
+
+    @Test
+    void isPairingIsFalseWithoutHandle() {
+        assertFalse(device().isPairing(), "no native handle -> not pairing");
+    }
+
+    @Test
+    void isPairingIsTrueDuringNegotiationAndFalseAtTerminalStates() {
+        device().updateBTDevice(nativeDevice());
+
+        // Every actively-negotiating SMP state must read as pairing (freeze the connect deadline).
+        for (SMPPairingState negotiating : List.of(SMPPairingState.REQUESTED_BY_RESPONDER,
+                SMPPairingState.FEATURE_EXCHANGE_STARTED, SMPPairingState.FEATURE_EXCHANGE_COMPLETED,
+                SMPPairingState.PASSKEY_EXPECTED, SMPPairingState.NUMERIC_COMPARE_EXPECTED,
+                SMPPairingState.PASSKEY_NOTIFY, SMPPairingState.OOB_EXPECTED, SMPPairingState.KEY_DISTRIBUTION)) {
+            when(nativeDevice().getPairingState()).thenReturn(negotiating);
+            assertTrue(device().isPairing(), "must report pairing in state " + negotiating);
+        }
+
+        // The three terminal states must read as NOT pairing (deadline resumes; unbonded connects live here).
+        for (SMPPairingState terminal : List.of(SMPPairingState.NONE, SMPPairingState.FAILED,
+                SMPPairingState.COMPLETED)) {
+            when(nativeDevice().getPairingState()).thenReturn(terminal);
+            assertFalse(device().isPairing(), "must NOT report pairing in terminal state " + terminal);
+        }
+    }
+
+    @Test
+    void isPairingSwallowsNativeThrow() {
+        device().updateBTDevice(nativeDevice());
+        when(nativeDevice().getPairingState()).thenThrow(new RuntimeException("native pairing poll blew up"));
+
+        assertFalse(device().isPairing(), "a throwing pairing-state poll degrades to not-pairing, not a crash");
     }
 
     @Test

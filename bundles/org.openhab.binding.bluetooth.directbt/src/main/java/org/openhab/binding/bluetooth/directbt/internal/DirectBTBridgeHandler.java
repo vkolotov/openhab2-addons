@@ -26,6 +26,8 @@ import org.direct_bt.BTMode;
 import org.direct_bt.DiscoveryPolicy;
 import org.direct_bt.EIRDataTypeSet;
 import org.direct_bt.HCIStatusCode;
+import org.direct_bt.PairingMode;
+import org.direct_bt.SMPPairingState;
 import org.direct_bt.ScanType;
 import org.eclipse.jdt.annotation.NonNullByDefault;
 import org.eclipse.jdt.annotation.Nullable;
@@ -159,6 +161,16 @@ public class DirectBTBridgeHandler extends AbstractBluetoothBridgeHandler<Direct
 
         @Override
         public void deviceDisconnected(BTDevice device, HCIStatusCode reason, short handle, long timestamp) {
+            requeueReconcile();
+        }
+
+        @Override
+        public void devicePairingState(BTDevice device, SMPPairingState state, PairingMode mode, long timestamp) {
+            // Hint only: an SMP negotiation just changed state. Reconciling now (rather than waiting up to a full
+            // tick) lets the device reconciler observe the negotiating window promptly and freeze its connect
+            // deadline, so a short-lived pairing phase between 2s ticks can't slip past and trip the stuck-connect
+            // teardown. The reconciler still polls getPairingState() as the source of truth.
+            logger.debug("Direct-BT devicePairingState: {} state={} mode={}", device.getAddressAndType(), state, mode);
             requeueReconcile();
         }
     }

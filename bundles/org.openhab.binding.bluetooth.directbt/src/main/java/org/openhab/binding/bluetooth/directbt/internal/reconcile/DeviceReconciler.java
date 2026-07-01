@@ -52,14 +52,16 @@ public class DeviceReconciler extends Reconciler<Boolean, DeviceReconciler.Obser
         public final boolean gattResolved;
         public final boolean flagConnected;
         public final boolean flagConnecting;
+        public final boolean pairing;
 
         Observed(boolean hasNative, boolean nativeConnected, boolean gattResolved, boolean flagConnected,
-                boolean flagConnecting) {
+                boolean flagConnecting, boolean pairing) {
             this.hasNative = hasNative;
             this.nativeConnected = nativeConnected;
             this.gattResolved = gattResolved;
             this.flagConnected = flagConnected;
             this.flagConnecting = flagConnecting;
+            this.pairing = pairing;
         }
     }
 
@@ -78,6 +80,9 @@ public class DeviceReconciler extends Reconciler<Boolean, DeviceReconciler.Obser
     // Timestamps (epoch millis). connectingSince drives the stuck deadline; lastConnectAttemptAt spaces retries.
     private long connectingSince;
     private long lastConnectAttemptAt;
+    // Epoch millis of the tick at which we first observed pairing in progress during the current CONNECTING window,
+    // or 0 if not currently pairing. Used to freeze the connect deadline across an SMP negotiation (see act()).
+    private long pairingSince;
 
     /**
      * @param scanIsOff returns the adapter's polled scan state == OFF (connect step waits for this).
@@ -124,7 +129,7 @@ public class DeviceReconciler extends Reconciler<Boolean, DeviceReconciler.Obser
     @Override
     protected Observed observe() {
         return new Observed(port.hasNativeDevice(), port.isNativeConnected(), port.isGattResolved(),
-                port.isFlagConnected(), port.isFlagConnecting());
+                port.isFlagConnected(), port.isFlagConnecting(), port.isPairing());
     }
 
     @Override
@@ -146,7 +151,7 @@ public class DeviceReconciler extends Reconciler<Boolean, DeviceReconciler.Obser
         // (5) STATE-FLAG SYNC — always reconcile our flag to native truth first.
         if (o.hasNative && o.nativeConnected && !o.flagConnected) {
             logger.debug("[reconcile:{}] native connected but flag not; marking connected", name);
-            connectingSince = 0;
+            clearConnectWindow();
             port.markConnected();
         } else if ((!o.hasNative || !o.nativeConnected) && o.flagConnected) {
             // Native says not-connected while we think CONNECTED -> the silent-drop case. Drive the disconnect
@@ -154,7 +159,7 @@ public class DeviceReconciler extends Reconciler<Boolean, DeviceReconciler.Obser
             // handle, so this tick's observed snapshot is now out of date: return and let the next tick re-observe
             // (it will see hasNative==false and route through discovery before any reconnect).
             logger.debug("[reconcile:{}] native not connected but flag connected; marking disconnected", name);
-            connectingSince = 0;
+            clearConnectWindow();
             port.markDisconnected();
             return;
         }
@@ -183,6 +188,25 @@ public class DeviceReconciler extends Reconciler<Boolean, DeviceReconciler.Obser
 
         // (6) PENDING-STUCK — a CONNECTING that never produced a native connection.
         if (o.flagConnecting && connectingSince != 0) {
+            // FREEZE THE DEADLINE DURING SMP NEGOTIATION. With setConnSecurityAuto the transport iterates the
+            // security ladder, doing several connect/disconnect cycles to negotiate keys; that churn is correct
+            // pairing behaviour but leaves no stable native link for seconds. Without this freeze the pending-stuck
+            // deadline below would fire mid-negotiation and disconnectNative() tears it down (the endless
+            // connect/clear-pending flap we saw live when setConnSecurityAuto was first tried). So while the device
+            // reports pairing, hold connectingSince at "now minus whatever it was before pairing began", i.e. shift
+            // it forward by each paused interval, exactly the freeze discipline the base Reconciler uses for paused
+            // timers. When pairing ends (COMPLETED/FAILED/NONE) the deadline resumes from where it froze.
+            if (o.pairing) {
+                if (pairingSince == 0) {
+                    pairingSince = now;
+                    logger.debug("[reconcile:{}] pairing in progress; freezing connect deadline", name);
+                }
+                return; // negotiating: make no progress judgement, let SMP run
+            } else if (pairingSince != 0) {
+                connectingSince += now - pairingSince; // shift deadline forward by the paused (pairing) duration
+                pairingSince = 0;
+                logger.debug("[reconcile:{}] pairing ended; resuming connect deadline", name);
+            }
             long connectingFor = now - connectingSince;
             if (connectingFor > CONNECT_DEADLINE_MS) {
                 logger.debug("[reconcile:{}] CONNECTING for {}ms with no native link; clearing pending", name,
@@ -194,7 +218,7 @@ public class DeviceReconciler extends Reconciler<Boolean, DeviceReconciler.Obser
                     requestAdapterReset.run();
                 }
                 // Drop back to DISCONNECTED so the next tick can re-attempt a clean connect.
-                connectingSince = 0;
+                clearConnectWindow();
                 port.markDisconnected();
             }
             return; // give the current attempt its deadline before issuing another connect
@@ -223,13 +247,19 @@ public class DeviceReconciler extends Reconciler<Boolean, DeviceReconciler.Obser
         if (rc != HCIStatusCode.SUCCESS) {
             // Command rejected outright (e.g. COMMAND_DISALLOWED): not connecting after all. Reset flag so the
             // next tick re-evaluates from DISCONNECTED rather than sitting in a phantom CONNECTING.
-            connectingSince = 0;
+            clearConnectWindow();
             port.markDisconnected();
             if (rc == HCIStatusCode.COMMAND_DISALLOWED && resetBudget.tryReset(name)) {
                 logger.warn("[reconcile:{}] connect COMMAND_DISALLOWED; requesting adapter reset", name);
                 requestAdapterReset.run();
             }
         }
+    }
+
+    /** Close the current CONNECTING window: clears both the connect deadline and any in-flight pairing freeze. */
+    private void clearConnectWindow() {
+        connectingSince = 0;
+        pairingSince = 0;
     }
 
     public @Nullable Observed lastObserved() {

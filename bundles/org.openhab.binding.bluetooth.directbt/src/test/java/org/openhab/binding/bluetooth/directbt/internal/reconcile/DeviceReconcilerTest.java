@@ -365,6 +365,102 @@ class DeviceReconcilerTest {
         assertTrue(r.reconcile(), "connected + flag + GATT resolved == in sync");
     }
 
+    // ---------------------------------------------------------------------------------------------
+    // Pairing-aware connect deadline (encryption regression): setConnSecurityAuto does several
+    // connect/disconnect cycles to negotiate SMP keys, leaving no stable native link for seconds. The
+    // reconciler must FREEZE its connect deadline while pairing is in progress, else it tears the negotiation
+    // down mid-flight (the endless connect/clear-pending flap we saw when setConnSecurityAuto was first tried).
+    // ---------------------------------------------------------------------------------------------
+    @Test
+    void pairingInProgressFreezesTheConnectDeadline() {
+        FakeDevicePort port = new FakeDevicePort();
+        port.wanted = true;
+        port.hasNative = true;
+        port.connectResult = HCIStatusCode.SUCCESS;
+
+        MutableClock clock = new MutableClock(START);
+        DeviceReconciler r = reconciler(port, scanOff(), clock);
+
+        r.reconcile(); // -> CONNECTING
+        port.flagConnecting = true;
+        port.pairing = true; // SMP negotiation begins
+
+        // Sit well past BOTH the connect deadline and the hard reset deadline while pairing stays in progress.
+        clock.advance(PENDING_RESET_AFTER_MS + 60_000);
+        r.reconcile();
+
+        assertEquals(0, port.disconnectNativeCalls,
+                "the connect deadline must be frozen while SMP is negotiating (do not tear pairing down)");
+        assertEquals(0, port.markDisconnectedCalls, "pairing in progress must not be dropped to DISCONNECTED");
+    }
+
+    @Test
+    void pairingThenSuccessfulConnectReachesInSyncWithoutTeardown() {
+        FakeDevicePort port = new FakeDevicePort();
+        port.wanted = true;
+        port.hasNative = true;
+
+        MutableClock clock = new MutableClock(START);
+        DeviceReconciler r = reconciler(port, scanOff(), clock);
+
+        r.reconcile(); // issue connectLE -> CONNECTING
+        port.flagConnecting = true;
+        port.pairing = true;
+
+        // A long negotiation (past the deadline) — frozen, so no teardown.
+        clock.advance(CONNECT_DEADLINE_MS + 20_000);
+        r.reconcile();
+        assertEquals(0, port.disconnectNativeCalls, "no teardown during negotiation");
+
+        // SMP completes and the link comes up.
+        port.pairing = false;
+        port.settleNativeConnected();
+        clock.advance(10_000); // past base-class backoff
+        r.reconcile(); // observe native connected -> mark connected
+        assertEquals(1, port.markConnectedCalls);
+        assertEquals(0, port.disconnectNativeCalls, "a completed pairing must never have been torn down");
+
+        clock.advance(10_000);
+        r.reconcile(); // GATT resolve
+        assertTrue(r.reconcile(), "connected + flag + GATT resolved after pairing == in sync");
+    }
+
+    @Test
+    void deadlineResumesAfterPairingEndsWithoutSettling() {
+        // If pairing ends (e.g. FAILED/NONE) but the link still does not come up, the FROZEN deadline must
+        // RESUME — the time spent pairing does not count, but the pre-pairing connecting time does — so a device
+        // that never settles is eventually cleared and retried rather than hanging in CONNECTING forever.
+        FakeDevicePort port = new FakeDevicePort();
+        port.wanted = true;
+        port.hasNative = true;
+        port.connectResult = HCIStatusCode.SUCCESS;
+
+        MutableClock clock = new MutableClock(START);
+        DeviceReconciler r = reconciler(port, scanOff(), clock);
+
+        r.reconcile(); // -> CONNECTING
+        port.flagConnecting = true;
+
+        // Accrue almost the whole deadline BEFORE pairing starts.
+        clock.advance(CONNECT_DEADLINE_MS - 1000);
+        port.pairing = true;
+        r.reconcile(); // enters the freeze; no teardown
+        assertEquals(0, port.disconnectNativeCalls);
+
+        // Long negotiation, then it ends WITHOUT the link coming up.
+        clock.advance(30_000);
+        port.pairing = false;
+        r.reconcile(); // pairing ended: deadline resumes. Pre-pairing elapsed (deadline-1000) is < deadline -> no clear
+                       // yet
+        assertEquals(0, port.disconnectNativeCalls, "just under the (resumed) deadline: still given time");
+
+        // A little more real time past the resumed deadline (and past backoff) -> now it clears.
+        clock.advance(10_000);
+        r.reconcile();
+        assertEquals(1, port.disconnectNativeCalls,
+                "once pairing ends and the resumed deadline passes, the stuck pending is cleared");
+    }
+
     @Test
     void lastObservedExposesThePolledSnapshot() {
         FakeDevicePort port = new FakeDevicePort();

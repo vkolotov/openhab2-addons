@@ -43,6 +43,16 @@ public interface DevicePort {
     /** @return our remembered openHAB connection-state == CONNECTING. */
     boolean isFlagConnecting();
 
+    /**
+     * @return true iff an SMP security negotiation (pairing/encryption) is actively in progress on this device.
+     *         When {@code setConnSecurityAuto} is enabled the transport iterates the security ladder, performing
+     *         several connect/disconnect cycles to negotiate keys; during that time no stable native link exists
+     *         yet the device is making progress. The reconciler must therefore NOT count this window against its
+     *         connect deadline (which would tear the negotiation down mid-flight). Always {@code false} for an
+     *         unbonded {@code security=NONE} connection, which never negotiates.
+     */
+    boolean isPairing();
+
     /** Drive the openHAB CONNECTED transition + cleanup-free notify (state-flag sync up to native truth). */
     void markConnected();
 
