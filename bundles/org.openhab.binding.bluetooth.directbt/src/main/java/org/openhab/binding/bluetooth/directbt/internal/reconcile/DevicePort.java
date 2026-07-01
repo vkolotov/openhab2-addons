@@ -71,6 +71,20 @@ public interface DevicePort {
     /** Best-effort native disconnect, used to clear a stuck/pending create-connection. */
     void disconnectNative();
 
+    /**
+     * @return true iff the device is currently "pre-paired" — i.e. it holds stored SMP keys from an earlier
+     *         pairing that a reconnect will try to reuse. When a pre-paired reconnect never establishes, the
+     *         stored key is stale (the peer forgot the bond) and must be cleared; see {@link #clearStalePairing}.
+     *         Always false for an unbonded {@code security=NONE} device.
+     */
+    boolean hasStalePairing();
+
+    /**
+     * Drop the stored SMP keys for this device so the next connect re-pairs from scratch instead of reusing a
+     * (dead) stored key. Best-effort; a no-op when there is nothing to clear.
+     */
+    void clearStalePairing();
+
     /** Enumerate + map GATT services/characteristics for the current connection. */
     void resolveGatt();
 

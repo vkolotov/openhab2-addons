@@ -461,6 +461,53 @@ class DeviceReconcilerTest {
                 "once pairing ends and the resumed deadline passes, the stuck pending is cleared");
     }
 
+    // ---------------------------------------------------------------------------------------------
+    // Stale-bond self-heal (encryption regression, found live 2026-07-02): a pre-paired reconnect that never
+    // establishes is reusing a stored SMP key the peer no longer honours (peripheral forgot the bond). When the
+    // connect deadline fires while the device is pre-paired, the reconciler must CLEAR the stale bond so the next
+    // attempt re-pairs fresh — otherwise it loops forever (connectNative->SUCCESS, never a native link).
+    // ---------------------------------------------------------------------------------------------
+    @Test
+    void stuckConnectWhilePrePairedClearsTheStaleBond() {
+        FakeDevicePort port = new FakeDevicePort();
+        port.wanted = true;
+        port.hasNative = true;
+        port.prePaired = true; // holds a stored key a reconnect reuses
+        port.connectResult = HCIStatusCode.SUCCESS;
+
+        MutableClock clock = new MutableClock(START);
+        DeviceReconciler r = reconciler(port, scanOff(), clock);
+
+        r.reconcile(); // -> CONNECTING (never settles to nativeConnected: the stale-key encrypt fails silently)
+        port.flagConnecting = true;
+
+        clock.advance(CONNECT_DEADLINE_MS + 10_000);
+        r.reconcile(); // deadline fires while pre-paired -> clear the stale bond
+
+        assertEquals(1, port.clearStalePairingCalls, "a stuck pre-paired reconnect must clear the stale bond");
+        assertFalse(port.prePaired, "after clearing, the next attempt re-pairs fresh (not reusing the dead key)");
+    }
+
+    @Test
+    void stuckConnectWhenNotPrePairedDoesNotUnpair() {
+        FakeDevicePort port = new FakeDevicePort();
+        port.wanted = true;
+        port.hasNative = true;
+        port.prePaired = false; // unbonded (security=none) — nothing to clear
+        port.connectResult = HCIStatusCode.SUCCESS;
+
+        MutableClock clock = new MutableClock(START);
+        DeviceReconciler r = reconciler(port, scanOff(), clock);
+
+        r.reconcile();
+        port.flagConnecting = true;
+
+        clock.advance(CONNECT_DEADLINE_MS + 10_000);
+        r.reconcile();
+
+        assertEquals(0, port.clearStalePairingCalls, "an unbonded device has no stale bond to clear");
+    }
+
     @Test
     void lastObservedExposesThePolledSnapshot() {
         FakeDevicePort port = new FakeDevicePort();

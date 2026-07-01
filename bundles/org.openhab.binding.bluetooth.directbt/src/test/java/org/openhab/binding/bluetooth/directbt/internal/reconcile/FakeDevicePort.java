@@ -50,6 +50,8 @@ class FakeDevicePort implements DevicePort {
     boolean flagConnecting;
     // Whether an SMP negotiation is currently in progress (true while setConnSecurityAuto iterates the ladder).
     boolean pairing;
+    // Whether the device holds stored SMP keys a reconnect would reuse (BTDevice.isPrePaired()).
+    boolean prePaired;
 
     // --- scripted connectNative() result ---
     HCIStatusCode connectResult = HCIStatusCode.SUCCESS;
@@ -61,6 +63,7 @@ class FakeDevicePort implements DevicePort {
     int markConnectingCalls;
     int markDisconnectedCalls;
     int resolveGattCalls;
+    int clearStalePairingCalls;
 
     @Override
     public boolean isWanted() {
@@ -133,6 +136,17 @@ class FakeDevicePort implements DevicePort {
     public void disconnectNative() {
         disconnectNativeCalls++;
         nativeConnected = false;
+    }
+
+    @Override
+    public boolean hasStalePairing() {
+        return prePaired;
+    }
+
+    @Override
+    public void clearStalePairing() {
+        clearStalePairingCalls++;
+        prePaired = false;
     }
 
     @Override

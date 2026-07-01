@@ -379,6 +379,37 @@ public class DirectBTBluetoothDevice extends BaseBluetoothDevice implements Devi
     }
 
     @Override
+    public boolean hasStalePairing() {
+        BTDevice dev = device;
+        if (dev == null) {
+            return false;
+        }
+        try {
+            // "Pre-paired" == the device holds stored SMP keys a reconnect will reuse (BTDevice.isPrePaired()).
+            // The reconciler only calls this after a create-connection has failed to establish, so a pre-paired
+            // device here means the stored key is the thing blocking the (encrypted) reconnect.
+            return dev.isPrePaired();
+        } catch (RuntimeException e) {
+            return false;
+        }
+    }
+
+    @Override
+    public void clearStalePairing() {
+        BTDevice dev = device;
+        if (dev == null) {
+            return;
+        }
+        try {
+            // unpair() clears the in-memory SMP state (clearSMPStates -> is_pre_paired=false) so the next connect
+            // negotiates a fresh pairing rather than reusing a stored key the peer no longer honours.
+            dev.unpair();
+        } catch (RuntimeException e) {
+            logger.debug("Direct-BT clearStalePairing for {} threw", address, e);
+        }
+    }
+
+    @Override
     public void resolveGatt() {
         discoverServices();
     }

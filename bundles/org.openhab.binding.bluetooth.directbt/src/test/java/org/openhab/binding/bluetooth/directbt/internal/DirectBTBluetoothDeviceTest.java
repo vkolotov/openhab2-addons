@@ -256,6 +256,35 @@ class DirectBTBluetoothDeviceTest {
         assertFalse(device().isPairing(), "a throwing pairing-state poll degrades to not-pairing, not a crash");
     }
 
+    // --- stale-bond self-heal: hasStalePairing() / clearStalePairing() ---------------------------
+
+    @Test
+    void hasStalePairingReflectsPrePairedState() {
+        assertFalse(device().hasStalePairing(), "no handle -> no stored keys");
+
+        device().updateBTDevice(nativeDevice());
+        when(nativeDevice().isPrePaired()).thenReturn(true);
+        assertTrue(device().hasStalePairing(), "pre-paired device holds a stored key a reconnect would reuse");
+
+        when(nativeDevice().isPrePaired()).thenReturn(false);
+        assertFalse(device().hasStalePairing());
+    }
+
+    @Test
+    void clearStalePairingUnpairsTheNativeDevice() {
+        device().updateBTDevice(nativeDevice());
+
+        device().clearStalePairing();
+
+        // unpair() drops the stored SMP keys so the next connect re-pairs fresh rather than reusing a dead key.
+        verify(nativeDevice()).unpair();
+    }
+
+    @Test
+    void clearStalePairingWithoutHandleIsANoOp() {
+        assertDoesNotThrow(() -> device().clearStalePairing());
+    }
+
     @Test
     void idIsTheAddress() {
         assertEquals(ADDRESS.toString(), device().id());

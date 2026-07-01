@@ -212,6 +212,16 @@ public class DeviceReconciler extends Reconciler<Boolean, DeviceReconciler.Obser
                 logger.debug("[reconcile:{}] CONNECTING for {}ms with no native link; clearing pending", name,
                         connectingFor);
                 port.disconnectNative();
+                // STALE-BOND SELF-HEAL: a create-connection that never establishes while the device holds
+                // pre-paired keys is the "dead bond" case — an encrypted reconnect that reuses a stored LTK the
+                // peer no longer honours (e.g. a peripheral that forgot the bond / re-advertises fresh) silently
+                // never completes. Clear the stale keys so the next attempt does a FRESH pairing instead of
+                // reusing the dead LTK. Same "trust the fresh frame, not a cached object" discipline as clearing a
+                // stale native handle on a silent drop. Cheap and safe for the non-pre-paired case (no-op there).
+                if (port.hasStalePairing()) {
+                    logger.debug("[reconcile:{}] stuck while pre-paired; clearing stale bond to re-pair fresh", name);
+                    port.clearStalePairing();
+                }
                 if (connectingFor > PENDING_RESET_AFTER_MS && resetBudget.tryReset(name)) {
                     logger.warn("[reconcile:{}] create-connection wedged {}ms; requesting adapter reset", name,
                             connectingFor);
