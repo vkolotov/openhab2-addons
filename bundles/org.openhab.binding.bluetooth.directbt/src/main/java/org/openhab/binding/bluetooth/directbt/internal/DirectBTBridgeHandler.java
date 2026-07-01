@@ -276,36 +276,48 @@ public class DirectBTBridgeHandler extends AbstractBluetoothBridgeHandler<Direct
      * because its desired state ({@link #isScanWanted()}) is a rollup of device state.
      */
     private void reconcileTick() {
-        synchronized (reconcileLock) {
-            if (disposed) {
-                return;
+        // CRITICAL: this runs on a scheduleWithFixedDelay job. If the body throws an UNCAUGHT exception the
+        // executor SILENTLY CANCELS the repeating job -> the reconciler goes permanently dormant (device stuck,
+        // no retries, only an openHAB restart recovers). The reconcilers call into the native Direct-BT stack,
+        // which can throw (RuntimeException from JNI, LinkageError on a native mishap). So the WHOLE tick body is
+        // wrapped: one bad tick is logged and the next 2s tick just tries again. (Regression note: this guard was
+        // present historically, lost in the reconciler refactor, and its absence caused the 212 reconciler to die
+        // one tick after bring-up.)
+        try {
+            synchronized (reconcileLock) {
+                if (disposed) {
+                    return;
+                }
+                // Any queued event-driven tick is now being serviced by THIS run (which observes the latest native
+                // truth), so clear the pending flag BEFORE doing work: an event arriving during this tick will then
+                // schedule a fresh follow-up rather than being lost.
+                reconcilePending.set(false);
+                lastTickAt = System.currentTimeMillis();
+                AdapterReconciler ar = adapterReconciler;
+                if (ar == null) {
+                    return;
+                }
+                boolean adapterOk = ar.reconcile(); // power phase (the prerequisite gate)
+                if (!adapterOk) {
+                    // Prerequisite not in sync: pause dependents (freeze their timers) so a long adapter outage does
+                    // not age devices toward escalation (which would storm on recovery). The scan field is reset so
+                    // a stale "scan off" can't let a connect fire against an un-powered adapter.
+                    ar.resetScanState();
+                    forEachDevice(d -> d.getReconciler().pause());
+                    return;
+                }
+                // Devices first (they update connected/connecting state that the scan's desired is computed from),
+                // then the adapter scan field. The flag-sync sub-step inside a device runs even right after a reset.
+                forEachDevice(d -> {
+                    DeviceReconciler rec = d.getReconciler();
+                    rec.unpause();
+                    rec.reconcile();
+                });
+                ar.reconcileScan(isScanWanted()); // scan phase (the adapter's second field)
             }
-            // Any queued event-driven tick is now being serviced by THIS run (which observes the latest native
-            // truth), so clear the pending flag BEFORE doing work: an event arriving during this tick will then
-            // schedule a fresh follow-up rather than being lost.
-            reconcilePending.set(false);
-            lastTickAt = System.currentTimeMillis();
-            AdapterReconciler ar = adapterReconciler;
-            if (ar == null) {
-                return;
-            }
-            boolean adapterOk = ar.reconcile(); // power phase (the prerequisite gate)
-            if (!adapterOk) {
-                // Prerequisite not in sync: pause dependents (freeze their timers) so a long adapter outage does
-                // not age devices toward escalation (which would storm on recovery). The scan field is reset so a
-                // stale "scan off" can't let a connect fire against an un-powered adapter.
-                ar.resetScanState();
-                forEachDevice(d -> d.getReconciler().pause());
-                return;
-            }
-            // Devices first (they update connected/connecting state that the scan's desired is computed from),
-            // then the adapter scan field. The flag-sync sub-step inside a device runs even right after a reset.
-            forEachDevice(d -> {
-                DeviceReconciler rec = d.getReconciler();
-                rec.unpause();
-                rec.reconcile();
-            });
-            ar.reconcileScan(isScanWanted()); // scan phase (the adapter's second field)
+        } catch (RuntimeException | LinkageError e) {
+            // Never let a single tick's failure cancel the repeating reconcile job.
+            logger.warn("Direct-BT reconcile tick failed; will retry next tick", e);
         }
     }
 
