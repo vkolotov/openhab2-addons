@@ -16,11 +16,17 @@ import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
+import java.util.List;
 import java.util.Objects;
+import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executors;
 
 import org.direct_bt.BTDevice;
+import org.direct_bt.BTGattChar;
+import org.direct_bt.BTGattService;
 import org.direct_bt.BTSecurityLevel;
+import org.direct_bt.GattCharPropertySet;
 import org.direct_bt.HCIStatusCode;
 import org.direct_bt.SMPIOCapability;
 import org.eclipse.jdt.annotation.NonNullByDefault;
@@ -33,6 +39,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
 import org.mockito.quality.Strictness;
 import org.openhab.binding.bluetooth.BluetoothAddress;
+import org.openhab.binding.bluetooth.BluetoothCharacteristic;
 import org.openhab.binding.bluetooth.BluetoothDeviceListener;
 import org.openhab.binding.bluetooth.directbt.internal.reconcile.ResetBudget;
 import org.slf4j.LoggerFactory;
@@ -54,6 +61,8 @@ import org.slf4j.LoggerFactory;
 class DirectBTBluetoothDeviceTest {
 
     private static final BluetoothAddress ADDRESS = new BluetoothAddress("70:B9:50:92:A9:90");
+    private static final UUID SERVICE_UUID = UUID.fromString("9f0d7d29-8816-4215-bd7f-2e2a264f0891");
+    private static final UUID CHAR_UUID = UUID.fromString("9f0dd907-8816-4215-bd7f-2e2a264f0891");
 
     @Mock
     private @Nullable DirectBTBridgeHandler bridge;
@@ -164,18 +173,33 @@ class DirectBTBluetoothDeviceTest {
     }
 
     @Test
-    void connectNativePinsTheStableBleParameters() {
+    void connectNativeAutoNegotiatesSecurityThenConnects() {
         device().updateBTDevice(nativeDevice());
+        when(nativeDevice().setConnSecurityAuto(SMPIOCapability.NO_INPUT_NO_OUTPUT)).thenReturn(true);
         when(nativeDevice().connectLE(anyShort(), anyShort(), anyShort(), anyShort(), anyShort(), anyShort()))
                 .thenReturn(HCIStatusCode.SUCCESS);
 
         assertEquals(HCIStatusCode.SUCCESS, device().connectNative());
 
-        // Security is pinned to NONE / NO_INPUT_NO_OUTPUT (unbonded sensor), and connectLE is issued with the
-        // pinned interval/supervision profile that field-tested dead-stable. Assert the security pin and that a
-        // create-connection was actually issued.
-        verify(nativeDevice()).setConnSecurity(BTSecurityLevel.NONE, SMPIOCapability.NO_INPUT_NO_OUTPUT);
+        // Security is auto-negotiated (Just-Works: unbonded falls through to NONE, encrypted devices pair
+        // in-band) and connectLE is issued with the field-tested dead-stable profile. When auto succeeds, the
+        // explicit NONE pin must NOT also be applied.
+        verify(nativeDevice()).setConnSecurityAuto(SMPIOCapability.NO_INPUT_NO_OUTPUT);
+        verify(nativeDevice(), never()).setConnSecurity(any(), any());
         verify(nativeDevice()).connectLE(anyShort(), anyShort(), anyShort(), anyShort(), anyShort(), anyShort());
+    }
+
+    @Test
+    void connectNativeFallsBackToNonePinWhenAutoSecurityUnavailable() {
+        device().updateBTDevice(nativeDevice());
+        when(nativeDevice().setConnSecurityAuto(SMPIOCapability.NO_INPUT_NO_OUTPUT)).thenReturn(false);
+        when(nativeDevice().connectLE(anyShort(), anyShort(), anyShort(), anyShort(), anyShort(), anyShort()))
+                .thenReturn(HCIStatusCode.SUCCESS);
+
+        assertEquals(HCIStatusCode.SUCCESS, device().connectNative());
+
+        // When auto-negotiation cannot be enabled, fall back to the explicit unbonded profile.
+        verify(nativeDevice()).setConnSecurity(BTSecurityLevel.NONE, SMPIOCapability.NO_INPUT_NO_OUTPUT);
     }
 
     @Test
@@ -198,7 +222,117 @@ class DirectBTBluetoothDeviceTest {
         assertEquals(ADDRESS.toString(), device().id());
     }
 
+    // --- write characteristic --------------------------------------------------------------------
+
+    @Test
+    void writeCharacteristicUsesAcknowledgedWriteWhenSupported() throws Exception {
+        BTGattChar gattChar = connectWithChar(GattCharPropertySet.Type.WriteWithAck);
+        when(gattChar.writeValue(any(), anyBoolean())).thenReturn(true);
+        byte[] payload = { 0x01, 0x02 };
+
+        device().writeCharacteristic(characteristic(), payload).get();
+
+        // A characteristic that supports write-with-response must be written acknowledged (withResponse=true).
+        verify(gattChar).writeValue(payload, true);
+    }
+
+    @Test
+    void writeCharacteristicUsesUnacknowledgedWriteWhenAckNotSupported() throws Exception {
+        BTGattChar gattChar = connectWithChar(GattCharPropertySet.Type.WriteNoAck);
+        when(gattChar.writeValue(any(), anyBoolean())).thenReturn(true);
+
+        device().writeCharacteristic(characteristic(), new byte[] { 0x03 }).get();
+
+        verify(gattChar).writeValue(any(), eq(false)); // write-without-response
+    }
+
+    @Test
+    void writeCharacteristicToDisconnectedDeviceFails() {
+        // No handle / not connected: the write must complete exceptionally, not silently succeed.
+        CompletableFuture<@Nullable Void> f = device().writeCharacteristic(characteristic(), new byte[] { 0x00 });
+        assertThrows(Exception.class, f::get);
+    }
+
+    // --- notifications (subscribe) ---------------------------------------------------------------
+
+    @Test
+    void enableNotificationsRegistersListenerAndEnablesCccd() throws Exception {
+        BTGattChar gattChar = connectWithChar(GattCharPropertySet.Type.Notify);
+        when(gattChar.addCharListener(any())).thenReturn(true);
+        when(gattChar.enableNotificationOrIndication(any())).thenReturn(true);
+
+        device().enableNotifications(characteristic()).get();
+
+        verify(gattChar).addCharListener(any());
+        verify(gattChar).enableNotificationOrIndication(any()); // the CCCD write
+        assertTrue(device().isNotifying(characteristic()));
+    }
+
+    @Test
+    void enableNotificationsIsIdempotent() throws Exception {
+        BTGattChar gattChar = connectWithChar(GattCharPropertySet.Type.Notify);
+        when(gattChar.addCharListener(any())).thenReturn(true);
+        when(gattChar.enableNotificationOrIndication(any())).thenReturn(true);
+
+        device().enableNotifications(characteristic()).get();
+        device().enableNotifications(characteristic()).get(); // second call: already enabled
+
+        // The native listener must be registered only once (the reservation is atomic; a second enable is a no-op).
+        verify(gattChar, times(1)).addCharListener(any());
+    }
+
+    @Test
+    void enableNotificationsRollsBackReservationOnCccdFailure() throws Exception {
+        BTGattChar gattChar = connectWithChar(GattCharPropertySet.Type.Notify);
+        when(gattChar.addCharListener(any())).thenReturn(true);
+        when(gattChar.enableNotificationOrIndication(any())).thenReturn(false); // CCCD write fails
+
+        CompletableFuture<@Nullable Void> f = device().enableNotifications(characteristic());
+        assertThrows(Exception.class, f::get);
+
+        // On failure the slot must be released so a later retry can re-register (not left orphaned as "notifying").
+        assertFalse(device().isNotifying(characteristic()));
+    }
+
+    @Test
+    void disableNotificationsRemovesTheListener() throws Exception {
+        BTGattChar gattChar = connectWithChar(GattCharPropertySet.Type.Notify);
+        when(gattChar.addCharListener(any())).thenReturn(true);
+        when(gattChar.enableNotificationOrIndication(any())).thenReturn(true);
+        device().enableNotifications(characteristic()).get();
+
+        device().disableNotifications(characteristic()).get();
+
+        verify(gattChar).removeCharListener(any());
+        assertFalse(device().isNotifying(characteristic()));
+    }
+
     // --- helpers (unwrap the @Nullable mocks/SUT into @NonNull locals) ----------------------------
+
+    /**
+     * Bring the device to "connected with one resolved characteristic" so read/write/notify can run: install the
+     * native handle, report connected, and drive discoverServices() over one mock service+characteristic with the
+     * given property. Returns the mock BTGattChar for stubbing/verification.
+     */
+    private BTGattChar connectWithChar(GattCharPropertySet.Type property) {
+        device().updateBTDevice(nativeDevice());
+        when(nativeDevice().getConnected()).thenReturn(true);
+
+        BTGattChar gattChar = mock(BTGattChar.class);
+        when(gattChar.getUUID()).thenReturn(CHAR_UUID.toString());
+        when(gattChar.getProperties()).thenReturn(new GattCharPropertySet(property));
+        BTGattService service = mock(BTGattService.class);
+        when(service.getUUID()).thenReturn(SERVICE_UUID.toString());
+        when(service.getChars()).thenReturn(List.of(gattChar));
+        when(nativeDevice().getGattServices()).thenReturn(List.of(service));
+
+        device().discoverServices();
+        return gattChar;
+    }
+
+    private BluetoothCharacteristic characteristic() {
+        return new BluetoothCharacteristic(CHAR_UUID, 0);
+    }
 
     private void enableDevice(boolean enabled) {
         when(bridge().isDeviceEnabled(any())).thenReturn(enabled);

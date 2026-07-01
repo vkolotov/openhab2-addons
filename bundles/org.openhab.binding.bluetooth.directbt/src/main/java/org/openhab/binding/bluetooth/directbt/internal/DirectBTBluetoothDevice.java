@@ -298,7 +298,19 @@ public class DirectBTBluetoothDevice extends BaseBluetoothDevice implements Devi
             // dev.disconnect() residue-clear here was ablated (2026-06-26, from-scratch CSR rebuild) and proven
             // redundant: connect succeeds first-try and holds dead-stable (45/45 reads, 0 disconnects) without it,
             // and the reconciler recovers from the CSR COMMAND_DISALLOWED/INTERNAL_TIMEOUT quirk on its own.
-            dev.setConnSecurity(BTSecurityLevel.NONE, SMPIOCapability.NO_INPUT_NO_OUTPUT);
+            //
+            // Auto-negotiate the security level instead of hard-pinning NONE. Direct-BT (which owns the HCI and
+            // speaks SMP itself -- there is no bluetoothd to pair out-of-band) tries ENC_AUTH_FIPS -> ENC_AUTH ->
+            // ENC_ONLY -> NONE per connect, so an unbonded read-only sensor lands on NONE (the previous fixed
+            // behaviour, unchanged) while a device that requires encryption pairs in-band with no user action.
+            // NO_INPUT_NO_OUTPUT = "Just Works" (no passkey/agent). Scope note: this enables Just-Works encryption
+            // only. Authenticated (PIN/passkey) pairing and persistent bonds are NOT supported -- the adapter runs
+            // in Master role, where Direct-BT's file-backed SMPKeyBin auto-store is unavailable, so a bond is
+            // transient and re-negotiated each connect (invisible for Just-Works, unusable for PIN devices).
+            if (!dev.setConnSecurityAuto(SMPIOCapability.NO_INPUT_NO_OUTPUT)) {
+                // Fall back to the explicit unbonded profile if auto-negotiation could not be enabled.
+                dev.setConnSecurity(BTSecurityLevel.NONE, SMPIOCapability.NO_INPUT_NO_OUTPUT);
+            }
             return dev.connectLE(LE_SCAN_INTERVAL, LE_SCAN_WINDOW, CONN_INTERVAL_MIN, CONN_INTERVAL_MAX, CONN_LATENCY,
                     CONN_SUPERVISION_TIMEOUT);
         } catch (RuntimeException e) {

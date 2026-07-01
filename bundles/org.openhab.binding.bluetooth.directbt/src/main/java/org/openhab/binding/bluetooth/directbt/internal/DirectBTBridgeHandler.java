@@ -84,6 +84,10 @@ public class DirectBTBridgeHandler extends AbstractBluetoothBridgeHandler<Direct
     private static final long DISPOSE_NATIVE_TIMEOUT_MS = 3000;
 
     private @Nullable BluetoothAddress adapterAddress;
+    // Whether to scan continuously to surface NEW (unconfigured) devices to the inbox, even when no configured
+    // device needs discovering. Read from the bridge Thing config; a manual scan (activeScanEnabled) forces it on
+    // regardless.
+    private volatile boolean backgroundDiscovery;
     private @Nullable BTManager manager;
     private @Nullable BTAdapter adapter;
     private @Nullable ScheduledFuture<?> initJob;
@@ -193,6 +197,7 @@ public class DirectBTBridgeHandler extends AbstractBluetoothBridgeHandler<Direct
             return;
         }
         this.adapterAddress = new BluetoothAddress(addr.toUpperCase());
+        this.backgroundDiscovery = config.backgroundDiscovery;
         updateStatus(ThingStatus.UNKNOWN, ThingStatusDetail.NONE, "Initializing");
         // Native load + Direct-BT init can block; do it off the main thread, then retry until the adapter
         // is present (e.g. dongle plugged in later).
@@ -341,6 +346,21 @@ public class DirectBTBridgeHandler extends AbstractBluetoothBridgeHandler<Direct
         scheduler.schedule(this::reconcileTick, delay, TimeUnit.MILLISECONDS);
     }
 
+    @Override
+    public void scanStart() {
+        // Core sets activeScanEnabled = true (manual/inbox scan). Reconcile now so isScanWanted() turns the radio
+        // on promptly rather than waiting for the next periodic tick.
+        super.scanStart();
+        requeueReconcile();
+    }
+
+    @Override
+    public void scanStop() {
+        // Core clears activeScanEnabled. Reconcile so the scan winds back down to the configured desired state.
+        super.scanStop();
+        requeueReconcile();
+    }
+
     /** @return the adapter's reset budget (shared by reconcilers + device-requested resets). */
     public ResetBudget getResetBudget() {
         return resetBudget;
@@ -384,7 +404,20 @@ public class DirectBTBridgeHandler extends AbstractBluetoothBridgeHandler<Direct
                 connecting[0] = true;
             }
         });
-        return needsDiscovery[0] && !connecting[0];
+        return scanWanted(needsDiscovery[0], backgroundDiscovery, activeScanEnabled, connecting[0]);
+    }
+
+    /**
+     * Pure decision for whether the adapter should be scanning, given the rolled-up device/config inputs. Scan
+     * when a configured device needs (re)discovery, OR discovery is wanted for the inbox (background discovery
+     * config, or an in-progress manual scan via {@code scanStart()}). Either way a device establishing a link
+     * ({@code connecting}) preempts the scan: the controller rejects create-connection while scanning, so we hand
+     * the radio to the connect and resume discovery once it completes.
+     */
+    static boolean scanWanted(boolean needsDiscovery, boolean backgroundDiscovery, boolean activeScan,
+            boolean connecting) {
+        boolean discoveryWanted = needsDiscovery || backgroundDiscovery || activeScan;
+        return discoveryWanted && !connecting;
     }
 
     /**
