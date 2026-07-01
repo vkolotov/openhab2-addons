@@ -357,8 +357,12 @@ public class DirectBTBluetoothDevice extends BaseBluetoothDevice implements Devi
             // role and makes Direct-BT drive the encryption/pairing request from the central side. ENC_ONLY +
             // NO_INPUT_NO_OUTPUT = Just-Works (encrypted, unauthenticated, no passkey/MITM). Authenticated pairing
             // + persistent bonds are a separate effort. See docs/directbt-encryption-pairing-findings.md.
-            boolean wantEncryption = DirectBTAdapterConstants.CONNECTION_SECURITY_AUTO
-                    .equalsIgnoreCase(bridge.getDeviceConnectionSecurity(address)) && !encryptionFallbackToNone;
+            // Two encryption modes both request ENC_ONLY: "auto" is STRICT (never downgrade), while
+            // "encrypted-preferred" permits the identity-flip safe-bailout to latch us down to NONE (see
+            // encryptionFallbackToNone / disableEncryptionFallback). Both differ from "none" only in the requested
+            // security level; the mode also decides whether a bailout is allowed.
+            String securityMode = bridge.getDeviceConnectionSecurity(address);
+            boolean wantEncryption = wantsEncryption(securityMode) && !encryptionFallbackToNone;
             if (wantEncryption) {
                 dev.setConnSecurity(BTSecurityLevel.ENC_ONLY, SMPIOCapability.NO_INPUT_NO_OUTPUT);
             } else {
@@ -438,12 +442,25 @@ public class DirectBTBluetoothDevice extends BaseBluetoothDevice implements Devi
 
     @Override
     public void disableEncryptionFallback() {
+        // Only "encrypted-preferred" permits the downgrade. Under the STRICT "auto" mode a device that must never
+        // talk unencrypted (e.g. a lock) keeps retrying instead — we refuse to silently drop its encryption.
+        if (!DirectBTAdapterConstants.CONNECTION_SECURITY_ENCRYPTED_PREFERRED
+                .equalsIgnoreCase(bridge.getDeviceConnectionSecurity(address))) {
+            return;
+        }
         if (!encryptionFallbackToNone) {
             encryptionFallbackToNone = true;
             logger.warn("Encrypted reconnect to {} keeps failing (address-identity resolution gap); falling back to an "
                     + "unencrypted connection for this device so it stays usable. Set connectionSecurity=none "
-                    + "to silence this, or see docs/directbt-encryption-pairing-findings.md.", address);
+                    + "to silence this, or =auto to keep retrying encryption; see "
+                    + "docs/directbt-encryption-pairing-findings.md.", address);
         }
+    }
+
+    /** @return true iff the given connectionSecurity mode requests LE encryption (either strict or preferred). */
+    private static boolean wantsEncryption(String securityMode) {
+        return DirectBTAdapterConstants.CONNECTION_SECURITY_AUTO.equalsIgnoreCase(securityMode)
+                || DirectBTAdapterConstants.CONNECTION_SECURITY_ENCRYPTED_PREFERRED.equalsIgnoreCase(securityMode);
     }
 
     @Override

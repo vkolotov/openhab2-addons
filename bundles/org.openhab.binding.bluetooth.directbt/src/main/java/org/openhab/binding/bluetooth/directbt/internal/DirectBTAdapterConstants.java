@@ -39,8 +39,18 @@ public class DirectBTAdapterConstants {
     /** Unbonded, no encryption — the proven dead-stable default. */
     public static final String CONNECTION_SECURITY_NONE = "none";
 
-    /** Just-Works LE encryption via {@code setConnSecurityAuto(NO_INPUT_NO_OUTPUT)}, opt-in per device. */
+    /**
+     * Just-Works LE encryption, STRICT: request encryption and keep retrying if it does not hold; never downgrade.
+     * Use for devices that must never talk unencrypted (e.g. locks). Opt-in per device.
+     */
     public static final String CONNECTION_SECURITY_AUTO = "auto";
+
+    /**
+     * Just-Works LE encryption, RESILIENT: request encryption, but if the device pairs and then cannot reconnect
+     * (the identity-flip / resolving-list gap), automatically fall back to an unencrypted connection so it stays
+     * usable. Use for devices where availability matters more than confidentiality.
+     */
+    public static final String CONNECTION_SECURITY_ENCRYPTED_PREFERRED = "encrypted-preferred";
 
     private DirectBTAdapterConstants() {
     }

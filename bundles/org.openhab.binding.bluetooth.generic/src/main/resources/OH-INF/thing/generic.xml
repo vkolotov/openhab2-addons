@@ -35,19 +35,23 @@
 				<description>LE connection security for this device. "none" (default) connects unbonded with no
 					encryption — the
 					proven, dead-stable profile suitable for open sensors. "auto" requests Just-Works
-					encryption (no passkey/MITM) for
-					devices whose characteristics require an encrypted link. Leave on
-					"none" unless a device actually rejects reads
-					without encryption. NOTE: "auto" is EXPERIMENTAL — the
-					encrypted connection works, but a device that distributes an
-					identity/IRK on pairing may not
-					reconnect reliably after a drop (an address-resolution limitation); the adapter
-					detects this and
-					automatically falls back to an unencrypted connection for that device so it stays usable. Currently
-					honoured by the Direct-BT adapter; other adapters ignore it.</description>
+					encryption (no passkey/MITM) and
+					keeps it STRICT: it never downgrades, so use it for devices that must
+					never talk unencrypted (e.g. locks).
+					"encrypted-preferred" also requests encryption but automatically
+					falls back to an unencrypted connection if the
+					device pairs and then cannot reconnect (an
+					address-resolution limitation), so availability is preserved for devices
+					where that matters more than
+					confidentiality. Leave on "none" unless a device actually rejects reads without
+					encryption. NOTE: the
+					encrypted modes are EXPERIMENTAL. Currently honoured by the Direct-BT adapter; other adapters
+					ignore
+					it.</description>
 				<options>
 					<option value="none">None (unbonded, no encryption)</option>
-					<option value="auto">Auto (Just-Works encryption, experimental)</option>
+					<option value="auto">Auto (Just-Works encryption, strict — experimental)</option>
+					<option value="encrypted-preferred">Encrypted preferred (fall back to unencrypted — experimental)</option>
 				</options>
 				<limitToOptions>true</limitToOptions>
 				<advanced>true</advanced>

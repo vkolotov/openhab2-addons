@@ -208,6 +208,53 @@ class DirectBTBluetoothDeviceTest {
     }
 
     @Test
+    void connectNativeRequestsEncryptionForEncryptedPreferredToo() {
+        device().updateBTDevice(nativeDevice());
+        when(nativeDevice().connectLE(anyShort(), anyShort(), anyShort(), anyShort(), anyShort(), anyShort()))
+                .thenReturn(HCIStatusCode.SUCCESS);
+        // "encrypted-preferred" requests the same ENC_ONLY level as "auto"; they differ only in bailout policy.
+        when(bridge().getDeviceConnectionSecurity(any()))
+                .thenReturn(DirectBTAdapterConstants.CONNECTION_SECURITY_ENCRYPTED_PREFERRED);
+
+        assertEquals(HCIStatusCode.SUCCESS, device().connectNative());
+
+        verify(nativeDevice()).setConnSecurity(BTSecurityLevel.ENC_ONLY, SMPIOCapability.NO_INPUT_NO_OUTPUT);
+    }
+
+    // --- encryption bailout is mode-gated: encrypted-preferred downgrades, strict auto does NOT --------------
+
+    @Test
+    void disableEncryptionFallbackDowngradesUnderEncryptedPreferred() {
+        device().updateBTDevice(nativeDevice());
+        when(nativeDevice().connectLE(anyShort(), anyShort(), anyShort(), anyShort(), anyShort(), anyShort()))
+                .thenReturn(HCIStatusCode.SUCCESS);
+        when(bridge().getDeviceConnectionSecurity(any()))
+                .thenReturn(DirectBTAdapterConstants.CONNECTION_SECURITY_ENCRYPTED_PREFERRED);
+
+        device().disableEncryptionFallback(); // the reconciler's safe bailout
+        device().connectNative();
+
+        // After the bailout, encrypted-preferred connects UNENCRYPTED (NONE) so the device stays usable.
+        verify(nativeDevice()).setConnSecurity(BTSecurityLevel.NONE, SMPIOCapability.NO_INPUT_NO_OUTPUT);
+        verify(nativeDevice(), never()).setConnSecurity(BTSecurityLevel.ENC_ONLY, SMPIOCapability.NO_INPUT_NO_OUTPUT);
+    }
+
+    @Test
+    void disableEncryptionFallbackIsIgnoredUnderStrictAuto() {
+        device().updateBTDevice(nativeDevice());
+        when(nativeDevice().connectLE(anyShort(), anyShort(), anyShort(), anyShort(), anyShort(), anyShort()))
+                .thenReturn(HCIStatusCode.SUCCESS);
+        when(bridge().getDeviceConnectionSecurity(any())).thenReturn(DirectBTAdapterConstants.CONNECTION_SECURITY_AUTO);
+
+        device().disableEncryptionFallback(); // must be a no-op under strict auto
+        device().connectNative();
+
+        // Strict "auto" NEVER downgrades: it must still request ENC_ONLY, not NONE, so a lock never talks plaintext.
+        verify(nativeDevice()).setConnSecurity(BTSecurityLevel.ENC_ONLY, SMPIOCapability.NO_INPUT_NO_OUTPUT);
+        verify(nativeDevice(), never()).setConnSecurity(BTSecurityLevel.NONE, SMPIOCapability.NO_INPUT_NO_OUTPUT);
+    }
+
+    @Test
     void connectNativeSwallowsNativeThrowAsInternalFailure() {
         device().updateBTDevice(nativeDevice());
         when(nativeDevice().connectLE(anyShort(), anyShort(), anyShort(), anyShort(), anyShort(), anyShort()))
