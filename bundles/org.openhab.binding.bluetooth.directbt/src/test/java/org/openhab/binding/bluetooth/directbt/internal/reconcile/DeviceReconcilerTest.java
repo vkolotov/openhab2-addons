@@ -13,6 +13,7 @@
 package org.openhab.binding.bluetooth.directbt.internal.reconcile;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.openhab.binding.bluetooth.directbt.internal.reconcile.ReconcileTestSupport.*;
 
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -21,8 +22,6 @@ import java.util.function.BooleanSupplier;
 import org.direct_bt.HCIStatusCode;
 import org.eclipse.jdt.annotation.NonNullByDefault;
 import org.junit.jupiter.api.Test;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 /**
  * Regression harness for the {@link DeviceReconciler} — the per-device connection state machine.
@@ -37,8 +36,6 @@ import org.slf4j.LoggerFactory;
  */
 @NonNullByDefault
 class DeviceReconcilerTest {
-
-    private static final long START = 1_000_000L;
 
     // Deadlines mirrored from DeviceReconciler (private there); kept in sync deliberately so a change to the
     // production constant that these tests rely on forces a conscious update here.
@@ -239,8 +236,8 @@ class DeviceReconcilerTest {
 
         MutableClock clock = new MutableClock(START);
         AtomicInteger resets = new AtomicInteger();
-        DeviceReconciler r = new DeviceReconciler(logger(), port, scanOff(), new ResetBudget(logger(), 8000, clock),
-                resets::incrementAndGet, clock);
+        DeviceReconciler r = new DeviceReconciler(logger(), port, scanOff(), budget(clock), resets::incrementAndGet,
+                clock);
 
         r.reconcile(); // -> CONNECTING
         port.flagConnecting = true;
@@ -264,8 +261,8 @@ class DeviceReconcilerTest {
 
         MutableClock clock = new MutableClock(START);
         AtomicInteger resets = new AtomicInteger();
-        DeviceReconciler r = new DeviceReconciler(logger(), port, scanOff(), new ResetBudget(logger(), 8000, clock),
-                resets::incrementAndGet, clock);
+        DeviceReconciler r = new DeviceReconciler(logger(), port, scanOff(), budget(clock), resets::incrementAndGet,
+                clock);
 
         r.reconcile();
 
@@ -362,12 +359,8 @@ class DeviceReconcilerTest {
     // --- helpers ---------------------------------------------------------------------------------
 
     private static DeviceReconciler reconciler(FakeDevicePort port, BooleanSupplier scanIsOff, MutableClock clock) {
-        return new DeviceReconciler(logger(), port, scanIsOff, new ResetBudget(logger(), 8000, clock), () -> {
+        return new DeviceReconciler(logger(), port, scanIsOff, budget(clock), () -> {
         }, clock);
-    }
-
-    private static Logger logger() {
-        return LoggerFactory.getLogger(DeviceReconcilerTest.class);
     }
 
     private static BooleanSupplier scanOff() {

@@ -28,6 +28,13 @@ import org.eclipse.jdt.annotation.NonNullByDefault;
  * project (a controller-side ACL drop that fires no {@code deviceDisconnected} event).</li>
  * </ul>
  * Every corrective action increments a counter so tests can assert exactly what the reconciler did.
+ * <p>
+ * This is a hand-written <em>fake</em> rather than a Mockito mock on purpose: the reconciler mutates this
+ * collaborator through callbacks (e.g. {@code markDisconnected()}) and then re-observes it on the next tick, so
+ * the double must hold real, evolving state. A mock would need a {@code thenAnswer} over a backing state object
+ * for every getter plus a {@code doAnswer} for every mutator — i.e. it would re-implement this fake with more
+ * ceremony. Stateless collaborators ({@code BTAdapter}, {@code BTDevice}) are mocked with Mockito; this stateful
+ * one is a fake. Do not "consistency-refactor" it into a mock.
  *
  * @author Vlad Kolotov - Initial contribution
  */

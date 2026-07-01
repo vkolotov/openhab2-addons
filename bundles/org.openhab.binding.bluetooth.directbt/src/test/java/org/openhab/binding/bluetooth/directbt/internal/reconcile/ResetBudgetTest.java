@@ -13,10 +13,10 @@
 package org.openhab.binding.bluetooth.directbt.internal.reconcile;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.openhab.binding.bluetooth.directbt.internal.reconcile.ReconcileTestSupport.*;
 
 import org.eclipse.jdt.annotation.NonNullByDefault;
 import org.junit.jupiter.api.Test;
-import org.slf4j.LoggerFactory;
 
 /**
  * Regression harness for {@link ResetBudget} — the shared minimum-interval gate for adapter {@code reset()}.
@@ -31,13 +31,12 @@ import org.slf4j.LoggerFactory;
 @NonNullByDefault
 class ResetBudgetTest {
 
-    private static final long START = 1_000_000L;
-    private static final long COOLDOWN_MS = 8000;
+    private static final long COOLDOWN_MS = BUDGET_COOLDOWN_MS;
 
     @Test
     void secondResetWithinCooldownIsDeniedEvenFromAnotherRequester() {
         MutableClock clock = new MutableClock(START);
-        ResetBudget budget = new ResetBudget(LoggerFactory.getLogger(ResetBudgetTest.class), COOLDOWN_MS, clock);
+        ResetBudget budget = new ResetBudget(logger(), COOLDOWN_MS, clock);
 
         assertTrue(budget.tryReset("adapter"), "first reset is permitted");
         assertFalse(budget.tryReset("device"), "a second reset within the cooldown (the storm) is denied");
@@ -47,7 +46,7 @@ class ResetBudgetTest {
     @Test
     void resetPermittedAgainAfterCooldownElapses() {
         MutableClock clock = new MutableClock(START);
-        ResetBudget budget = new ResetBudget(LoggerFactory.getLogger(ResetBudgetTest.class), COOLDOWN_MS, clock);
+        ResetBudget budget = new ResetBudget(logger(), COOLDOWN_MS, clock);
 
         assertTrue(budget.tryReset("adapter"));
 

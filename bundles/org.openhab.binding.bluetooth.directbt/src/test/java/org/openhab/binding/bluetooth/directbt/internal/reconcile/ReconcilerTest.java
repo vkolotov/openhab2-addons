@@ -13,10 +13,10 @@
 package org.openhab.binding.bluetooth.directbt.internal.reconcile;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.openhab.binding.bluetooth.directbt.internal.reconcile.ReconcileTestSupport.*;
 
 import org.eclipse.jdt.annotation.NonNullByDefault;
 import org.junit.jupiter.api.Test;
-import org.slf4j.LoggerFactory;
 
 /**
  * Regression harness for the reusable {@link Reconciler} base — the observe/inSync/act loop with backoff,
@@ -32,8 +32,6 @@ import org.slf4j.LoggerFactory;
 @NonNullByDefault
 class ReconcilerTest {
 
-    private static final long START = 1_000_000L;
-
     /** A minimal reconciler over a mutable boolean: desired = TRUE (in sync once observed == true). */
     private static final class TestReconciler extends Reconciler<Boolean, Boolean> {
         boolean observedValue;
@@ -43,7 +41,7 @@ class ReconcilerTest {
         long escalateAfterMs = Long.MAX_VALUE;
 
         TestReconciler(MutableClock clock) {
-            super("test", LoggerFactory.getLogger(ReconcilerTest.class), Boolean.TRUE, clock);
+            super("test", logger(), Boolean.TRUE, clock);
         }
 
         @Override

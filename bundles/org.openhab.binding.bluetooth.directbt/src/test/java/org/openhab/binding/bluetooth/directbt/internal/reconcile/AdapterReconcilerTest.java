@@ -14,6 +14,7 @@ package org.openhab.binding.bluetooth.directbt.internal.reconcile;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
+import static org.openhab.binding.bluetooth.directbt.internal.reconcile.ReconcileTestSupport.*;
 
 import org.direct_bt.BTAdapter;
 import org.direct_bt.BTMode;
@@ -23,8 +24,6 @@ import org.eclipse.jdt.annotation.NonNullByDefault;
 import org.eclipse.jdt.annotation.Nullable;
 import org.junit.jupiter.api.Test;
 import org.mockito.InOrder;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 /**
  * Regression harness for the {@link AdapterReconciler} — the adapter power + scan reconciler. These lock down
@@ -40,8 +39,6 @@ import org.slf4j.LoggerFactory;
  */
 @NonNullByDefault
 class AdapterReconcilerTest {
-
-    private static final long START = 1_000_000L;
 
     // ---------------------------------------------------------------------------------------------
     // inSync: the adapter is only in sync when present, valid, initialized AND powered (when powered is
@@ -243,13 +240,5 @@ class AdapterReconcilerTest {
 
     private static AdapterReconciler reconciler(@Nullable BTAdapter adapter, MutableClock clock, ResetBudget budget) {
         return new AdapterReconciler(logger(), () -> adapter, budget, clock);
-    }
-
-    private static ResetBudget budget(MutableClock clock) {
-        return new ResetBudget(logger(), 8000, clock);
-    }
-
-    private static Logger logger() {
-        return LoggerFactory.getLogger(AdapterReconcilerTest.class);
     }
 }
