@@ -189,19 +189,19 @@ class DirectBTBluetoothDeviceTest {
     }
 
     @Test
-    void connectNativeAutoNegotiatesJustWorksWhenDeviceOptsIn() {
+    void connectNativeRequestsJustWorksEncryptionWhenDeviceOptsIn() {
         device().updateBTDevice(nativeDevice());
         when(nativeDevice().connectLE(anyShort(), anyShort(), anyShort(), anyShort(), anyShort(), anyShort()))
                 .thenReturn(HCIStatusCode.SUCCESS);
-        // This device is configured connectionSecurity=auto -> Just-Works auto-negotiation (NO_INPUT_NO_OUTPUT).
-        // Open devices settle on NONE, encryption-required ones negotiate up; the reconciler is pairing-aware so the
-        // multi-connect churn no longer flaps. connectLE uses the field-tested dead-stable profile.
+        // connectionSecurity=auto -> request Just-Works encryption via the EXPLICIT setConnSecurity(ENC_ONLY, ...).
+        // NOT setConnSecurityAuto: that is a no-op in the adapter's Master (central) role, so the central-driven
+        // explicit level is what actually takes. ENC_ONLY + NO_INPUT_NO_OUTPUT = encrypted, unauthenticated.
         when(bridge().getDeviceConnectionSecurity(any())).thenReturn(DirectBTAdapterConstants.CONNECTION_SECURITY_AUTO);
 
         assertEquals(HCIStatusCode.SUCCESS, device().connectNative());
 
-        verify(nativeDevice()).setConnSecurityAuto(SMPIOCapability.NO_INPUT_NO_OUTPUT);
-        verify(nativeDevice(), never()).setConnSecurity(any(), any());
+        verify(nativeDevice()).setConnSecurity(BTSecurityLevel.ENC_ONLY, SMPIOCapability.NO_INPUT_NO_OUTPUT);
+        verify(nativeDevice(), never()).setConnSecurityAuto(any());
         verify(nativeDevice()).connectLE(anyShort(), anyShort(), anyShort(), anyShort(), anyShort(), anyShort());
     }
 
