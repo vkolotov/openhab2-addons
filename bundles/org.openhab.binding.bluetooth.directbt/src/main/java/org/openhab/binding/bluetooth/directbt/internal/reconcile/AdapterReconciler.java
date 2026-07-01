@@ -121,18 +121,23 @@ public class AdapterReconciler extends Reconciler<Boolean, AdapterReconciler.Obs
             return;
         }
         if (!o.initialized) {
-            HCIStatusCode rc = a.initialize(BTMode.DUAL, false);
+            // Power on as part of initialize (DUAL, wantPowered): initialize(...,false) then a separate power
+            // step stalled bring-up on some CSR controllers (see DirectBTBridgeHandler.bringUpAdapter).
+            HCIStatusCode rc = a.initialize(BTMode.DUAL, wantPowered);
             logger.debug("[reconcile:adapter] initialize -> {} (powered={} initialized={})", rc, a.isPowered(),
                     a.isInitialized());
             if (rc == HCIStatusCode.SUCCESS && wantPowered && !a.isPowered()) {
                 a.setPowered(true);
             }
         } else if (!o.powered) {
-            HCIStatusCode rc = a.reset();
-            logger.debug("[reconcile:adapter] reset -> {} (powered={} initialized={})", rc, a.isPowered(),
-                    a.isInitialized());
-            if (rc == HCIStatusCode.SUCCESS && !a.isPowered()) {
-                a.setPowered(true);
+            // Initialized but off: try setPowered() first; only reset() if that fails (a blind reset can wedge CSR).
+            if (!a.setPowered(true)) {
+                HCIStatusCode rc = a.reset();
+                logger.debug("[reconcile:adapter] reset -> {} (powered={} initialized={})", rc, a.isPowered(),
+                        a.isInitialized());
+                if (rc == HCIStatusCode.SUCCESS && !a.isPowered()) {
+                    a.setPowered(true);
+                }
             }
         }
     }

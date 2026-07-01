@@ -403,7 +403,11 @@ public class DirectBTBridgeHandler extends AbstractBluetoothBridgeHandler<Direct
             // initialized & powered. Calling addStatusListener() on a freshly-replayed, not-yet-initialized
             // adapter crashes the native layer with a null-reference (jaulib helper_jni.hpp:512).
             if (!added.isInitialized()) {
-                HCIStatusCode rc = added.initialize(BTMode.DUAL, false);
+                // Power the adapter ON as part of initialize (BTMode.DUAL, true). Splitting init from power
+                // (initialize(...,false) then a separate reset()) stalled bring-up on some CSR controllers
+                // (observed on the CSR8510 A10 / bcdDevice 88.91 on 212: initialize left powered=false and the
+                // follow-up added.reset() hung, so the reconciler never started and the bridge sat UNKNOWN forever).
+                HCIStatusCode rc = added.initialize(BTMode.DUAL, true);
                 logger.debug("Direct-BT adapter {} initialize: {} (powered={} initialized={})", wanted, rc,
                         added.isPowered(), added.isInitialized());
                 if (rc != HCIStatusCode.SUCCESS) {
@@ -413,16 +417,21 @@ public class DirectBTBridgeHandler extends AbstractBluetoothBridgeHandler<Direct
                 }
             }
             if (!added.isPowered()) {
-                HCIStatusCode rc = added.reset();
-                logger.debug("Direct-BT adapter {} reset: {} (powered={} initialized={})", wanted, rc,
-                        added.isPowered(), added.isInitialized());
-                if (rc == HCIStatusCode.SUCCESS && !added.isPowered()) {
-                    added.setPowered(true);
-                }
-                if (rc != HCIStatusCode.SUCCESS) {
-                    updateStatus(ThingStatus.OFFLINE, ThingStatusDetail.COMMUNICATION_ERROR,
-                            "Adapter power-up failed: " + rc + " (is bluetoothd disabled for this adapter?)");
-                    return;
+                // Already initialized but off (or initialize did not power it): try setPowered() first, and only
+                // fall back to a full reset() if that does not take. Avoid resetting unconditionally — a blind
+                // reset() can hang/wedge some CSR controllers.
+                if (!added.setPowered(true)) {
+                    HCIStatusCode rc = added.reset();
+                    logger.debug("Direct-BT adapter {} reset: {} (powered={} initialized={})", wanted, rc,
+                            added.isPowered(), added.isInitialized());
+                    if (rc == HCIStatusCode.SUCCESS && !added.isPowered()) {
+                        added.setPowered(true);
+                    }
+                    if (rc != HCIStatusCode.SUCCESS) {
+                        updateStatus(ThingStatus.OFFLINE, ThingStatusDetail.COMMUNICATION_ERROR,
+                                "Adapter power-up failed: " + rc + " (is bluetoothd disabled for this adapter?)");
+                        return;
+                    }
                 }
             }
             // Power-on may be asynchronous; wait (bounded) for the controller to report POWERED before
