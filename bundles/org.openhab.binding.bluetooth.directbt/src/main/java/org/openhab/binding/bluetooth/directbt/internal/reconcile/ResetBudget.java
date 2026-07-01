@@ -12,6 +12,7 @@
  */
 package org.openhab.binding.bluetooth.directbt.internal.reconcile;
 
+import java.time.Clock;
 import java.util.concurrent.TimeUnit;
 
 import org.eclipse.jdt.annotation.NonNullByDefault;
@@ -32,6 +33,7 @@ public class ResetBudget {
 
     private final Logger logger;
     private final long minIntervalMs;
+    private final Clock clock;
     private long nextResetNotBefore;
 
     public ResetBudget(Logger logger) {
@@ -39,13 +41,18 @@ public class ResetBudget {
     }
 
     public ResetBudget(Logger logger, long minIntervalMs) {
+        this(logger, minIntervalMs, Clock.systemUTC());
+    }
+
+    public ResetBudget(Logger logger, long minIntervalMs, Clock clock) {
         this.logger = logger;
         this.minIntervalMs = minIntervalMs;
+        this.clock = clock;
     }
 
     /** @return true if a reset is permitted now (and consumes the budget); false if still in cooldown. */
     public synchronized boolean tryReset(String requester) {
-        long now = System.currentTimeMillis();
+        long now = clock.millis();
         if (now < nextResetNotBefore) {
             logger.debug("[reconcile] reset requested by {} but rate-limited ({}ms left)", requester,
                     nextResetNotBefore - now);

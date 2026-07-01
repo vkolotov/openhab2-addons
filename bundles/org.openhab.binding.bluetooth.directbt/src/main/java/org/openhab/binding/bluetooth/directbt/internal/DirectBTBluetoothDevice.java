@@ -12,7 +12,6 @@
  */
 package org.openhab.binding.bluetooth.directbt.internal;
 
-import java.lang.reflect.Field;
 import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
@@ -210,18 +209,11 @@ public class DirectBTBluetoothDevice extends BaseBluetoothDevice implements Devi
     }
 
     /**
-     * Reset the inherited GATT model. Some 5.2.0-SNAPSHOT bluetooth-core artifacts do not expose the newer
-     * clearServices() helper, so clear the protected map directly and reset the private discovery latch reflectively.
+     * Reset the inherited GATT model: clear the cached service list and mark service discovery incomplete, so the
+     * next connect re-fires SERVICES_DISCOVERED.
      */
     private void resetGattModel() {
-        supportedServices.clear();
-        try {
-            Field servicesDiscovered = BaseBluetoothDevice.class.getDeclaredField("servicesDiscovered");
-            servicesDiscovered.setAccessible(true);
-            servicesDiscovered.setBoolean(this, false);
-        } catch (ReflectiveOperationException | RuntimeException e) {
-            logger.debug("Unable to reset servicesDiscovered latch for {}", address, e);
-        }
+        clearServices();
     }
 
     // --- DevicePort: the operations the DeviceReconciler drives (all polled native truth / idempotent) ----

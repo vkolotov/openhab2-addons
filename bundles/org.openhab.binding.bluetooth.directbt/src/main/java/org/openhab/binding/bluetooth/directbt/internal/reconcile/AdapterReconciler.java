@@ -12,6 +12,7 @@
  */
 package org.openhab.binding.bluetooth.directbt.internal.reconcile;
 
+import java.time.Clock;
 import java.util.function.Supplier;
 
 import org.direct_bt.BTAdapter;
@@ -84,7 +85,12 @@ public class AdapterReconciler extends Reconciler<Boolean, AdapterReconciler.Obs
     private long scanOutOfSyncSince;
 
     public AdapterReconciler(Logger logger, Supplier<@Nullable BTAdapter> adapterSupplier, ResetBudget resetBudget) {
-        super("adapter", logger, Boolean.TRUE); // desired = powered
+        this(logger, adapterSupplier, resetBudget, Clock.systemUTC());
+    }
+
+    public AdapterReconciler(Logger logger, Supplier<@Nullable BTAdapter> adapterSupplier, ResetBudget resetBudget,
+            Clock clock) {
+        super("adapter", logger, Boolean.TRUE, clock); // desired = powered
         this.adapterSupplier = adapterSupplier;
         this.resetBudget = resetBudget;
     }
@@ -178,7 +184,7 @@ public class AdapterReconciler extends Reconciler<Boolean, AdapterReconciler.Obs
      */
     public void reconcileScan(boolean scanWanted) {
         BTAdapter a = adapterSupplier.get();
-        long now = System.currentTimeMillis();
+        long now = clock.millis();
         if (a == null) {
             scanDiscovering = false;
             scanType = ScanType.NONE;

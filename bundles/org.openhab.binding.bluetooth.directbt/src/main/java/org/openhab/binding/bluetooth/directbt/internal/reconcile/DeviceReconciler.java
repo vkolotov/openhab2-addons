@@ -12,6 +12,7 @@
  */
 package org.openhab.binding.bluetooth.directbt.internal.reconcile;
 
+import java.time.Clock;
 import java.util.function.BooleanSupplier;
 
 import org.direct_bt.HCIStatusCode;
@@ -84,7 +85,12 @@ public class DeviceReconciler extends Reconciler<Boolean, DeviceReconciler.Obser
      */
     public DeviceReconciler(Logger logger, DevicePort port, BooleanSupplier scanIsOff, ResetBudget resetBudget,
             Runnable requestAdapterReset) {
-        super("dev:" + port.id(), logger, Boolean.FALSE);
+        this(logger, port, scanIsOff, resetBudget, requestAdapterReset, Clock.systemUTC());
+    }
+
+    public DeviceReconciler(Logger logger, DevicePort port, BooleanSupplier scanIsOff, ResetBudget resetBudget,
+            Runnable requestAdapterReset, Clock clock) {
+        super("dev:" + port.id(), logger, Boolean.FALSE, clock);
         this.port = port;
         this.scanIsOff = scanIsOff;
         this.resetBudget = resetBudget;
@@ -124,7 +130,7 @@ public class DeviceReconciler extends Reconciler<Boolean, DeviceReconciler.Obser
 
     @Override
     protected void act(Boolean unusedDesired, Observed o) {
-        long now = System.currentTimeMillis();
+        long now = clock.millis();
 
         // (5) STATE-FLAG SYNC — always reconcile our flag to native truth first.
         if (o.hasNative && o.nativeConnected && !o.flagConnected) {

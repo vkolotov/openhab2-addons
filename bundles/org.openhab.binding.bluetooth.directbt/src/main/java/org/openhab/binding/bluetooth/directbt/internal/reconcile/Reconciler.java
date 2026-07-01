@@ -12,6 +12,8 @@
  */
 package org.openhab.binding.bluetooth.directbt.internal.reconcile;
 
+import java.time.Clock;
+
 import org.eclipse.jdt.annotation.NonNullByDefault;
 import org.eclipse.jdt.annotation.Nullable;
 import org.slf4j.Logger;
@@ -48,6 +50,8 @@ public abstract class Reconciler<D, O> {
 
     protected final String name;
     protected final Logger logger;
+    /** Time source; {@link Clock#systemUTC()} in production, a mutable clock in tests. */
+    protected final Clock clock;
 
     /** Intent. Volatile because event/caller threads set it while the driver thread reads it. */
     protected volatile D desired;
@@ -56,17 +60,24 @@ public abstract class Reconciler<D, O> {
     protected @Nullable O observed;
 
     private boolean paused;
+    private long pausedAt;
 
-    // Bookkeeping (all in epoch millis unless noted). Frozen while paused.
+    // Bookkeeping (all in epoch millis unless noted). Advanced by the paused duration on unpause so time spent
+    // paused does not age these deadlines (see pause/unpause).
     private long inSyncSince;
     private long outOfSyncSince;
     private long nextActNotBefore;
     private int consecutiveActs;
 
     protected Reconciler(String name, Logger logger, D initialDesired) {
+        this(name, logger, initialDesired, Clock.systemUTC());
+    }
+
+    protected Reconciler(String name, Logger logger, D initialDesired, Clock clock) {
         this.name = name;
         this.logger = logger;
         this.desired = initialDesired;
+        this.clock = clock;
     }
 
     // --- abstract contract -----------------------------------------------------------------------
@@ -101,7 +112,7 @@ public abstract class Reconciler<D, O> {
         }
         O obs = observe();
         this.observed = obs;
-        long now = System.currentTimeMillis();
+        long now = clock.millis();
         D des = desired;
         if (inSync(des, obs)) {
             if (inSyncSince == 0) {
@@ -144,15 +155,34 @@ public abstract class Reconciler<D, O> {
     public final void pause() {
         if (!paused) {
             paused = true;
+            pausedAt = clock.millis();
             logger.debug("[reconcile:{}] paused (prerequisite not in sync)", name);
         }
     }
 
-    /** Resume ticking; timers resume from where they were frozen (no catch-up). */
+    /**
+     * Resume ticking. The bookkeeping timestamps are epoch-based, so to make elapsed-while-paused "not count"
+     * (the load-bearing freeze semantics — a long prerequisite outage must NOT age this entity toward its
+     * escalation deadline and trigger a reset storm on recovery) we shift every live deadline forward by the
+     * paused duration. Effect: on the first tick after unpause, {@code now - outOfSyncSince} equals what it was
+     * at pause time, so escalation/backoff resume exactly where they froze.
+     */
     public final void unpause() {
         if (paused) {
             paused = false;
-            logger.debug("[reconcile:{}] unpaused", name);
+            long pausedFor = clock.millis() - pausedAt;
+            if (pausedFor > 0) {
+                if (inSyncSince != 0) {
+                    inSyncSince += pausedFor;
+                }
+                if (outOfSyncSince != 0) {
+                    outOfSyncSince += pausedFor;
+                }
+                if (nextActNotBefore != 0) {
+                    nextActNotBefore += pausedFor;
+                }
+            }
+            logger.debug("[reconcile:{}] unpaused (frozen {}ms)", name, pausedFor);
         }
     }
 

@@ -641,9 +641,10 @@ public class DirectBTBridgeHandler extends AbstractBluetoothBridgeHandler<Direct
             Thread.currentThread().interrupt();
         }
         if (worker.isAlive()) {
-            logger.warn("Direct-BT dispose: {} did not finish within {}ms; abandoning (best-effort). The native "
-                    + "disconnect is likely blocked on a wedged controller; the JVM/OS will reclaim it.", what,
-                    timeoutMs);
+            logger.warn(
+                    "Direct-BT dispose: {} did not finish within {}ms; abandoning (best-effort). The native "
+                            + "disconnect is likely blocked on a wedged controller; the JVM/OS will reclaim it.",
+                    what, timeoutMs);
         }
     }
 }
