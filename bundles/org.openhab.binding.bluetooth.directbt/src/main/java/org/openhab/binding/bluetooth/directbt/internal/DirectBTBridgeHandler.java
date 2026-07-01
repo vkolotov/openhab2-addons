@@ -619,10 +619,10 @@ public class DirectBTBridgeHandler extends AbstractBluetoothBridgeHandler<Direct
 
     /**
      * The per-device connection security mode, read from the device Thing's {@code connectionSecurity} config
-     * (mirrors {@link #isDeviceEnabled}). {@code "none"} (the default) keeps the proven unbonded profile;
-     * {@code "auto"} enables Just-Works auto-negotiation for that one device. This is per-device rather than
-     * per-bridge because a blanket auto-security wedges any device that carries a stale/keyless bond, so opting a
-     * single device in is the safe granularity. Falls back to {@code "none"} for an unknown/handleless device.
+     * (mirrors {@link #isDeviceEnabled}). One of {@code none} / {@code encrypted} / {@code encrypted-with-fallback}
+     * / {@code pin} (see {@link DirectBTAdapterConstants}). This is per-device rather than per-bridge so an
+     * encryption request is only ever made where it is wanted. Falls back to {@code none} for an
+     * unknown/handleless device.
      */
     String getDeviceConnectionSecurity(BluetoothAddress address) {
         Thing childThing = findChildThing(address);

@@ -43,14 +43,14 @@ public class DirectBTAdapterConstants {
      * Just-Works LE encryption, STRICT: request encryption and keep retrying if it does not hold; never downgrade.
      * Use for devices that must never talk unencrypted (e.g. locks). Opt-in per device.
      */
-    public static final String CONNECTION_SECURITY_AUTO = "auto";
+    public static final String CONNECTION_SECURITY_ENCRYPTED = "encrypted";
 
     /**
      * Just-Works LE encryption, RESILIENT: request encryption, but if the device pairs and then cannot reconnect
      * (the identity-flip / resolving-list gap), automatically fall back to an unencrypted connection so it stays
      * usable. Use for devices where availability matters more than confidentiality.
      */
-    public static final String CONNECTION_SECURITY_ENCRYPTED_PREFERRED = "encrypted-preferred";
+    public static final String CONNECTION_SECURITY_ENCRYPTED_WITH_FALLBACK = "encrypted-with-fallback";
 
     /**
      * Authenticated (MITM-protected) LE encryption via Passkey Entry: the peripheral displays / has a fixed PIN,

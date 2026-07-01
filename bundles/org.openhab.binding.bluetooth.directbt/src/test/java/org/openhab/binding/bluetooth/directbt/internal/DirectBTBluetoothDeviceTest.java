@@ -199,7 +199,8 @@ class DirectBTBluetoothDeviceTest {
         // connectionSecurity=auto -> request Just-Works encryption via the EXPLICIT setConnSecurity(ENC_ONLY, ...).
         // NOT setConnSecurityAuto: that is a no-op in the adapter's Master (central) role, so the central-driven
         // explicit level is what actually takes. ENC_ONLY + NO_INPUT_NO_OUTPUT = encrypted, unauthenticated.
-        when(bridge().getDeviceConnectionSecurity(any())).thenReturn(DirectBTAdapterConstants.CONNECTION_SECURITY_AUTO);
+        when(bridge().getDeviceConnectionSecurity(any()))
+                .thenReturn(DirectBTAdapterConstants.CONNECTION_SECURITY_ENCRYPTED);
 
         assertEquals(HCIStatusCode.SUCCESS, device().connectNative());
 
@@ -215,7 +216,7 @@ class DirectBTBluetoothDeviceTest {
                 .thenReturn(HCIStatusCode.SUCCESS);
         // "encrypted-preferred" requests the same ENC_ONLY level as "auto"; they differ only in bailout policy.
         when(bridge().getDeviceConnectionSecurity(any()))
-                .thenReturn(DirectBTAdapterConstants.CONNECTION_SECURITY_ENCRYPTED_PREFERRED);
+                .thenReturn(DirectBTAdapterConstants.CONNECTION_SECURITY_ENCRYPTED_WITH_FALLBACK);
 
         assertEquals(HCIStatusCode.SUCCESS, device().connectNative());
 
@@ -230,7 +231,7 @@ class DirectBTBluetoothDeviceTest {
         when(nativeDevice().connectLE(anyShort(), anyShort(), anyShort(), anyShort(), anyShort(), anyShort()))
                 .thenReturn(HCIStatusCode.SUCCESS);
         when(bridge().getDeviceConnectionSecurity(any()))
-                .thenReturn(DirectBTAdapterConstants.CONNECTION_SECURITY_ENCRYPTED_PREFERRED);
+                .thenReturn(DirectBTAdapterConstants.CONNECTION_SECURITY_ENCRYPTED_WITH_FALLBACK);
 
         device().disableEncryptionFallback(); // the reconciler's safe bailout
         device().connectNative();
@@ -245,7 +246,8 @@ class DirectBTBluetoothDeviceTest {
         device().updateBTDevice(nativeDevice());
         when(nativeDevice().connectLE(anyShort(), anyShort(), anyShort(), anyShort(), anyShort(), anyShort()))
                 .thenReturn(HCIStatusCode.SUCCESS);
-        when(bridge().getDeviceConnectionSecurity(any())).thenReturn(DirectBTAdapterConstants.CONNECTION_SECURITY_AUTO);
+        when(bridge().getDeviceConnectionSecurity(any()))
+                .thenReturn(DirectBTAdapterConstants.CONNECTION_SECURITY_ENCRYPTED);
 
         device().disableEncryptionFallback(); // must be a no-op under strict auto
         device().connectNative();
@@ -313,8 +315,8 @@ class DirectBTBluetoothDeviceTest {
         device().updateBTDevice(nativeDevice());
         when(nativeDevice().getPairingMode()).thenReturn(PairingMode.JUST_WORKS);
         for (String mode : List.of(DirectBTAdapterConstants.CONNECTION_SECURITY_NONE,
-                DirectBTAdapterConstants.CONNECTION_SECURITY_AUTO,
-                DirectBTAdapterConstants.CONNECTION_SECURITY_ENCRYPTED_PREFERRED)) {
+                DirectBTAdapterConstants.CONNECTION_SECURITY_ENCRYPTED,
+                DirectBTAdapterConstants.CONNECTION_SECURITY_ENCRYPTED_WITH_FALLBACK)) {
             when(bridge().getDeviceConnectionSecurity(any())).thenReturn(mode);
             assertFalse(device().securityRequirementUnmet(), mode + " has no authenticated requirement to enforce");
         }

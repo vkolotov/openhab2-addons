@@ -32,27 +32,35 @@
 			</parameter>
 			<parameter name="connectionSecurity" type="text">
 				<label>Connection Security</label>
-				<description>LE connection security for this device. "none" (default) connects unbonded with no
-					encryption — the
-					proven, dead-stable profile suitable for open sensors. "auto" requests Just-Works
-					encryption (no passkey/MITM) and
-					keeps it STRICT: it never downgrades, so use it for devices that must
-					never talk unencrypted (e.g. locks).
-					"encrypted-preferred" also requests encryption but automatically
-					falls back to an unencrypted connection if the
-					device pairs and then cannot reconnect (an
-					address-resolution limitation), so availability is preserved for devices
-					where that matters more than
-					confidentiality. Leave on "none" unless a device actually rejects reads without
-					encryption. NOTE: the
-					encrypted modes are EXPERIMENTAL. Currently honoured by the Direct-BT adapter; other adapters
-					ignore
-					it.</description>
+				<description>How the connection to this device is secured. The encrypted/PIN modes are EXPERIMENTAL and
+					currently
+					honoured only by the Direct-BT adapter (other adapters ignore this). See each option:
+					• None: unencrypted, unbonded
+					— the proven, dead-stable default, suitable for open sensors.
+					• Encrypted: request Just-Works LE encryption (no
+					passkey/MITM). Strict — it never downgrades to
+					unencrypted; if encryption cannot be established it keeps retrying.
+					Use for devices that must never
+					talk unencrypted.
+					• Encrypted with fallback: request encryption, but automatically
+					fall back to an unencrypted
+					connection if the device pairs and then repeatedly fails to reconnect. This happens
+					because of a
+					current limitation — after pairing, some devices switch to a resolvable/identity address that the
+					Bluetooth stack cannot yet resolve on reconnect (bonded reconnect is not fully implemented), so the
+					link would
+					otherwise loop forever. The fallback keeps the device usable; choose this when availability
+					matters more than
+					guaranteed confidentiality.
+					• PIN: authenticated (MITM-protected) pairing using a fixed passkey (set "Passkey (PIN)"
+					below). Fails
+					closed — if the device cannot do authenticated pairing it does NOT connect, never downgrading to a
+					weaker link.</description>
 				<options>
-					<option value="none">None (unbonded, no encryption)</option>
-					<option value="auto">Auto (Just-Works encryption, strict — experimental)</option>
-					<option value="encrypted-preferred">Encrypted preferred (fall back to unencrypted — experimental)</option>
-					<option value="pin">PIN (authenticated pairing with passkey; fails if not authenticated — experimental)</option>
+					<option value="none">None</option>
+					<option value="encrypted">Encrypted</option>
+					<option value="encrypted-with-fallback">Encrypted with fallback</option>
+					<option value="pin">PIN</option>
 				</options>
 				<limitToOptions>true</limitToOptions>
 				<advanced>true</advanced>
@@ -60,11 +68,11 @@
 			</parameter>
 			<parameter name="passkey" type="integer" min="0" max="999999">
 				<label>Passkey (PIN)</label>
-				<description>The 6-digit passkey/PIN used when Connection Security is "pin" (authenticated Passkey Entry
-					pairing).
-					Enter the fixed PIN the device expects (0–999999). Ignored for the other security modes. Note:
-					this is stored in the
-					Thing configuration; treat it as a secret.</description>
+				<description>The fixed passkey/PIN (0–999999) supplied for authenticated pairing when Connection Security
+					is "PIN".
+					Enter the PIN the device expects. Ignored for the other security modes. Note: this is stored in
+					the Thing
+					configuration; treat it as a secret.</description>
 				<advanced>true</advanced>
 			</parameter>
 		</config-description>

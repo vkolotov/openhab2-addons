@@ -344,28 +344,20 @@ public class DirectBTBluetoothDevice extends BaseBluetoothDevice implements Devi
             // redundant: connect succeeds first-try and holds dead-stable (45/45 reads, 0 disconnects) without it,
             // and the reconciler recovers from the CSR COMMAND_DISALLOWED/INTERNAL_TIMEOUT quirk on its own.
             //
-            // Connection security is chosen PER DEVICE from the device Thing's connectionSecurity config
-            // (default "none" = the proven unbonded profile). "auto" requests Just-Works encryption for the
-            // specific devices that need it. Per-device rather than a blanket bridge setting so an encryption
-            // request is only ever made where it is wanted.
-            //
-            // We use the EXPLICIT setConnSecurity(ENC_ONLY, NO_INPUT_NO_OUTPUT) here, NOT setConnSecurityAuto:
-            // the adapter runs in Master (central) role, and setConnSecurityAuto is a NO-OP for a master
-            // (BTDevice::setConnSecurityAuto returns false when BTRole::Master -- verified in direct_bt source and
-            // live: with "auto" the trace showed sec[... auto UNSET, pairing NONE ...], i.e. NO security was
-            // requested from our side, so any pairing was peripheral-initiated and half-negotiated, which then
-            // failed to survive reconnect and looped). setConnSecurity with an explicit level DOES take in master
-            // role and makes Direct-BT drive the encryption/pairing request from the central side. ENC_ONLY +
-            // NO_INPUT_NO_OUTPUT = Just-Works (encrypted, unauthenticated, no passkey/MITM). Authenticated pairing
-            // + persistent bonds are a separate effort. See docs/directbt-encryption-pairing-findings.md.
-            // Security level per mode:
-            // - "auto"/"encrypted-preferred": Just Works -> ENC_ONLY + NO_INPUT_NO_OUTPUT (encrypted,
-            // unauthenticated). "auto" is STRICT (never downgrade); "encrypted-preferred" permits the
+            // Connection security is chosen PER DEVICE from the device Thing's connectionSecurity config, so an
+            // encryption request is only ever made where it is wanted. We always use the EXPLICIT
+            // setConnSecurity(level, iocap), NOT setConnSecurityAuto: the adapter runs in Master (central) role and
+            // setConnSecurityAuto is a NO-OP for a master (BTDevice::setConnSecurityAuto returns false when
+            // BTRole::Master -- verified in direct_bt source + live: it left sec[... auto UNSET, pairing NONE ...],
+            // i.e. no security requested from our side). setConnSecurity with an explicit level DOES take in master
+            // role and drives the request from the central side. Level per mode:
+            // - "encrypted" / "encrypted-with-fallback": Just Works -> ENC_ONLY + NO_INPUT_NO_OUTPUT (encrypted,
+            // unauthenticated). "encrypted" is STRICT (never downgrade); "encrypted-with-fallback" permits the
             // identity-flip safe-bailout to latch us down to NONE (encryptionFallbackToNone).
-            // - "pin": Passkey Entry -> ENC_AUTH + KEYBOARD_ONLY (encrypted AND MITM-authenticated). The device
-            // asks for the key (SMP PASSKEY_EXPECTED) and the bridge supplies the configured passkey; the
-            // KEYBOARD_ONLY IO cap is what tells the peer we input the key it displays/holds.
-            // - "none" (or after a bailout): NONE.
+            // - "pin": Passkey Entry -> ENC_AUTH + KEYBOARD_ONLY (encrypted AND MITM-authenticated). The device asks
+            // for the key (SMP PASSKEY_EXPECTED) and the bridge supplies the configured passkey; KEYBOARD_ONLY tells
+            // the peer we input the key it holds. Enforced fail-closed via securityRequirementUnmet().
+            // - "none" (default, or after a bailout): NONE. See docs/directbt-encryption-pairing-findings.md.
             String securityMode = bridge.getDeviceConnectionSecurity(address);
             if (DirectBTAdapterConstants.CONNECTION_SECURITY_PIN.equalsIgnoreCase(securityMode)) {
                 dev.setConnSecurity(BTSecurityLevel.ENC_AUTH, SMPIOCapability.KEYBOARD_ONLY);
@@ -448,9 +440,9 @@ public class DirectBTBluetoothDevice extends BaseBluetoothDevice implements Devi
 
     @Override
     public void disableEncryptionFallback() {
-        // Only "encrypted-preferred" permits the downgrade. Under the STRICT "auto" mode a device that must never
-        // talk unencrypted (e.g. a lock) keeps retrying instead — we refuse to silently drop its encryption.
-        if (!DirectBTAdapterConstants.CONNECTION_SECURITY_ENCRYPTED_PREFERRED
+        // Only "encrypted-with-fallback" permits the downgrade. Under the STRICT "encrypted" mode a device that
+        // must never talk unencrypted (e.g. a lock) keeps retrying instead — we refuse to silently drop encryption.
+        if (!DirectBTAdapterConstants.CONNECTION_SECURITY_ENCRYPTED_WITH_FALLBACK
                 .equalsIgnoreCase(bridge.getDeviceConnectionSecurity(address))) {
             return;
         }
@@ -458,15 +450,15 @@ public class DirectBTBluetoothDevice extends BaseBluetoothDevice implements Devi
             encryptionFallbackToNone = true;
             logger.warn("Encrypted reconnect to {} keeps failing (address-identity resolution gap); falling back to an "
                     + "unencrypted connection for this device so it stays usable. Set connectionSecurity=none "
-                    + "to silence this, or =auto to keep retrying encryption; see "
+                    + "to silence this, or =encrypted to keep retrying encryption; see "
                     + "docs/directbt-encryption-pairing-findings.md.", address);
         }
     }
 
-    /** @return true iff the given connectionSecurity mode requests LE encryption (either strict or preferred). */
+    /** @return true iff the given connectionSecurity mode requests Just-Works LE encryption (with or w/o fallback). */
     private static boolean wantsEncryption(String securityMode) {
-        return DirectBTAdapterConstants.CONNECTION_SECURITY_AUTO.equalsIgnoreCase(securityMode)
-                || DirectBTAdapterConstants.CONNECTION_SECURITY_ENCRYPTED_PREFERRED.equalsIgnoreCase(securityMode);
+        return DirectBTAdapterConstants.CONNECTION_SECURITY_ENCRYPTED.equalsIgnoreCase(securityMode)
+                || DirectBTAdapterConstants.CONNECTION_SECURITY_ENCRYPTED_WITH_FALLBACK.equalsIgnoreCase(securityMode);
     }
 
     @Override
