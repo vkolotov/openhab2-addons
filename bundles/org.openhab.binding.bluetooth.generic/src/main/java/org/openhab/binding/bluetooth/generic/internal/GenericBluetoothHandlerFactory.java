@@ -20,12 +20,14 @@ import org.eclipse.jdt.annotation.NonNullByDefault;
 import org.eclipse.jdt.annotation.Nullable;
 import org.openhab.bluetooth.gattparser.BluetoothGattParserFactory;
 import org.openhab.core.OpenHAB;
+import org.openhab.core.config.core.ConfigurableService;
 import org.openhab.core.thing.Thing;
 import org.openhab.core.thing.ThingTypeUID;
 import org.openhab.core.thing.binding.BaseThingHandlerFactory;
 import org.openhab.core.thing.binding.ThingHandler;
 import org.openhab.core.thing.binding.ThingHandlerFactory;
 import org.openhab.core.thing.link.ItemChannelLinkRegistry;
+import org.osgi.framework.Constants;
 import org.osgi.service.component.annotations.Activate;
 import org.osgi.service.component.annotations.Component;
 import org.osgi.service.component.annotations.Reference;
@@ -39,7 +41,11 @@ import org.slf4j.LoggerFactory;
  * @author Connor Petty - Initial contribution
  */
 @NonNullByDefault
-@Component(configurationPid = "binding.bluetooth.generic", service = ThingHandlerFactory.class)
+@Component(configurationPid = "binding.bluetooth.generic", //
+        property = Constants.SERVICE_PID + "=binding.bluetooth.generic", //
+        service = ThingHandlerFactory.class)
+@ConfigurableService(category = "binding", label = "Bluetooth Generic", //
+        description_uri = "binding:bluetooth:generic")
 public class GenericBluetoothHandlerFactory extends BaseThingHandlerFactory {
 
     /**
