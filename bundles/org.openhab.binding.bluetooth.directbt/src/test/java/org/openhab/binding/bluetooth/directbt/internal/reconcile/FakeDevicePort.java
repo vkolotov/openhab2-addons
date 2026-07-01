@@ -56,6 +56,8 @@ class FakeDevicePort implements DevicePort {
     boolean identityFlip;
     // Latched true once the safe-bailout downgraded this device to an unencrypted connection.
     boolean encryptionFallbackDisabled;
+    // Whether the configured security requirement (e.g. authenticated "pin") is unmet on the current link.
+    boolean securityUnmet;
 
     // --- scripted connectNative() result ---
     HCIStatusCode connectResult = HCIStatusCode.SUCCESS;
@@ -161,6 +163,11 @@ class FakeDevicePort implements DevicePort {
     @Override
     public void disableEncryptionFallback() {
         encryptionFallbackDisabled = true;
+    }
+
+    @Override
+    public boolean securityRequirementUnmet() {
+        return securityUnmet;
     }
 
     @Override

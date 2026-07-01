@@ -52,7 +52,7 @@
 					<option value="none">None (unbonded, no encryption)</option>
 					<option value="auto">Auto (Just-Works encryption, strict — experimental)</option>
 					<option value="encrypted-preferred">Encrypted preferred (fall back to unencrypted — experimental)</option>
-					<option value="pin">PIN (authenticated pairing with passkey — experimental)</option>
+					<option value="pin">PIN (authenticated pairing with passkey; fails if not authenticated — experimental)</option>
 				</options>
 				<limitToOptions>true</limitToOptions>
 				<advanced>true</advanced>

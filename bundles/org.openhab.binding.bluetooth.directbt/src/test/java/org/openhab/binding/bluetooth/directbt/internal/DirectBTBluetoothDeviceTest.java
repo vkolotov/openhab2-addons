@@ -30,6 +30,7 @@ import org.direct_bt.BTGattService;
 import org.direct_bt.BTSecurityLevel;
 import org.direct_bt.GattCharPropertySet;
 import org.direct_bt.HCIStatusCode;
+import org.direct_bt.PairingMode;
 import org.direct_bt.SMPIOCapability;
 import org.direct_bt.SMPPairingState;
 import org.eclipse.jdt.annotation.NonNullByDefault;
@@ -281,6 +282,52 @@ class DirectBTBluetoothDeviceTest {
         // pin still requests authenticated security, never NONE.
         verify(nativeDevice()).setConnSecurity(BTSecurityLevel.ENC_AUTH, SMPIOCapability.KEYBOARD_ONLY);
         verify(nativeDevice(), never()).setConnSecurity(BTSecurityLevel.NONE, SMPIOCapability.NO_INPUT_NO_OUTPUT);
+    }
+
+    // --- pin mode fails closed: authenticated requirement must be enforced, never downgraded -----------------
+
+    @Test
+    void securityRequirementUnmetWhenPinModeButLinkNotAuthenticated() {
+        device().updateBTDevice(nativeDevice());
+        when(bridge().getDeviceConnectionSecurity(any())).thenReturn(DirectBTAdapterConstants.CONNECTION_SECURITY_PIN);
+        // SMP negotiated down to Just-Works (unauthenticated) because the peer can't do MITM. The achieved
+        // PairingMode is the reliable signal (the requested level can read back too high).
+        when(nativeDevice().getPairingMode()).thenReturn(PairingMode.JUST_WORKS);
+
+        assertTrue(device().securityRequirementUnmet(),
+                "pin mode over a Just-Works (unauthenticated) link must report its requirement unmet");
+    }
+
+    @Test
+    void securityRequirementMetWhenPinModeAndLinkAuthenticated() {
+        device().updateBTDevice(nativeDevice());
+        when(bridge().getDeviceConnectionSecurity(any())).thenReturn(DirectBTAdapterConstants.CONNECTION_SECURITY_PIN);
+        when(nativeDevice().getPairingMode()).thenReturn(PairingMode.PASSKEY_ENTRY_res);
+
+        assertFalse(device().securityRequirementUnmet(),
+                "pin over a genuine Passkey-Entry (authenticated) link satisfies the mode");
+    }
+
+    @Test
+    void securityRequirementNeverUnmetForNonPinModes() {
+        device().updateBTDevice(nativeDevice());
+        when(nativeDevice().getPairingMode()).thenReturn(PairingMode.JUST_WORKS);
+        for (String mode : List.of(DirectBTAdapterConstants.CONNECTION_SECURITY_NONE,
+                DirectBTAdapterConstants.CONNECTION_SECURITY_AUTO,
+                DirectBTAdapterConstants.CONNECTION_SECURITY_ENCRYPTED_PREFERRED)) {
+            when(bridge().getDeviceConnectionSecurity(any())).thenReturn(mode);
+            assertFalse(device().securityRequirementUnmet(), mode + " has no authenticated requirement to enforce");
+        }
+    }
+
+    @Test
+    void securityRequirementUnmetFailsClosedOnNativeThrow() {
+        device().updateBTDevice(nativeDevice());
+        when(bridge().getDeviceConnectionSecurity(any())).thenReturn(DirectBTAdapterConstants.CONNECTION_SECURITY_PIN);
+        when(nativeDevice().getPairingMode()).thenThrow(new RuntimeException("cannot read achieved pairing mode"));
+
+        assertTrue(device().securityRequirementUnmet(),
+                "if the achieved pairing mode can't be confirmed, an authenticated mode must fail closed");
     }
 
     @Test

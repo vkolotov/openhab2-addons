@@ -102,6 +102,15 @@ public interface DevicePort {
      */
     void disableEncryptionFallback();
 
+    /**
+     * @return true iff the device's configured connection-security requirement is NOT met on the current link —
+     *         e.g. an authenticated ("pin") mode was requested but SMP negotiated down to Just-Works/unencrypted
+     *         because the peer cannot do MITM. When true the reconciler refuses the connection instead of exposing
+     *         GATT over a weaker-than-demanded link (fail closed, never silently downgrade an authenticated mode).
+     *         Always false for the "none" / non-authenticated modes, which have nothing stricter to enforce.
+     */
+    boolean securityRequirementUnmet();
+
     /** Enumerate + map GATT services/characteristics for the current connection. */
     void resolveGatt();
 

@@ -27,6 +27,7 @@ import org.direct_bt.BTSecurityLevel;
 import org.direct_bt.EInfoReport;
 import org.direct_bt.GattCharPropertySet;
 import org.direct_bt.HCIStatusCode;
+import org.direct_bt.PairingMode;
 import org.direct_bt.SMPIOCapability;
 import org.direct_bt.SMPPairingState;
 import org.eclipse.jdt.annotation.NonNullByDefault;
@@ -466,6 +467,46 @@ public class DirectBTBluetoothDevice extends BaseBluetoothDevice implements Devi
     private static boolean wantsEncryption(String securityMode) {
         return DirectBTAdapterConstants.CONNECTION_SECURITY_AUTO.equalsIgnoreCase(securityMode)
                 || DirectBTAdapterConstants.CONNECTION_SECURITY_ENCRYPTED_PREFERRED.equalsIgnoreCase(securityMode);
+    }
+
+    @Override
+    public boolean securityRequirementUnmet() {
+        // Only the authenticated "pin" mode has a requirement stricter than "connected" to enforce. It demands an
+        // MITM-authenticated link (ENC_AUTH); if SMP negotiated down to Just-Works/unencrypted (peer can't do
+        // MITM), the achieved level is below ENC_AUTH and we must refuse rather than expose GATT unauthenticated.
+        if (!DirectBTAdapterConstants.CONNECTION_SECURITY_PIN
+                .equalsIgnoreCase(bridge.getDeviceConnectionSecurity(address))) {
+            return false;
+        }
+        BTDevice dev = device;
+        if (dev == null) {
+            return false;
+        }
+        try {
+            // getConnSecurityLevel() alone is NOT sufficient: Direct-BT seeds sec_level_conn with the REQUESTED
+            // level at connect setup, so a Just-Works fallback can still read back ENC_AUTH. The reliable signal is
+            // the achieved PairingMode -- the actual method used. Anything in the unauthenticated set
+            // (NONE / NEGOTIATING / JUST_WORKS) means MITM was NOT achieved, so an authenticated ("pin") mode is
+            // unmet. The authenticated modes (PASSKEY_ENTRY_*, NUMERIC_COMPARE_*, OUT_OF_BAND) and PRE_PAIRED
+            // (reusing keys from an earlier authenticated pairing) satisfy it.
+            return isUnauthenticated(dev.getPairingMode());
+        } catch (RuntimeException e) {
+            // Can't confirm the achieved pairing mode -> treat as unmet (fail closed) for an authenticated mode.
+            logger.debug("Direct-BT security check for {} threw; treating pin requirement as unmet", address, e);
+            return true;
+        }
+    }
+
+    /** @return true iff {@code mode} provides NO MITM authentication (the pin requirement would be unmet). */
+    private static boolean isUnauthenticated(PairingMode mode) {
+        switch (mode) {
+            case NONE:
+            case NEGOTIATING:
+            case JUST_WORKS:
+                return true;
+            default: // PASSKEY_ENTRY_*, NUMERIC_COMPARE_*, OUT_OF_BAND, PRE_PAIRED are authenticated / key-reuse
+                return false;
+        }
     }
 
     @Override

@@ -567,6 +567,46 @@ class DeviceReconcilerTest {
                 "a stuck connect without an identity flip must never downgrade encryption");
     }
 
+    // ---------------------------------------------------------------------------------------------
+    // Security enforcement (fail closed): when the configured mode requires authentication ("pin") but the link
+    // negotiated down (peer can't do MITM), the reconciler must REFUSE — disconnect and NOT resolve GATT — rather
+    // than silently expose data over a weaker-than-demanded link.
+    // ---------------------------------------------------------------------------------------------
+    @Test
+    void connectedButSecurityRequirementUnmetRefusesAndDoesNotResolveGatt() {
+        FakeDevicePort port = new FakeDevicePort();
+        port.wanted = true;
+        port.hasNative = true;
+        port.nativeConnected = true;
+        port.flagConnected = true;
+        port.gattResolved = false;
+        port.securityUnmet = true; // authenticated mode requested but achieved link is unauthenticated
+
+        DeviceReconciler r = reconciler(port, scanOff(), new MutableClock(START));
+        r.reconcile();
+
+        assertEquals(0, port.resolveGattCalls, "must NOT resolve/expose GATT when the security requirement is unmet");
+        assertEquals(1, port.disconnectNativeCalls, "must disconnect a link that does not meet the required security");
+        assertEquals(1, port.markDisconnectedCalls);
+    }
+
+    @Test
+    void connectedWithSecurityRequirementMetResolvesGattNormally() {
+        FakeDevicePort port = new FakeDevicePort();
+        port.wanted = true;
+        port.hasNative = true;
+        port.nativeConnected = true;
+        port.flagConnected = true;
+        port.gattResolved = false;
+        port.securityUnmet = false; // requirement satisfied (or no requirement)
+
+        DeviceReconciler r = reconciler(port, scanOff(), new MutableClock(START));
+        r.reconcile();
+
+        assertEquals(1, port.resolveGattCalls, "a link meeting its security requirement resolves GATT as usual");
+        assertEquals(0, port.disconnectNativeCalls);
+    }
+
     @Test
     void lastObservedExposesThePolledSnapshot() {
         FakeDevicePort port = new FakeDevicePort();

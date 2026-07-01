@@ -185,6 +185,19 @@ public class DeviceReconciler extends Reconciler<Boolean, DeviceReconciler.Obser
 
         // (7) GATT — connected but not resolved.
         if (o.hasNative && o.nativeConnected) {
+            // SECURITY ENFORCEMENT (must run BEFORE GATT is exposed): if the device's configured security
+            // requirement is not actually met on this link (e.g. "pin"/authenticated was requested but SMP
+            // negotiated down to Just-Works or unencrypted because the peer can't do MITM), REFUSE the connection
+            // rather than expose GATT over a weaker-than-demanded link. Selecting an authenticated mode must fail
+            // closed, never silently downgrade — otherwise the mode is misleading and defeats its own purpose.
+            if (port.securityRequirementUnmet()) {
+                logger.warn("[reconcile:{}] required connection security not met on the link; refusing (no downgrade)",
+                        name);
+                port.disconnectNative();
+                clearConnectWindow();
+                port.markDisconnected();
+                return;
+            }
             if (!o.gattResolved) {
                 logger.debug("[reconcile:{}] connected but GATT unresolved; resolving", name);
                 port.resolveGatt();
