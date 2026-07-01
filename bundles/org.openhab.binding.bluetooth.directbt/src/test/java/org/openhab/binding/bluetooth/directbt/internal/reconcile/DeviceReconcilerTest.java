@@ -76,6 +76,34 @@ class DeviceReconcilerTest {
         assertFalse(reconciler(port, scanOff(), new MutableClock(START)).wantsDiscovery());
     }
 
+    // needsConnection(): true while a wanted device has a handle but isn't natively connected — the "establishing"
+    // signal that makes background/inbox discovery yield so the create-connection isn't starved.
+    @Test
+    void needsConnectionWhileWantedDeviceWithHandleIsNotYetConnected() {
+        FakeDevicePort port = new FakeDevicePort();
+        port.wanted = true;
+        port.hasNative = true;
+        port.nativeConnected = false;
+
+        assertTrue(reconciler(port, scanOff(), new MutableClock(START)).needsConnection());
+    }
+
+    @Test
+    void doesNotNeedConnectionWhenConnectedOrHandleless() {
+        FakeDevicePort connected = new FakeDevicePort();
+        connected.wanted = true;
+        connected.hasNative = true;
+        connected.nativeConnected = true;
+        assertFalse(reconciler(connected, scanOff(), new MutableClock(START)).needsConnection(),
+                "an already-connected device is not still establishing");
+
+        FakeDevicePort handleless = new FakeDevicePort();
+        handleless.wanted = true;
+        handleless.hasNative = false;
+        assertFalse(reconciler(handleless, scanOff(), new MutableClock(START)).needsConnection(),
+                "a device with no handle needs DISCOVERY, not connection-establishment");
+    }
+
     // ---------------------------------------------------------------------------------------------
     // Silent ACL drop (THE defining failure): native link gone but no deviceDisconnected event, so our
     // flag still says CONNECTED. The reconciler must observe native truth and mark disconnected, which is

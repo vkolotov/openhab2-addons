@@ -110,6 +110,17 @@ public class DeviceReconciler extends Reconciler<Boolean, DeviceReconciler.Obser
         return port.isWanted() && !port.hasNativeDevice();
     }
 
+    /**
+     * @return true iff this device is wanted but has a native handle and is not yet natively connected — i.e. it is
+     *         trying to <em>establish</em> its link (connecting now, or between connect attempts in the retry/backoff
+     *         gap). Used by the bridge to make background/inbox discovery yield to a device that still needs to
+     *         connect (a scan restarting between attempts starves the create-connection). This is deliberately NOT
+     *         gated on {@code flagConnecting} alone, which is only true for the brief in-flight instant.
+     */
+    public boolean needsConnection() {
+        return port.isWanted() && port.hasNativeDevice() && !port.isNativeConnected();
+    }
+
     @Override
     protected Observed observe() {
         return new Observed(port.hasNativeDevice(), port.isNativeConnected(), port.isGattResolved(),

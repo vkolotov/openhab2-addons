@@ -173,33 +173,18 @@ class DirectBTBluetoothDeviceTest {
     }
 
     @Test
-    void connectNativeAutoNegotiatesSecurityThenConnects() {
+    void connectNativePinsUnbondedSecurityThenConnects() {
         device().updateBTDevice(nativeDevice());
-        when(nativeDevice().setConnSecurityAuto(SMPIOCapability.NO_INPUT_NO_OUTPUT)).thenReturn(true);
         when(nativeDevice().connectLE(anyShort(), anyShort(), anyShort(), anyShort(), anyShort(), anyShort()))
                 .thenReturn(HCIStatusCode.SUCCESS);
 
         assertEquals(HCIStatusCode.SUCCESS, device().connectNative());
 
-        // Security is auto-negotiated (Just-Works: unbonded falls through to NONE, encrypted devices pair
-        // in-band) and connectLE is issued with the field-tested dead-stable profile. When auto succeeds, the
-        // explicit NONE pin must NOT also be applied.
-        verify(nativeDevice()).setConnSecurityAuto(SMPIOCapability.NO_INPUT_NO_OUTPUT);
-        verify(nativeDevice(), never()).setConnSecurity(any(), any());
-        verify(nativeDevice()).connectLE(anyShort(), anyShort(), anyShort(), anyShort(), anyShort(), anyShort());
-    }
-
-    @Test
-    void connectNativeFallsBackToNonePinWhenAutoSecurityUnavailable() {
-        device().updateBTDevice(nativeDevice());
-        when(nativeDevice().setConnSecurityAuto(SMPIOCapability.NO_INPUT_NO_OUTPUT)).thenReturn(false);
-        when(nativeDevice().connectLE(anyShort(), anyShort(), anyShort(), anyShort(), anyShort(), anyShort()))
-                .thenReturn(HCIStatusCode.SUCCESS);
-
-        assertEquals(HCIStatusCode.SUCCESS, device().connectNative());
-
-        // When auto-negotiation cannot be enabled, fall back to the explicit unbonded profile.
+        // Security is pinned to NONE / NO_INPUT_NO_OUTPUT (unbonded) and connectLE is issued with the field-tested
+        // dead-stable profile. (Auto-negotiation was tried and reverted: it is incompatible with the reconciler's
+        // connect lifecycle -- see DirectBTBluetoothDevice.connectNative.)
         verify(nativeDevice()).setConnSecurity(BTSecurityLevel.NONE, SMPIOCapability.NO_INPUT_NO_OUTPUT);
+        verify(nativeDevice()).connectLE(anyShort(), anyShort(), anyShort(), anyShort(), anyShort(), anyShort());
     }
 
     @Test

@@ -394,6 +394,7 @@ public class DirectBTBridgeHandler extends AbstractBluetoothBridgeHandler<Direct
     private boolean isScanWanted() {
         boolean[] needsDiscovery = { false };
         boolean[] connecting = { false };
+        boolean[] establishing = { false };
         forEachDevice(d -> {
             DeviceReconciler rec = d.getReconciler();
             if (rec.wantsDiscovery()) {
@@ -403,20 +404,32 @@ public class DirectBTBridgeHandler extends AbstractBluetoothBridgeHandler<Direct
             if (o != null && o.flagConnecting) {
                 connecting[0] = true;
             }
+            // A configured device that HAS a handle but is not yet fully connected is still trying to establish
+            // its link (across the connect retry/backoff gaps, not only the brief flagConnecting instant).
+            // Background/inbox discovery must yield to it, else the scan restarts between attempts and the
+            // controller can never complete the create-connection (observed as a connect/clear-pending flap).
+            if (rec.needsConnection()) {
+                establishing[0] = true;
+            }
         });
-        return scanWanted(needsDiscovery[0], backgroundDiscovery, activeScanEnabled, connecting[0]);
+        return scanWanted(needsDiscovery[0], backgroundDiscovery, activeScanEnabled, connecting[0], establishing[0]);
     }
 
     /**
-     * Pure decision for whether the adapter should be scanning, given the rolled-up device/config inputs. Scan
-     * when a configured device needs (re)discovery, OR discovery is wanted for the inbox (background discovery
-     * config, or an in-progress manual scan via {@code scanStart()}). Either way a device establishing a link
-     * ({@code connecting}) preempts the scan: the controller rejects create-connection while scanning, so we hand
-     * the radio to the connect and resume discovery once it completes.
+     * Pure decision for whether the adapter should be scanning, given the rolled-up device/config inputs.
+     * <p>
+     * Scan when a configured device needs (re)discovery to get a handle ({@code needsDiscovery}), OR discovery is
+     * wanted for the inbox ({@code backgroundDiscovery} config or an in-progress manual scan). But BOTH of the
+     * inbox cases yield to a configured device that is trying to establish its connection: the controller rejects
+     * create-connection while scanning, and a background scan that keeps restarting between a device's connect
+     * attempts starves it forever. So background/active discovery is suppressed while {@code establishing}, and any
+     * scan is suppressed the instant a device is {@code connecting}. A device needing DISCOVERY still scans (that is
+     * how it gets a handle in the first place) — {@code needsDiscovery} is not gated by {@code establishing}.
      */
     static boolean scanWanted(boolean needsDiscovery, boolean backgroundDiscovery, boolean activeScan,
-            boolean connecting) {
-        boolean discoveryWanted = needsDiscovery || backgroundDiscovery || activeScan;
+            boolean connecting, boolean establishing) {
+        boolean inboxDiscovery = (backgroundDiscovery || activeScan) && !establishing;
+        boolean discoveryWanted = needsDiscovery || inboxDiscovery;
         return discoveryWanted && !connecting;
     }
 
