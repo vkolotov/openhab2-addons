@@ -25,6 +25,7 @@ import java.util.concurrent.Executors;
 import org.direct_bt.BTDevice;
 import org.direct_bt.BTGattChar;
 import org.direct_bt.BTGattService;
+import org.direct_bt.BTSecurityLevel;
 import org.direct_bt.GattCharPropertySet;
 import org.direct_bt.HCIStatusCode;
 import org.direct_bt.SMPIOCapability;
@@ -173,18 +174,34 @@ class DirectBTBluetoothDeviceTest {
     }
 
     @Test
-    void connectNativeAutoNegotiatesJustWorksSecurityThenConnects() {
+    void connectNativePinsUnbondedSecurityByDefault() {
         device().updateBTDevice(nativeDevice());
         when(nativeDevice().connectLE(anyShort(), anyShort(), anyShort(), anyShort(), anyShort(), anyShort()))
                 .thenReturn(HCIStatusCode.SUCCESS);
+        // Default (bridge returns "none"): security is pinned to NONE / NO_INPUT_NO_OUTPUT — the proven profile.
+        when(bridge().getDeviceConnectionSecurity(any())).thenReturn(DirectBTAdapterConstants.CONNECTION_SECURITY_NONE);
 
         assertEquals(HCIStatusCode.SUCCESS, device().connectNative());
 
-        // Security auto-negotiates Just-Works (NO_INPUT_NO_OUTPUT): open devices settle on NONE, encryption-required
-        // ones negotiate up. The reconciler is now pairing-aware so this multi-connect churn no longer flaps (see
-        // DirectBTBluetoothDevice.connectNative + DeviceReconciler's pairing-freeze). connectLE is issued with the
-        // field-tested dead-stable profile.
+        verify(nativeDevice()).setConnSecurity(BTSecurityLevel.NONE, SMPIOCapability.NO_INPUT_NO_OUTPUT);
+        verify(nativeDevice(), never()).setConnSecurityAuto(any());
+        verify(nativeDevice()).connectLE(anyShort(), anyShort(), anyShort(), anyShort(), anyShort(), anyShort());
+    }
+
+    @Test
+    void connectNativeAutoNegotiatesJustWorksWhenDeviceOptsIn() {
+        device().updateBTDevice(nativeDevice());
+        when(nativeDevice().connectLE(anyShort(), anyShort(), anyShort(), anyShort(), anyShort(), anyShort()))
+                .thenReturn(HCIStatusCode.SUCCESS);
+        // This device is configured connectionSecurity=auto -> Just-Works auto-negotiation (NO_INPUT_NO_OUTPUT).
+        // Open devices settle on NONE, encryption-required ones negotiate up; the reconciler is pairing-aware so the
+        // multi-connect churn no longer flaps. connectLE uses the field-tested dead-stable profile.
+        when(bridge().getDeviceConnectionSecurity(any())).thenReturn(DirectBTAdapterConstants.CONNECTION_SECURITY_AUTO);
+
+        assertEquals(HCIStatusCode.SUCCESS, device().connectNative());
+
         verify(nativeDevice()).setConnSecurityAuto(SMPIOCapability.NO_INPUT_NO_OUTPUT);
+        verify(nativeDevice(), never()).setConnSecurity(any(), any());
         verify(nativeDevice()).connectLE(anyShort(), anyShort(), anyShort(), anyShort(), anyShort(), anyShort());
     }
 

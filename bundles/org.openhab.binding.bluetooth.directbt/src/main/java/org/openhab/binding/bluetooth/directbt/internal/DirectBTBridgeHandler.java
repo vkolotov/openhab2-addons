@@ -589,14 +589,39 @@ public class DirectBTBridgeHandler extends AbstractBluetoothBridgeHandler<Direct
     }
 
     boolean isDeviceEnabled(BluetoothAddress address) {
+        Thing childThing = findChildThing(address);
+        return childThing == null || childThing.isEnabled();
+    }
+
+    /**
+     * The per-device connection security mode, read from the device Thing's {@code connectionSecurity} config
+     * (mirrors {@link #isDeviceEnabled}). {@code "none"} (the default) keeps the proven unbonded profile;
+     * {@code "auto"} enables Just-Works auto-negotiation for that one device. This is per-device rather than
+     * per-bridge because a blanket auto-security wedges any device that carries a stale/keyless bond, so opting a
+     * single device in is the safe granularity. Falls back to {@code "none"} for an unknown/handleless device.
+     */
+    String getDeviceConnectionSecurity(BluetoothAddress address) {
+        Thing childThing = findChildThing(address);
+        if (childThing != null) {
+            Object security = childThing.getConfiguration()
+                    .get(DirectBTAdapterConstants.CONFIGURATION_CONNECTION_SECURITY);
+            if (security instanceof String s && !s.isBlank()) {
+                return s.trim();
+            }
+        }
+        return DirectBTAdapterConstants.CONNECTION_SECURITY_NONE;
+    }
+
+    /** @return the child device Thing whose configured address matches, or {@code null} if none is registered. */
+    private @Nullable Thing findChildThing(BluetoothAddress address) {
         String addrStr = address.toString();
         for (Thing childThing : getThing().getThings()) {
             Object childAddr = childThing.getConfiguration().get(BluetoothBindingConstants.CONFIGURATION_ADDRESS);
             if (addrStr.equalsIgnoreCase(String.valueOf(childAddr))) {
-                return childThing.isEnabled();
+                return childThing;
             }
         }
-        return true;
+        return null;
     }
 
     /** Resolve the openHAB device for a Direct-BT device by address, or {@code null} if disposed. */

@@ -23,6 +23,7 @@ import org.direct_bt.BTDevice;
 import org.direct_bt.BTGattChar;
 import org.direct_bt.BTGattCharListener;
 import org.direct_bt.BTGattService;
+import org.direct_bt.BTSecurityLevel;
 import org.direct_bt.EInfoReport;
 import org.direct_bt.GattCharPropertySet;
 import org.direct_bt.HCIStatusCode;
@@ -337,17 +338,25 @@ public class DirectBTBluetoothDevice extends BaseBluetoothDevice implements Devi
             // redundant: connect succeeds first-try and holds dead-stable (45/45 reads, 0 disconnects) without it,
             // and the reconciler recovers from the CSR COMMAND_DISALLOWED/INTERNAL_TIMEOUT quirk on its own.
             //
-            // Auto-negotiate security (Just-Works, NO_INPUT_NO_OUTPUT). setConnSecurityAuto iterates the security
-            // ladder and "may perform multiple connection and disconnect actions until successful pairing" (its own
-            // javadoc): for an OPEN device it settles on NONE first-try, and for a device with an
-            // encryption-required characteristic it negotiates LE Secure Connections up. That multi-connect churn
-            // USED to fight the reconciler's connect deadline (an endless connect/clear-pending flap when this was
-            // first tried), but the DeviceReconciler is now pairing-aware: it FREEZES its connect deadline while
-            // BTDevice.getPairingState() reports an actively-negotiating state (see DeviceReconciler act() and
-            // DirectBTBluetoothDevice.isPairing()), so SMP is allowed to run to completion. NO_INPUT_NO_OUTPUT keeps
-            // it to Just-Works (no passkey/MITM); authenticated pairing + persistent bonds are a separate effort
-            // (SMPKeyBin management, see docs/directbt-encryption-pairing-findings.md).
-            dev.setConnSecurityAuto(SMPIOCapability.NO_INPUT_NO_OUTPUT);
+            // Connection security is chosen PER DEVICE from the device Thing's connectionSecurity config
+            // (default "none"). "auto" enables Just-Works auto-negotiation; "none" pins the proven unbonded
+            // profile. This is deliberately per-device, not a blanket bridge setting: setConnSecurityAuto insists
+            // on encryption, which wedges any device carrying a stale/keyless kernel bond (it loops
+            // connectNative->SUCCESS with no deviceConnected), so encryption is opt-in for the specific devices
+            // that need it. See docs/directbt-encryption-pairing-findings.md.
+            if (DirectBTAdapterConstants.CONNECTION_SECURITY_AUTO
+                    .equalsIgnoreCase(bridge.getDeviceConnectionSecurity(address))) {
+                // setConnSecurityAuto "may perform multiple connection and disconnect actions until successful
+                // pairing" (its own javadoc): open devices settle on NONE, encryption-required ones negotiate LE
+                // Secure Connections up. That multi-connect churn USED to fight the reconciler's connect deadline,
+                // but the DeviceReconciler is now pairing-aware: it FREEZES its connect deadline while
+                // BTDevice.getPairingState() reports an actively-negotiating state (see DeviceReconciler act() and
+                // isPairing()), so SMP runs to completion. NO_INPUT_NO_OUTPUT keeps it to Just-Works (no
+                // passkey/MITM); authenticated pairing + persistent bonds are a separate effort (SMPKeyBin).
+                dev.setConnSecurityAuto(SMPIOCapability.NO_INPUT_NO_OUTPUT);
+            } else {
+                dev.setConnSecurity(BTSecurityLevel.NONE, SMPIOCapability.NO_INPUT_NO_OUTPUT);
+            }
             return dev.connectLE(LE_SCAN_INTERVAL, LE_SCAN_WINDOW, CONN_INTERVAL_MIN, CONN_INTERVAL_MAX, CONN_LATENCY,
                     CONN_SUPERVISION_TIMEOUT);
         } catch (RuntimeException e) {

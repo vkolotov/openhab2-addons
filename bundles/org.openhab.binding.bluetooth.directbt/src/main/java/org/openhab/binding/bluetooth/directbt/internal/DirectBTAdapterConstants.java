@@ -29,6 +29,19 @@ public class DirectBTAdapterConstants {
 
     public static final String PROPERTY_ADDRESS = "address";
 
+    /**
+     * Per-device config key (declared on the core generic device thing-type in the generic bundle's
+     * {@code generic.xml}) selecting the LE connection security for that one device. Read by
+     * {@link DirectBTBridgeHandler#getDeviceConnectionSecurity}.
+     */
+    public static final String CONFIGURATION_CONNECTION_SECURITY = "connectionSecurity";
+
+    /** Unbonded, no encryption — the proven dead-stable default. */
+    public static final String CONNECTION_SECURITY_NONE = "none";
+
+    /** Just-Works LE encryption via {@code setConnSecurityAuto(NO_INPUT_NO_OUTPUT)}, opt-in per device. */
+    public static final String CONNECTION_SECURITY_AUTO = "auto";
+
     private DirectBTAdapterConstants() {
     }
 }

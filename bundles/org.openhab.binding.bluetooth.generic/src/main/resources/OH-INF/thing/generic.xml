@@ -30,6 +30,26 @@
 				<description>If enabled, will automatically connect to the device and reconnect if connection is lost.</description>
 				<default>true</default>
 			</parameter>
+			<parameter name="connectionSecurity" type="text">
+				<label>Connection Security</label>
+				<description>LE connection security for this device. "none" (default) connects unbonded with no
+					encryption — the
+					proven, dead-stable profile suitable for open sensors. "auto" negotiates Just-Works
+					encryption (LE Secure
+					Connections, no passkey) for devices whose characteristics require an encrypted
+					link. Leave on "none" unless a
+					device actually rejects reads without encryption; "auto" insists on
+					encryption and can fail to connect a device that
+					carries a stale bond. Currently honoured by the
+					Direct-BT adapter; other adapters ignore it.</description>
+				<options>
+					<option value="none">None (unbonded, no encryption)</option>
+					<option value="auto">Auto (Just-Works encryption)</option>
+				</options>
+				<limitToOptions>true</limitToOptions>
+				<advanced>true</advanced>
+				<default>none</default>
+			</parameter>
 		</config-description>
 
 	</thing-type>
