@@ -255,6 +255,35 @@ class DirectBTBluetoothDeviceTest {
     }
 
     @Test
+    void connectNativeRequestsAuthenticatedSecurityForPinMode() {
+        device().updateBTDevice(nativeDevice());
+        when(nativeDevice().connectLE(anyShort(), anyShort(), anyShort(), anyShort(), anyShort(), anyShort()))
+                .thenReturn(HCIStatusCode.SUCCESS);
+        // "pin" -> authenticated Passkey Entry: ENC_AUTH (encrypted + MITM) with KEYBOARD_ONLY (we input the key).
+        when(bridge().getDeviceConnectionSecurity(any())).thenReturn(DirectBTAdapterConstants.CONNECTION_SECURITY_PIN);
+
+        assertEquals(HCIStatusCode.SUCCESS, device().connectNative());
+
+        verify(nativeDevice()).setConnSecurity(BTSecurityLevel.ENC_AUTH, SMPIOCapability.KEYBOARD_ONLY);
+        verify(nativeDevice(), never()).setConnSecurity(BTSecurityLevel.ENC_ONLY, SMPIOCapability.NO_INPUT_NO_OUTPUT);
+    }
+
+    @Test
+    void pinModeIsNotSubjectToTheEncryptionBailout() {
+        device().updateBTDevice(nativeDevice());
+        when(nativeDevice().connectLE(anyShort(), anyShort(), anyShort(), anyShort(), anyShort(), anyShort()))
+                .thenReturn(HCIStatusCode.SUCCESS);
+        when(bridge().getDeviceConnectionSecurity(any())).thenReturn(DirectBTAdapterConstants.CONNECTION_SECURITY_PIN);
+
+        device().disableEncryptionFallback(); // only encrypted-preferred honours this; pin must ignore it
+        device().connectNative();
+
+        // pin still requests authenticated security, never NONE.
+        verify(nativeDevice()).setConnSecurity(BTSecurityLevel.ENC_AUTH, SMPIOCapability.KEYBOARD_ONLY);
+        verify(nativeDevice(), never()).setConnSecurity(BTSecurityLevel.NONE, SMPIOCapability.NO_INPUT_NO_OUTPUT);
+    }
+
+    @Test
     void connectNativeSwallowsNativeThrowAsInternalFailure() {
         device().updateBTDevice(nativeDevice());
         when(nativeDevice().connectLE(anyShort(), anyShort(), anyShort(), anyShort(), anyShort(), anyShort()))

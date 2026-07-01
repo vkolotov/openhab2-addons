@@ -52,6 +52,16 @@ public class DirectBTAdapterConstants {
      */
     public static final String CONNECTION_SECURITY_ENCRYPTED_PREFERRED = "encrypted-preferred";
 
+    /**
+     * Authenticated (MITM-protected) LE encryption via Passkey Entry: the peripheral displays / has a fixed PIN,
+     * and we supply the configured {@link #CONFIGURATION_PASSKEY} when the device asks (SMP PASSKEY_EXPECTED).
+     * Uses {@code setConnSecurity(ENC_AUTH, KEYBOARD_ONLY)}. Opt-in per device.
+     */
+    public static final String CONNECTION_SECURITY_PIN = "pin";
+
+    /** Per-device config key holding the static passkey/PIN (0..999999) for {@link #CONNECTION_SECURITY_PIN}. */
+    public static final String CONFIGURATION_PASSKEY = "passkey";
+
     private DirectBTAdapterConstants() {
     }
 }

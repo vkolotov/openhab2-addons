@@ -52,10 +52,20 @@
 					<option value="none">None (unbonded, no encryption)</option>
 					<option value="auto">Auto (Just-Works encryption, strict — experimental)</option>
 					<option value="encrypted-preferred">Encrypted preferred (fall back to unencrypted — experimental)</option>
+					<option value="pin">PIN (authenticated pairing with passkey — experimental)</option>
 				</options>
 				<limitToOptions>true</limitToOptions>
 				<advanced>true</advanced>
 				<default>none</default>
+			</parameter>
+			<parameter name="passkey" type="integer" min="0" max="999999">
+				<label>Passkey (PIN)</label>
+				<description>The 6-digit passkey/PIN used when Connection Security is "pin" (authenticated Passkey Entry
+					pairing).
+					Enter the fixed PIN the device expects (0–999999). Ignored for the other security modes. Note:
+					this is stored in the
+					Thing configuration; treat it as a secret.</description>
+				<advanced>true</advanced>
 			</parameter>
 		</config-description>
 

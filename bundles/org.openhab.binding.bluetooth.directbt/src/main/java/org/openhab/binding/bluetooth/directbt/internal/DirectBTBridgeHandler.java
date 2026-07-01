@@ -171,7 +171,31 @@ public class DirectBTBridgeHandler extends AbstractBluetoothBridgeHandler<Direct
             // deadline, so a short-lived pairing phase between 2s ticks can't slip past and trip the stuck-connect
             // teardown. The reconciler still polls getPairingState() as the source of truth.
             logger.debug("Direct-BT devicePairingState: {} state={} mode={}", device.getAddressAndType(), state, mode);
+            if (state == SMPPairingState.PASSKEY_EXPECTED) {
+                replyPasskey(device);
+            }
             requeueReconcile();
+        }
+    }
+
+    /**
+     * The device is asking us to supply the passkey for authenticated (PASSKEY_ENTRY) pairing. Reply with the
+     * per-device configured PIN if one is set, otherwise decline so the negotiation fails cleanly rather than
+     * hanging. Must be called from the {@code PASSKEY_EXPECTED} state (Direct-BT rejects it otherwise).
+     */
+    private void replyPasskey(BTDevice device) {
+        BluetoothAddress address = toAddress(device);
+        int passkey = getDevicePasskey(address);
+        try {
+            if (passkey >= 0) {
+                logger.debug("Direct-BT PASSKEY_EXPECTED for {}; supplying configured passkey", address);
+                device.setPairingPasskey(passkey);
+            } else {
+                logger.warn("Direct-BT PASSKEY_EXPECTED for {} but no passkey configured; declining pairing", address);
+                device.setPairingPasskeyNegative();
+            }
+        } catch (RuntimeException e) {
+            logger.debug("Direct-BT passkey reply for {} threw", address, e);
         }
     }
 
@@ -610,6 +634,28 @@ public class DirectBTBridgeHandler extends AbstractBluetoothBridgeHandler<Direct
             }
         }
         return DirectBTAdapterConstants.CONNECTION_SECURITY_NONE;
+    }
+
+    /**
+     * The per-device static passkey/PIN for authenticated (PASSKEY_ENTRY) pairing, read from the device Thing's
+     * {@code passkey} config, or {@code -1} if none is configured. A valid BLE passkey is 0..999999.
+     */
+    int getDevicePasskey(BluetoothAddress address) {
+        Thing childThing = findChildThing(address);
+        if (childThing != null) {
+            Object passkey = childThing.getConfiguration().get(DirectBTAdapterConstants.CONFIGURATION_PASSKEY);
+            if (passkey instanceof Number n) {
+                return n.intValue();
+            }
+            if (passkey instanceof String s && !s.isBlank()) {
+                try {
+                    return Integer.parseInt(s.trim());
+                } catch (NumberFormatException e) {
+                    logger.warn("Invalid passkey '{}' configured for {}; ignoring", s, address);
+                }
+            }
+        }
+        return -1;
     }
 
     /** @return the child device Thing whose configured address matches, or {@code null} if none is registered. */

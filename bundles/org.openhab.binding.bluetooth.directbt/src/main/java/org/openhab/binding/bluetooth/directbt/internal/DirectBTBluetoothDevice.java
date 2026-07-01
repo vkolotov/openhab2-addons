@@ -357,13 +357,18 @@ public class DirectBTBluetoothDevice extends BaseBluetoothDevice implements Devi
             // role and makes Direct-BT drive the encryption/pairing request from the central side. ENC_ONLY +
             // NO_INPUT_NO_OUTPUT = Just-Works (encrypted, unauthenticated, no passkey/MITM). Authenticated pairing
             // + persistent bonds are a separate effort. See docs/directbt-encryption-pairing-findings.md.
-            // Two encryption modes both request ENC_ONLY: "auto" is STRICT (never downgrade), while
-            // "encrypted-preferred" permits the identity-flip safe-bailout to latch us down to NONE (see
-            // encryptionFallbackToNone / disableEncryptionFallback). Both differ from "none" only in the requested
-            // security level; the mode also decides whether a bailout is allowed.
+            // Security level per mode:
+            // - "auto"/"encrypted-preferred": Just Works -> ENC_ONLY + NO_INPUT_NO_OUTPUT (encrypted,
+            // unauthenticated). "auto" is STRICT (never downgrade); "encrypted-preferred" permits the
+            // identity-flip safe-bailout to latch us down to NONE (encryptionFallbackToNone).
+            // - "pin": Passkey Entry -> ENC_AUTH + KEYBOARD_ONLY (encrypted AND MITM-authenticated). The device
+            // asks for the key (SMP PASSKEY_EXPECTED) and the bridge supplies the configured passkey; the
+            // KEYBOARD_ONLY IO cap is what tells the peer we input the key it displays/holds.
+            // - "none" (or after a bailout): NONE.
             String securityMode = bridge.getDeviceConnectionSecurity(address);
-            boolean wantEncryption = wantsEncryption(securityMode) && !encryptionFallbackToNone;
-            if (wantEncryption) {
+            if (DirectBTAdapterConstants.CONNECTION_SECURITY_PIN.equalsIgnoreCase(securityMode)) {
+                dev.setConnSecurity(BTSecurityLevel.ENC_AUTH, SMPIOCapability.KEYBOARD_ONLY);
+            } else if (wantsEncryption(securityMode) && !encryptionFallbackToNone) {
                 dev.setConnSecurity(BTSecurityLevel.ENC_ONLY, SMPIOCapability.NO_INPUT_NO_OUTPUT);
             } else {
                 dev.setConnSecurity(BTSecurityLevel.NONE, SMPIOCapability.NO_INPUT_NO_OUTPUT);
