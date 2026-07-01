@@ -85,6 +85,23 @@ public interface DevicePort {
      */
     void clearStalePairing();
 
+    /**
+     * @return true iff this device's tracked address identity has diverged from its advertised address (e.g. it
+     *         distributed an IRK/identity during pairing and Direct-BT flipped RANDOM -> PUBLIC). This is the
+     *         "Defect 2" fingerprint: an encrypted device that will not reconnect because Direct-BT does not add
+     *         it to the controller's resolving list. Used to bail out to an unencrypted connection instead of
+     *         looping. Always false for an unbonded device.
+     */
+    boolean hasIdentityFlip();
+
+    /**
+     * Latch this device down to an unencrypted (NONE) connection for the rest of its lifetime, used as a safe
+     * bailout when an encryption-configured device paired but then cannot reconnect (identity-flip / resolving-list
+     * gap). Keeps the device usable instead of looping forever. Idempotent; the latch is cleared only by a fresh
+     * device object (Thing disable/enable).
+     */
+    void disableEncryptionFallback();
+
     /** Enumerate + map GATT services/characteristics for the current connection. */
     void resolveGatt();
 

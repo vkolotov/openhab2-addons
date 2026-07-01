@@ -22,6 +22,8 @@ import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executors;
 
+import org.direct_bt.BDAddressAndType;
+import org.direct_bt.BDAddressType;
 import org.direct_bt.BTDevice;
 import org.direct_bt.BTGattChar;
 import org.direct_bt.BTGattService;
@@ -283,6 +285,38 @@ class DirectBTBluetoothDeviceTest {
     @Test
     void clearStalePairingWithoutHandleIsANoOp() {
         assertDoesNotThrow(() -> device().clearStalePairing());
+    }
+
+    // --- identity-flip detection (Defect-2 safe bailout fingerprint) -----------------------------
+
+    @Test
+    void hasIdentityFlipIsFalseWithoutHandle() {
+        assertFalse(device().hasIdentityFlip(), "no handle -> no identity flip");
+    }
+
+    @Test
+    void hasIdentityFlipIsTrueWhenTrackedTypeDivergesFromAdvertised() {
+        device().updateBTDevice(nativeDevice());
+        // Advertised RANDOM, tracked flipped to PUBLIC after pairing distributed an identity -> the Defect-2 case.
+        when(nativeDevice().getVisibleAddressAndType()).thenReturn(addr(BDAddressType.BDADDR_LE_RANDOM));
+        when(nativeDevice().getAddressAndType()).thenReturn(addr(BDAddressType.BDADDR_LE_PUBLIC));
+
+        assertTrue(device().hasIdentityFlip(), "tracked PUBLIC vs advertised RANDOM is the identity flip");
+    }
+
+    @Test
+    void hasIdentityFlipIsFalseWhenTypesMatch() {
+        device().updateBTDevice(nativeDevice());
+        when(nativeDevice().getVisibleAddressAndType()).thenReturn(addr(BDAddressType.BDADDR_LE_RANDOM));
+        when(nativeDevice().getAddressAndType()).thenReturn(addr(BDAddressType.BDADDR_LE_RANDOM));
+
+        assertFalse(device().hasIdentityFlip(), "matching address types -> no flip (the normal case)");
+    }
+
+    private static BDAddressAndType addr(BDAddressType type) {
+        BDAddressAndType a = mock(BDAddressAndType.class);
+        a.type = type; // public field
+        return a;
     }
 
     @Test

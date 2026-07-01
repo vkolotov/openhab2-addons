@@ -34,17 +34,20 @@
 				<label>Connection Security</label>
 				<description>LE connection security for this device. "none" (default) connects unbonded with no
 					encryption — the
-					proven, dead-stable profile suitable for open sensors. "auto" negotiates Just-Works
-					encryption (LE Secure
-					Connections, no passkey) for devices whose characteristics require an encrypted
-					link. Leave on "none" unless a
-					device actually rejects reads without encryption; "auto" insists on
-					encryption and can fail to connect a device that
-					carries a stale bond. Currently honoured by the
-					Direct-BT adapter; other adapters ignore it.</description>
+					proven, dead-stable profile suitable for open sensors. "auto" requests Just-Works
+					encryption (no passkey/MITM) for
+					devices whose characteristics require an encrypted link. Leave on
+					"none" unless a device actually rejects reads
+					without encryption. NOTE: "auto" is EXPERIMENTAL — the
+					encrypted connection works, but a device that distributes an
+					identity/IRK on pairing may not
+					reconnect reliably after a drop (an address-resolution limitation); the adapter
+					detects this and
+					automatically falls back to an unencrypted connection for that device so it stays usable. Currently
+					honoured by the Direct-BT adapter; other adapters ignore it.</description>
 				<options>
 					<option value="none">None (unbonded, no encryption)</option>
-					<option value="auto">Auto (Just-Works encryption)</option>
+					<option value="auto">Auto (Just-Works encryption, experimental)</option>
 				</options>
 				<limitToOptions>true</limitToOptions>
 				<advanced>true</advanced>

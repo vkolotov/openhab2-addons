@@ -83,6 +83,13 @@ public class DeviceReconciler extends Reconciler<Boolean, DeviceReconciler.Obser
     // Epoch millis of the tick at which we first observed pairing in progress during the current CONNECTING window,
     // or 0 if not currently pairing. Used to freeze the connect deadline across an SMP negotiation (see act()).
     private long pairingSince;
+    // Count of consecutive stuck-connect deadlines hit while the device shows an identity flip (the encrypted-
+    // reconnect / resolving-list gap). After a threshold we bail out to an unencrypted connection so the device
+    // stays usable instead of looping forever. Reset whenever the device connects.
+    private int identityFlipStuckCount;
+
+    // How many consecutive stuck connects with an identity flip before we degrade an encrypted device to NONE.
+    private static final int IDENTITY_FLIP_BAILOUT_THRESHOLD = 3;
 
     /**
      * @param scanIsOff returns the adapter's polled scan state == OFF (connect step waits for this).
@@ -152,6 +159,7 @@ public class DeviceReconciler extends Reconciler<Boolean, DeviceReconciler.Obser
         if (o.hasNative && o.nativeConnected && !o.flagConnected) {
             logger.debug("[reconcile:{}] native connected but flag not; marking connected", name);
             clearConnectWindow();
+            identityFlipStuckCount = 0; // a successful connect resets the encrypted-reconnect bailout counter
             port.markConnected();
         } else if ((!o.hasNative || !o.nativeConnected) && o.flagConnected) {
             // Native says not-connected while we think CONNECTED -> the silent-drop case. Drive the disconnect
@@ -221,6 +229,17 @@ public class DeviceReconciler extends Reconciler<Boolean, DeviceReconciler.Obser
                 if (port.hasStalePairing()) {
                     logger.debug("[reconcile:{}] stuck while pre-paired; clearing stale bond to re-pair fresh", name);
                     port.clearStalePairing();
+                }
+                // SAFE BAILOUT for the encrypted-reconnect gap ("Defect 2"): if this device paired but now shows an
+                // identity flip (tracked address diverged from its advert) and keeps failing to reconnect, Direct-BT
+                // cannot resolve it (no controller resolving-list entry). Rather than loop forever, after a few such
+                // failures degrade it to an unencrypted connection so it stays usable. Only counts stuck connects
+                // that carry the identity flip, so a plain RF/transient failure never triggers the downgrade.
+                if (port.hasIdentityFlip()) {
+                    if (++identityFlipStuckCount >= IDENTITY_FLIP_BAILOUT_THRESHOLD) {
+                        port.disableEncryptionFallback();
+                        port.clearStalePairing(); // drop the identity-bearing keys so the NONE reconnect is clean
+                    }
                 }
                 if (connectingFor > PENDING_RESET_AFTER_MS && resetBudget.tryReset(name)) {
                     logger.warn("[reconcile:{}] create-connection wedged {}ms; requesting adapter reset", name,

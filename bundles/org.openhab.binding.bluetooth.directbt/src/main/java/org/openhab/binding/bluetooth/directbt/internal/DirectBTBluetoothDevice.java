@@ -86,6 +86,11 @@ public class DirectBTBluetoothDevice extends BaseBluetoothDevice implements Devi
     // two different cases: a real idle disconnect after services are resolved, and a generic "connected but GATT
     // unresolved" retry. Only the former should clear this flag.
     private volatile boolean wantConnected;
+    // Safe-bailout latch: set when an encryption-configured device repeatedly fails to reconnect after pairing
+    // (the identity-flip / resolving-list gap, "Defect 2"). Once latched, connectNative() degrades to unencrypted
+    // (NONE) so the device stays USABLE instead of looping forever. Reset by a clean disconnect intent. See
+    // disableEncryptionFallback()/docs/directbt-encryption-pairing-findings.md.
+    private volatile boolean encryptionFallbackToNone;
 
     // Maps an openHAB characteristic UUID to the Direct-BT characteristic handle (populated on discovery).
     private final Map<UUID, BTGattChar> gattCharByUuid = new ConcurrentHashMap<>();
@@ -352,8 +357,9 @@ public class DirectBTBluetoothDevice extends BaseBluetoothDevice implements Devi
             // role and makes Direct-BT drive the encryption/pairing request from the central side. ENC_ONLY +
             // NO_INPUT_NO_OUTPUT = Just-Works (encrypted, unauthenticated, no passkey/MITM). Authenticated pairing
             // + persistent bonds are a separate effort. See docs/directbt-encryption-pairing-findings.md.
-            if (DirectBTAdapterConstants.CONNECTION_SECURITY_AUTO
-                    .equalsIgnoreCase(bridge.getDeviceConnectionSecurity(address))) {
+            boolean wantEncryption = DirectBTAdapterConstants.CONNECTION_SECURITY_AUTO
+                    .equalsIgnoreCase(bridge.getDeviceConnectionSecurity(address)) && !encryptionFallbackToNone;
+            if (wantEncryption) {
                 dev.setConnSecurity(BTSecurityLevel.ENC_ONLY, SMPIOCapability.NO_INPUT_NO_OUTPUT);
             } else {
                 dev.setConnSecurity(BTSecurityLevel.NONE, SMPIOCapability.NO_INPUT_NO_OUTPUT);
@@ -407,6 +413,36 @@ public class DirectBTBluetoothDevice extends BaseBluetoothDevice implements Devi
             dev.unpair();
         } catch (RuntimeException e) {
             logger.debug("Direct-BT clearStalePairing for {} threw", address, e);
+        }
+    }
+
+    @Override
+    public boolean hasIdentityFlip() {
+        BTDevice dev = device;
+        if (dev == null) {
+            return false;
+        }
+        try {
+            // "Defect 2" fingerprint: on pairing, a device that distributes an IRK/identity has its tracked
+            // addressAndType flipped (e.g. RANDOM -> PUBLIC identity) away from its advertised visibleAddressAndType.
+            // Direct-BT does not add it to the controller's HW resolving list (an acknowledged TODO), so the next
+            // create-connection targets the identity address the device is not advertising under and never
+            // establishes. A divergence between the tracked and the visible address type is that condition.
+            var tracked = dev.getAddressAndType();
+            var visible = dev.getVisibleAddressAndType();
+            return tracked != null && visible != null && tracked.type != visible.type;
+        } catch (RuntimeException e) {
+            return false;
+        }
+    }
+
+    @Override
+    public void disableEncryptionFallback() {
+        if (!encryptionFallbackToNone) {
+            encryptionFallbackToNone = true;
+            logger.warn("Encrypted reconnect to {} keeps failing (address-identity resolution gap); falling back to an "
+                    + "unencrypted connection for this device so it stays usable. Set connectionSecurity=none "
+                    + "to silence this, or see docs/directbt-encryption-pairing-findings.md.", address);
         }
     }
 
