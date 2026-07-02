@@ -96,53 +96,63 @@ public class GenericBluetoothHandler extends ConnectedBluetoothHandler {
 
         GenericBindingConfiguration config = getConfigAs(GenericBindingConfiguration.class);
         readCharacteristicJob = scheduler.scheduleWithFixedDelay(() -> {
-            if (device.getConnectionState() == ConnectionState.CONNECTED) {
-                if (device.isServicesDiscovered()) {
-                    handlerToChannels.forEach((charHandler, channelUids) -> {
-                        // When pollOnlyLinkedCharacteristics is OFF (legacy), treat every channel as "linked" so we
-                        // poll/notify all readable characteristics regardless of item links.
-                        boolean linked = !pollOnlyLinkedCharacteristics
-                                || channelUids.stream().anyMatch(this::hasItemLink);
-                        // Only read the value manually if notification is not on.
-                        // Also read it the first time before we activate notifications below.
-                        if (linked && !device.isNotifying(charHandler.characteristic) && charHandler.canRead()) {
-                            device.readCharacteristic(charHandler.characteristic);
-                            try {
-                                // TODO the ideal solution would be to use locks/conditions and timeouts
-                                // Kbetween this code and `onCharacteristicReadComplete` but
-                                // that would overcomplicate the code a bit and I plan
-                                // on implementing a better more generalized solution later
-                                Thread.sleep(50);
-                            } catch (InterruptedException e) {
-                                return;
-                            }
-                        }
-                        if (charHandler.characteristic.canNotify()) {
-                            // Enabled/Disable notifications dependent on if the channel is linked.
-                            if (linked) {
-                                if (!device.isNotifying(charHandler.characteristic)) {
-                                    device.enableNotifications(charHandler.characteristic);
-                                }
-                            } else {
-                                if (device.isNotifying(charHandler.characteristic)) {
-                                    device.disableNotifications(charHandler.characteristic);
-                                }
-                            }
-                        }
-                    });
-                } else {
-                    // Connected at the link level but services still unresolved: bounce the link and retry service
-                    // discovery. reconnect() keeps the caller's connection intent (so an intent-tracking transport
-                    // like Direct-BT does not read this recovery as "stop wanting the device" -> connect/disconnect
-                    // flap). When reconnectOnUnresolvedServices is OFF (legacy), fall back to plain disconnect().
-                    if (reconnectOnUnresolvedServices) {
-                        device.reconnect();
-                    } else {
-                        device.disconnect();
-                    }
-                }
+            // An uncaught exception would silently cancel this repeating job (polling then stops forever with no
+            // log and the Thing sticks in its last status). Transport calls below can throw at any time (native
+            // errors, disconnect races), so guard the whole tick; the next tick simply retries.
+            try {
+                pollTick();
+            } catch (RuntimeException e) {
+                logger.warn("Characteristic poll tick failed for {}; will retry next tick", address, e);
             }
         }, 15, config.pollingInterval, TimeUnit.SECONDS);
+    }
+
+    private void pollTick() {
+        if (device.getConnectionState() == ConnectionState.CONNECTED) {
+            if (device.isServicesDiscovered()) {
+                handlerToChannels.forEach((charHandler, channelUids) -> {
+                    // When pollOnlyLinkedCharacteristics is OFF (legacy), treat every channel as "linked" so we
+                    // poll/notify all readable characteristics regardless of item links.
+                    boolean linked = !pollOnlyLinkedCharacteristics || channelUids.stream().anyMatch(this::hasItemLink);
+                    // Only read the value manually if notification is not on.
+                    // Also read it the first time before we activate notifications below.
+                    if (linked && !device.isNotifying(charHandler.characteristic) && charHandler.canRead()) {
+                        device.readCharacteristic(charHandler.characteristic);
+                        try {
+                            // TODO the ideal solution would be to use locks/conditions and timeouts
+                            // Kbetween this code and `onCharacteristicReadComplete` but
+                            // that would overcomplicate the code a bit and I plan
+                            // on implementing a better more generalized solution later
+                            Thread.sleep(50);
+                        } catch (InterruptedException e) {
+                            return;
+                        }
+                    }
+                    if (charHandler.characteristic.canNotify()) {
+                        // Enabled/Disable notifications dependent on if the channel is linked.
+                        if (linked) {
+                            if (!device.isNotifying(charHandler.characteristic)) {
+                                device.enableNotifications(charHandler.characteristic);
+                            }
+                        } else {
+                            if (device.isNotifying(charHandler.characteristic)) {
+                                device.disableNotifications(charHandler.characteristic);
+                            }
+                        }
+                    }
+                });
+            } else {
+                // Connected at the link level but services still unresolved: bounce the link and retry service
+                // discovery. reconnect() keeps the caller's connection intent (so an intent-tracking transport
+                // like Direct-BT does not read this recovery as "stop wanting the device" -> connect/disconnect
+                // flap). When reconnectOnUnresolvedServices is OFF (legacy), fall back to plain disconnect().
+                if (reconnectOnUnresolvedServices) {
+                    device.reconnect();
+                } else {
+                    device.disconnect();
+                }
+            }
+        }
     }
 
     private boolean hasItemLink(ChannelUID channelUID) {

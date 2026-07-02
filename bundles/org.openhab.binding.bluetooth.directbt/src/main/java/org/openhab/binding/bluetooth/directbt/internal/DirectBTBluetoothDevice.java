@@ -93,6 +93,12 @@ public class DirectBTBluetoothDevice extends BaseBluetoothDevice implements Devi
     // disableEncryptionFallback()/docs/directbt-encryption-pairing-findings.md.
     private volatile boolean encryptionFallbackToNone;
 
+    // When the reconciler last marked this device connected. Guards reconnect() (the generic handler's
+    // GATT-unresolved bounce) against firing while the post-connect GATT resolve is still in flight.
+    private volatile long connectedAtMillis;
+    /** How long after a connect the handler's GATT-recovery bounce is refused (resolve still in flight). */
+    static final long RECONNECT_GRACE_MILLIS = 15_000;
+
     // Maps an openHAB characteristic UUID to the Direct-BT characteristic handle (populated on discovery).
     private final Map<UUID, BTGattChar> gattCharByUuid = new ConcurrentHashMap<>();
     // Active notification listeners per characteristic UUID, so we can unregister on disable/dispose.
@@ -183,6 +189,19 @@ public class DirectBTBluetoothDevice extends BaseBluetoothDevice implements Devi
         // reconnect() = "bounce the link, KEEP the connection intent" (the generic handler's GATT-unresolved
         // recovery). Do NOT clear wantConnected. Drop the live ACL so the next reconcile re-discovers and
         // re-connects from a fresh advert (markDisconnected nulls the native handle + resets the GATT model).
+        //
+        // GRACE WINDOW: the generic handler polls every pollingInterval (can be 2s) and requests this bounce the
+        // moment it sees CONNECTED with services unresolved. But the reconciler resolves GATT asynchronously right
+        // after markConnected(), and that resolve can take longer than one poll period (measured ~2.1s on an
+        // encrypted link). Without the grace the handler bounces every freshly-established connection before its
+        // resolve finishes -> an endless connect/bounce loop. A bounce within the grace of the last
+        // markConnected() is refused (the in-flight resolve IS the recovery); after it, honoured (resolve hung).
+        if (isNativeConnected() && System.currentTimeMillis() - connectedAtMillis < RECONNECT_GRACE_MILLIS) {
+            logger.debug("Reconnect requested for {} within grace of connect; GATT resolve in flight, ignoring",
+                    address);
+            bridge.requeueReconcile(); // reconciler re-runs resolveGatt if still unresolved
+            return true;
+        }
         logger.debug("Reconnect requested for {} (GATT recovery); keeping connection intent", address);
         if (isNativeConnected() || isFlagConnected() || isFlagConnecting()) {
             markDisconnected();
@@ -300,6 +319,7 @@ public class DirectBTBluetoothDevice extends BaseBluetoothDevice implements Devi
 
     @Override
     public void markConnected() {
+        connectedAtMillis = System.currentTimeMillis();
         setConnectionState(ConnectionState.CONNECTED);
     }
 
@@ -313,6 +333,22 @@ public class DirectBTBluetoothDevice extends BaseBluetoothDevice implements Devi
         releaseNotifyListeners();
         resetGattModel();
         gattCharByUuid.clear();
+        // ZOMBIE-ACL GUARD: if the native link is still up, tear it down BEFORE dropping the handle. Nulling the
+        // handle of a live connection leaks the ACL: nothing else holds a reference to disconnect it, the
+        // peripheral stays connected (so it never advertises), and rediscovery/reconnect become impossible until
+        // the link is killed externally (observed live: Thing bounce with an up link left a permanent zombie ACL).
+        BTDevice dev = device;
+        if (dev != null) {
+            try {
+                if (dev.getConnected()) {
+                    logger.debug("Native link to {} still up on markDisconnected; disconnecting before dropping",
+                            address);
+                    dev.disconnect();
+                }
+            } catch (RuntimeException e) {
+                logger.debug("Best-effort native disconnect for {} failed", address, e);
+            }
+        }
         // Drop the stale native handle: after a disconnect the BTDevice no longer represents a usable link, and a
         // reconnect attempt on the old handle is exactly the path that wedges (CSR COMMAND_DISALLOWED / a connectLE
         // that the controller silently never completes). Clearing it makes the device hasNativeDevice()==false, so

@@ -12,6 +12,8 @@
  */
 package org.openhab.binding.bluetooth.directbt.internal;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
@@ -349,6 +351,7 @@ public class DirectBTBridgeHandler extends AbstractBluetoothBridgeHandler<Direct
                 }
                 // Devices first (they update connected/connecting state that the scan's desired is computed from),
                 // then the adapter scan field. The flag-sync sub-step inside a device runs even right after a reset.
+                adoptOrphanNativeConnections();
                 forEachDevice(d -> {
                     DeviceReconciler rec = d.getReconciler();
                     rec.unpause();
@@ -380,6 +383,62 @@ public class DirectBTBridgeHandler extends AbstractBluetoothBridgeHandler<Direct
         long delay = Math.max(0, MIN_OBSERVE_INTERVAL_MS - sinceLast);
         // Hop onto the scheduler so we never block a native callback thread on the reconcileLock / native calls.
         scheduler.schedule(this::reconcileTick, delay, TimeUnit.MILLISECONDS);
+    }
+
+    /**
+     * LEVEL-TRIGGERED ORPHAN ADOPTION (reconcile driver only, once per tick, before the device phase).
+     *
+     * A create-connection can complete AFTER the device reconciler gave up on it and dropped the wrapper's
+     * native handle: clearing-pending nulls the handle, but the native {@code BTDevice.disconnect()} no-ops on
+     * a not-yet-established connect, so the controller's pending {@code le_create_conn} stays armed and the
+     * link can land seconds later. Without adoption that late link is an ORPHAN ACL: the wrapper observes
+     * "not connected", the connected peripheral stops advertising, and rediscovery can never re-attach — a
+     * permanent wedge (observed live).
+     *
+     * Per the reconciler pattern this is an OBSERVE-side repair, not an event reaction: deviceConnected stays
+     * a pure requeue hint (events may be dropped), and each tick re-checks the level — "a wanted wrapper has
+     * no native handle, yet the adapter still tracks that device as connected" — and re-attaches the handle.
+     * Gated so the native sweep runs only when some wanted wrapper is actually handle-less; in steady state
+     * this adds zero native reads. Only a CONNECTED native device is adopted — a disconnected one must come
+     * back through a fresh advertisement (deviceFound), preserving the "trust the fresh frame" discipline.
+     */
+    private void adoptOrphanNativeConnections() {
+        List<DirectBTBluetoothDevice> orphans = new ArrayList<>();
+        forEachDevice(d -> {
+            if (d.isWanted() && !d.hasNativeDevice()) {
+                orphans.add(d);
+            }
+        });
+        if (orphans.isEmpty()) {
+            return;
+        }
+        BTAdapter localAdapter = adapter;
+        if (localAdapter == null) {
+            return;
+        }
+        List<BTDevice> known;
+        try {
+            known = localAdapter.getDiscoveredDevices();
+        } catch (RuntimeException e) {
+            logger.debug("Direct-BT getDiscoveredDevices failed during orphan adoption", e);
+            return;
+        }
+        for (DirectBTBluetoothDevice orphan : orphans) {
+            String addr = orphan.getAddress().toString();
+            for (BTDevice candidate : known) {
+                try {
+                    if (addr.equalsIgnoreCase(candidate.getAddressAndType().address.toString())
+                            && candidate.getConnected()) {
+                        logger.debug("Adopting connected native device for {} (orphaned ACL; re-attaching handle)",
+                                addr);
+                        orphan.updateBTDevice(candidate);
+                        break;
+                    }
+                } catch (RuntimeException e) {
+                    logger.debug("Orphan-adoption candidate check failed for {}", addr, e);
+                }
+            }
+        }
     }
 
     @Override
