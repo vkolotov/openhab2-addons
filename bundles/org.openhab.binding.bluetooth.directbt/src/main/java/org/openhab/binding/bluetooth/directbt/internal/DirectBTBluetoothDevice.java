@@ -91,9 +91,22 @@ public class DirectBTBluetoothDevice extends BaseBluetoothDevice implements Devi
     // When the reconciler last marked this device connected. Guards reconnect() (the generic handler's
     // GATT-unresolved bounce) against firing while the post-connect GATT resolve is still in flight.
     private volatile long connectedAtMillis;
-    /** How long after a connect the handler's GATT-recovery bounce is refused (resolve still in flight). */
-    static final long RECONNECT_GRACE_MILLIS = 15_000;
-    // Clock behind the grace window (injectable for tests; the reconciler shares it).
+    /**
+     * How long after a connect the handler's GATT-recovery bounce is refused (resolve still in flight). Must
+     * comfortably cover a full fresh pairing (~8s) PLUS the next resolve retry after it, otherwise the bounce
+     * fires in the gap between "pairing done" and "resolve retried" and tears down a link that was about to
+     * resolve (observed live as a periodic bounce/re-pair loop).
+     */
+    static final long RECONNECT_GRACE_MILLIS = 25_000;
+    // Until when the bridge's orphan-adoption sweep must leave this device alone. Set on markDisconnected():
+    // a DELIBERATE teardown issues a native disconnect that completes asynchronously, so for a short window the
+    // native device still reads connected — adopting it back would resurrect the link we just chose to drop
+    // (observed live: every GATT-recovery bounce was immediately undone by the sweep). A fresh advertisement
+    // (deviceFound) re-attaches the device the intended way.
+    private volatile long suppressAdoptionUntilMillis;
+    /** Adoption quiet window after a deliberate teardown (covers the async native disconnect completing). */
+    static final long ADOPTION_QUIET_MILLIS = 10_000;
+    // Clock behind the grace/quiet windows (injectable for tests; the reconciler shares it).
     private final Clock clock;
 
     // Maps an openHAB characteristic UUID to the Direct-BT characteristic handle (populated on discovery).
@@ -203,6 +216,15 @@ public class DirectBTBluetoothDevice extends BaseBluetoothDevice implements Devi
             logger.debug("Reconnect requested for {} within grace of connect; GATT resolve in flight, ignoring",
                     address);
             bridge.requeueReconcile(); // reconciler re-runs resolveGatt if still unresolved
+            return true;
+        }
+        if (isNativeConnected() && isPairing()) {
+            // Never bounce mid-SMP: an authenticated (passkey) negotiation can stall and retry internally for
+            // tens of seconds, and GATT stays unresolved the whole time. Tearing the link down here pre-empts
+            // SMP's own recovery and turns a slow pairing into an endless connect/bounce loop. Same freeze
+            // discipline as the reconciler's pairing-aware connect deadline.
+            logger.debug("Reconnect requested for {} while SMP pairing is negotiating; ignoring", address);
+            bridge.requeueReconcile();
             return true;
         }
         logger.debug("Reconnect requested for {} (GATT recovery); keeping connection intent", address);
@@ -358,8 +380,17 @@ public class DirectBTBluetoothDevice extends BaseBluetoothDevice implements Devi
         // the discovery reconciler turns the scan back on and re-finds the device from a FRESH advertisement before
         // the next connect -- the same "trust the fresh frame, not a cached object" discipline the rest of the
         // stack relies on. updateBTDevice() installs the new handle when the scan rediscovers it.
+        suppressAdoptionUntilMillis = clock.millis() + ADOPTION_QUIET_MILLIS;
         device = null;
         setConnectionState(ConnectionState.DISCONNECTED);
+    }
+
+    /**
+     * @return true iff the bridge's orphan-adoption sweep may re-attach a still-connected native device to this
+     *         wrapper. False during the quiet window after a deliberate teardown (see markDisconnected()).
+     */
+    boolean adoptionAllowed() {
+        return clock.millis() >= suppressAdoptionUntilMillis;
     }
 
     @Override

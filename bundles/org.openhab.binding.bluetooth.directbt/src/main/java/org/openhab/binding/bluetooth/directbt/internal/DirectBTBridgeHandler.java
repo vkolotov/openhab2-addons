@@ -12,6 +12,7 @@
  */
 package org.openhab.binding.bluetooth.directbt.internal;
 
+import java.time.Clock;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.ExecutorService;
@@ -185,7 +186,7 @@ public class DirectBTBridgeHandler extends AbstractBluetoothBridgeHandler<Direct
      * per-device configured PIN if one is set, otherwise decline so the negotiation fails cleanly rather than
      * hanging. Must be called from the {@code PASSKEY_EXPECTED} state (Direct-BT rejects it otherwise).
      */
-    private void replyPasskey(BTDevice device) {
+    void replyPasskey(BTDevice device) {
         BluetoothAddress address = toAddress(device);
         int passkey = getDevicePasskey(address);
         try {
@@ -219,10 +220,18 @@ public class DirectBTBridgeHandler extends AbstractBluetoothBridgeHandler<Direct
     }
 
     private final DirectBTManagerFactory managerFactory;
+    // Clock behind the reconcile-tick spacing (injectable for tests).
+    private final Clock clock;
 
     public DirectBTBridgeHandler(Bridge bridge, DirectBTManagerFactory managerFactory) {
+        this(bridge, managerFactory, Clock.systemUTC());
+    }
+
+    /** Test constructor: inject the clock driving the reconcile-tick spacing. */
+    DirectBTBridgeHandler(Bridge bridge, DirectBTManagerFactory managerFactory, Clock clock) {
         super(bridge);
         this.managerFactory = managerFactory;
+        this.clock = clock;
     }
 
     @Override
@@ -335,7 +344,7 @@ public class DirectBTBridgeHandler extends AbstractBluetoothBridgeHandler<Direct
                 // truth), so clear the pending flag BEFORE doing work: an event arriving during this tick will then
                 // schedule a fresh follow-up rather than being lost.
                 reconcilePending.set(false);
-                lastTickAt = System.currentTimeMillis();
+                lastTickAt = clock.millis();
                 AdapterReconciler ar = adapterReconciler;
                 if (ar == null) {
                     return;
@@ -379,7 +388,7 @@ public class DirectBTBridgeHandler extends AbstractBluetoothBridgeHandler<Direct
         if (!reconcilePending.compareAndSet(false, true)) {
             return; // a tick is already queued/in-flight; it will observe the latest truth. No native read here.
         }
-        long sinceLast = System.currentTimeMillis() - lastTickAt;
+        long sinceLast = clock.millis() - lastTickAt;
         long delay = Math.max(0, MIN_OBSERVE_INTERVAL_MS - sinceLast);
         // Hop onto the scheduler so we never block a native callback thread on the reconcileLock / native calls.
         scheduler.schedule(this::reconcileTick, delay, TimeUnit.MILLISECONDS);
@@ -405,7 +414,9 @@ public class DirectBTBridgeHandler extends AbstractBluetoothBridgeHandler<Direct
     private void adoptOrphanNativeConnections() {
         List<DirectBTBluetoothDevice> orphans = new ArrayList<>();
         forEachDevice(d -> {
-            if (d.isWanted() && !d.hasNativeDevice()) {
+            // adoptionAllowed(): skip devices inside the post-teardown quiet window — their native disconnect is
+            // still completing and re-adopting the dying link would undo the deliberate bounce.
+            if (d.isWanted() && !d.hasNativeDevice() && d.adoptionAllowed()) {
                 orphans.add(d);
             }
         });
@@ -423,6 +434,11 @@ public class DirectBTBridgeHandler extends AbstractBluetoothBridgeHandler<Direct
             logger.debug("Direct-BT getDiscoveredDevices failed during orphan adoption", e);
             return;
         }
+        adoptMatchingOrphans(orphans, known, logger);
+    }
+
+    /** The adoption matcher: re-attach each orphan to a CONNECTED native device with its address, if one exists. */
+    static void adoptMatchingOrphans(List<DirectBTBluetoothDevice> orphans, List<BTDevice> known, Logger logger) {
         for (DirectBTBluetoothDevice orphan : orphans) {
             String addr = orphan.getAddress().toString();
             for (BTDevice candidate : known) {

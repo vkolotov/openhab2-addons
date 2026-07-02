@@ -163,6 +163,46 @@ class DirectBTBluetoothDeviceTest {
         assertFalse(dev.hasNativeDevice(), "after the grace the bounce drops the handle for a fresh re-connect");
     }
 
+    @Test
+    void reconnectIsRefusedWhileSmpPairingIsNegotiatingEvenPastTheGrace() {
+        // An authenticated (passkey) SMP negotiation can stall and retry internally for tens of seconds with
+        // GATT unresolved throughout. The bounce must never pre-empt an in-flight SMP — same freeze discipline
+        // as the reconciler's pairing-aware connect deadline.
+        MutableClock clock = new MutableClock(1_000_000);
+        DirectBTBluetoothDevice dev = new DirectBTBluetoothDevice(bridge(), ADDRESS, clock);
+        dev.updateBTDevice(nativeDevice());
+        when(nativeDevice().getConnected()).thenReturn(true);
+        when(nativeDevice().getPairingState()).thenReturn(SMPPairingState.PASSKEY_EXPECTED);
+        dev.markConnected();
+
+        clock.advance(DirectBTBluetoothDevice.RECONNECT_GRACE_MILLIS + 1); // grace alone would allow the bounce
+        assertTrue(dev.reconnect());
+
+        assertTrue(dev.hasNativeDevice(), "a bounce must never tear down a link mid-SMP");
+        verify(nativeDevice(), never()).disconnect();
+    }
+
+    @Test
+    void adoptionIsSuppressedDuringTheQuietWindowAfterATeardown() {
+        // A deliberate teardown issues an ASYNC native disconnect; for a short window the native device still
+        // reads connected. The adoption sweep must not re-attach it in that window (it would resurrect the link
+        // the bounce just chose to drop), and must be allowed again once the window passes.
+        MutableClock clock = new MutableClock(1_000_000);
+        DirectBTBluetoothDevice dev = new DirectBTBluetoothDevice(bridge(), ADDRESS, clock);
+        dev.updateBTDevice(nativeDevice());
+
+        assertTrue(dev.adoptionAllowed(), "adoption is allowed before any teardown");
+
+        dev.markDisconnected();
+        assertFalse(dev.adoptionAllowed(), "adoption is suppressed right after a teardown");
+
+        clock.advance(DirectBTBluetoothDevice.ADOPTION_QUIET_MILLIS - 1);
+        assertFalse(dev.adoptionAllowed(), "still suppressed inside the quiet window");
+
+        clock.advance(2);
+        assertTrue(dev.adoptionAllowed(), "allowed again once the quiet window has passed");
+    }
+
     // --- markDisconnected() zombie-ACL guard ------------------------------------------------------
 
     @Test
