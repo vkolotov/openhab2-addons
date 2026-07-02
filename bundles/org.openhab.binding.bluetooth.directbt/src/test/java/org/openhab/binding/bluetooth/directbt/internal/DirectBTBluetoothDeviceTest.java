@@ -291,6 +291,52 @@ class DirectBTBluetoothDeviceTest {
         verify(nativeDevice()).connectLE(anyShort(), anyShort(), anyShort(), anyShort(), anyShort(), anyShort());
     }
 
+    // --- persisted-bond wiring (restart survival) --------------------------------------------------
+
+    @Test
+    void connectNativeAppliesThePersistedBondOncePerHandle() {
+        device().updateBTDevice(nativeDevice());
+        when(nativeDevice().connectLE(anyShort(), anyShort(), anyShort(), anyShort(), anyShort(), anyShort()))
+                .thenReturn(HCIStatusCode.SUCCESS);
+        when(bridge().getDeviceConnectionSecurity(any()))
+                .thenReturn(DirectBTAdapterConstants.CONNECTION_SECURITY_ENCRYPTED);
+        BondStore store = mock(BondStore.class);
+        when(bridge().getBondStore()).thenReturn(store);
+
+        device().connectNative();
+        device().connectNative(); // retry on the same handle must not re-upload
+
+        verify(store, times(1)).apply(nativeDevice());
+    }
+
+    @Test
+    void connectNativeSkipsTheBondStoreForUnsecuredDevices() {
+        device().updateBTDevice(nativeDevice());
+        when(nativeDevice().connectLE(anyShort(), anyShort(), anyShort(), anyShort(), anyShort(), anyShort()))
+                .thenReturn(HCIStatusCode.SUCCESS);
+        when(bridge().getDeviceConnectionSecurity(any())).thenReturn(DirectBTAdapterConstants.CONNECTION_SECURITY_NONE);
+        BondStore store = mock(BondStore.class);
+        when(bridge().getBondStore()).thenReturn(store);
+
+        device().connectNative();
+
+        verify(store, never()).apply(any());
+    }
+
+    @Test
+    void clearStalePairingAlsoDeletesThePersistedBond() {
+        // The self-heal drops a dead in-memory key; the disk copy must go too, or every restart resurrects
+        // the dead bond and the self-heal never sticks.
+        BondStore store = mock(BondStore.class);
+        when(bridge().getBondStore()).thenReturn(store);
+        device().updateBTDevice(nativeDevice());
+
+        device().clearStalePairing();
+
+        verify(store).delete(ADDRESS);
+        verify(nativeDevice()).unpair();
+    }
+
     @Test
     void connectNativeRequestsJustWorksEncryptionWhenDeviceOptsIn() {
         device().updateBTDevice(nativeDevice());

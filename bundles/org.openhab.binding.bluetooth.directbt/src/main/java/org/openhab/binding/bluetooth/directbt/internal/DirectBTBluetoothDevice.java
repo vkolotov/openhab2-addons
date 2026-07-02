@@ -106,6 +106,9 @@ public class DirectBTBluetoothDevice extends BaseBluetoothDevice implements Devi
     private volatile long suppressAdoptionUntilMillis;
     /** Adoption quiet window after a deliberate teardown (covers the async native disconnect completing). */
     static final long ADOPTION_QUIET_MILLIS = 10_000;
+    // Whether the persisted bond (if any) was already uploaded onto this device object. One attempt per
+    // handle: mid-session the kernel holds the keys anyway; the upload matters after a restart.
+    private volatile boolean bondApplied;
     // Clock behind the grace/quiet windows (injectable for tests; the reconciler shares it).
     private final Clock clock;
 
@@ -428,12 +431,26 @@ public class DirectBTBluetoothDevice extends BaseBluetoothDevice implements Devi
             // the peer we input the key it holds. Enforced fail-closed via securityRequirementUnmet().
             // - "none" (default): NONE. See docs/directbt-encryption-pairing-findings.md.
             String securityMode = bridge.getDeviceConnectionSecurity(address);
+            boolean secured = !DirectBTAdapterConstants.CONNECTION_SECURITY_NONE.equalsIgnoreCase(securityMode);
             if (DirectBTAdapterConstants.CONNECTION_SECURITY_PIN.equalsIgnoreCase(securityMode)) {
                 dev.setConnSecurity(BTSecurityLevel.ENC_AUTH, SMPIOCapability.KEYBOARD_ONLY);
             } else if (DirectBTAdapterConstants.CONNECTION_SECURITY_ENCRYPTED.equalsIgnoreCase(securityMode)) {
                 dev.setConnSecurity(BTSecurityLevel.ENC_ONLY, SMPIOCapability.NO_INPUT_NO_OUTPUT);
             } else {
                 dev.setConnSecurity(BTSecurityLevel.NONE, SMPIOCapability.NO_INPUT_NO_OUTPUT);
+            }
+            // BOND PERSISTENCE (restart survival): before the first connect of this device object, upload any
+            // persisted SMP keys so the reconnect reuses the stored bond (PRE_PAIRED) instead of re-pairing —
+            // essential for peers that limit pairings or only pair in an explicit pairing mode. Once per
+            // handle: mid-session the keys already live in the kernel; this matters after a restart/power
+            // cycle when everything in-memory is gone. Must run BEFORE connectLE (upload is rejected on a
+            // connected device).
+            if (secured && !bondApplied) {
+                bondApplied = true; // one attempt per device object; a fresh pairing overwrites the store anyway
+                BondStore store = bridge.getBondStore();
+                if (store != null && store.apply(dev)) {
+                    logger.debug("Persisted bond applied to {}; reconnect will reuse the stored keys", address);
+                }
             }
             return dev.connectLE(LE_SCAN_INTERVAL, LE_SCAN_WINDOW, CONN_INTERVAL_MIN, CONN_INTERVAL_MAX, CONN_LATENCY,
                     CONN_SUPERVISION_TIMEOUT);
@@ -474,6 +491,12 @@ public class DirectBTBluetoothDevice extends BaseBluetoothDevice implements Devi
 
     @Override
     public void clearStalePairing() {
+        // The stored key is dead (the peer no longer honours it) — the persisted copy must go too, or the
+        // dead bond is resurrected from disk on every restart and the self-heal never sticks.
+        BondStore store = bridge.getBondStore();
+        if (store != null) {
+            store.delete(address);
+        }
         BTDevice dev = device;
         if (dev == null) {
             return;

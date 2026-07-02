@@ -40,6 +40,7 @@ import org.openhab.binding.bluetooth.BluetoothBindingConstants;
 import org.openhab.binding.bluetooth.directbt.internal.reconcile.AdapterReconciler;
 import org.openhab.binding.bluetooth.directbt.internal.reconcile.DeviceReconciler;
 import org.openhab.binding.bluetooth.directbt.internal.reconcile.ResetBudget;
+import org.openhab.core.OpenHAB;
 import org.openhab.core.common.ThreadPoolManager;
 import org.openhab.core.thing.Bridge;
 import org.openhab.core.thing.Thing;
@@ -111,6 +112,8 @@ public class DirectBTBridgeHandler extends AbstractBluetoothBridgeHandler<Direct
     private @Nullable AdapterReconciler adapterReconciler;
     private boolean managerReady;
     private volatile boolean disposed;
+    // Per-adapter persisted-bond store (SMPKeyBin files); created once the adapter MAC is confirmed.
+    private volatile @Nullable BondStore bondStore;
 
     // NOTE: AdapterStatusListener's constructor only builds its native peer if BTFactory.isInitialized();
     // it must therefore be created AFTER getDirectBTManager(), not as a field initializer (otherwise its
@@ -176,6 +179,18 @@ public class DirectBTBridgeHandler extends AbstractBluetoothBridgeHandler<Direct
             logger.debug("Direct-BT devicePairingState: {} state={} mode={}", device.getAddressAndType(), state, mode);
             if (state == SMPPairingState.PASSKEY_EXPECTED) {
                 replyPasskey(device);
+            }
+            if (state == SMPPairingState.COMPLETED && mode != PairingMode.PRE_PAIRED) {
+                // A FRESH pairing just distributed keys: persist them so the bond survives a restart/power
+                // cycle. PRE_PAIRED completions reuse existing keys (nothing new to save). Only for devices
+                // that opted into a security mode; runs on the executor (createAndWrite does native reads +
+                // file I/O, and this is a native callback thread).
+                BondStore store = bondStore;
+                BluetoothAddress deviceAddress = toAddress(device);
+                if (store != null && !DirectBTAdapterConstants.CONNECTION_SECURITY_NONE
+                        .equalsIgnoreCase(getDeviceConnectionSecurity(deviceAddress))) {
+                    executor.submit(() -> store.save(device));
+                }
             }
             requeueReconcile();
         }
@@ -300,7 +315,18 @@ public class DirectBTBridgeHandler extends AbstractBluetoothBridgeHandler<Direct
         if (adapter != null) {
             return;
         }
+        // Bond persistence is per adapter (the LTK binds the peer to THIS adapter's identity), so the store
+        // directory is keyed by the adapter MAC. Created here because the MAC is only certain once the
+        // adapter is up.
+        bondStore = new BondStore(java.nio.file.Path.of(OpenHAB.getUserDataFolder(), "bluetooth", "directbt-keys",
+                mac.replace(":", "").toLowerCase(java.util.Locale.ROOT)));
         bringUpAdapter(added, wanted);
+    }
+
+    /** @return the per-adapter persisted-bond store, or {@code null} until the adapter is up. */
+    @Nullable
+    BondStore getBondStore() {
+        return bondStore;
     }
 
     // ============================================================================================
