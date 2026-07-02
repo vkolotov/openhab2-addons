@@ -30,51 +30,17 @@
 				<description>If enabled, will automatically connect to the device and reconnect if connection is lost.</description>
 				<default>true</default>
 			</parameter>
-			<parameter name="connectionSecurity" type="text">
-				<label>Connection Security</label>
-				<description>How the connection to this device is secured. The encrypted/PIN modes are EXPERIMENTAL and
-					currently
-					honoured only by the Direct-BT adapter (other adapters ignore this). See each option:
-					• None: unencrypted, unbonded
-					— the proven, dead-stable default, suitable for open sensors.
-					• Encrypted: request Just-Works LE encryption (no
-					passkey/MITM). Strict — it never downgrades to
-					unencrypted; if encryption cannot be established it keeps retrying.
-					Use for devices that must never
-					talk unencrypted.
-					• Encrypted with fallback: request encryption, but automatically
-					fall back to an unencrypted
-					connection if the device pairs and then repeatedly fails to reconnect. This happens
-					because of a
-					current limitation — after pairing, some devices switch to a resolvable/identity address that the
-					Bluetooth stack cannot yet resolve on reconnect (bonded reconnect is not fully implemented), so the
-					link would
-					otherwise loop forever. The fallback keeps the device usable; choose this when availability
-					matters more than
-					guaranteed confidentiality.
-					• PIN: authenticated (MITM-protected) pairing using a fixed passkey (set "Passkey (PIN)"
-					below). Fails
-					closed — if the device cannot do authenticated pairing it does NOT connect, never downgrading to a
-					weaker link.</description>
-				<options>
-					<option value="none">None</option>
-					<option value="encrypted">Encrypted</option>
-					<option value="encrypted-with-fallback">Encrypted with fallback</option>
-					<option value="pin">PIN</option>
-				</options>
-				<limitToOptions>true</limitToOptions>
-				<advanced>true</advanced>
-				<default>none</default>
-			</parameter>
-			<parameter name="passkey" type="integer" min="0" max="999999">
-				<label>Passkey (PIN)</label>
-				<description>The fixed passkey/PIN (0–999999) supplied for authenticated pairing when Connection Security
-					is "PIN".
-					Enter the PIN the device expects. Ignored for the other security modes. Note: this is stored in
-					the Thing
-					configuration; treat it as a secret.</description>
-				<advanced>true</advanced>
-			</parameter>
+			<!--
+				connectionSecurity / passkey (per-device LE encryption: none / encrypted / encrypted-with-fallback /
+				pin) are intentionally NOT exposed in the UI. The modes are implemented and honoured by the Direct-BT
+				adapter (see DirectBTAdapterConstants + DirectBTBluetoothDevice.connectNative), and an existing Thing
+				config carrying one of these keys is still respected, but the encrypted modes cannot yet RECONNECT
+				reliably (Direct-BT "Defect 2": on bonding the peer distributes an identity address the stack does not
+				resolve on reconnect — needs native resolving-list support). Until that is fixed, offering these in the
+				UI would invite a half-working choice, so only the default "none" behaviour is surfaced. Re-add the
+				<parameter> block below to expose them once bonded reconnect is solid. See
+				docs/directbt-security-modes-review.md.
+			-->
 		</config-description>
 
 	</thing-type>
