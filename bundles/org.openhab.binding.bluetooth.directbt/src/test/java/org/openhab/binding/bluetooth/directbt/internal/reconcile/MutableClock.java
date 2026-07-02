@@ -26,16 +26,16 @@ import org.eclipse.jdt.annotation.Nullable;
  * @author Vlad Kolotov - Initial contribution
  */
 @NonNullByDefault
-class MutableClock extends Clock {
+public class MutableClock extends Clock {
 
     private long millis;
 
-    MutableClock(long startMillis) {
+    public MutableClock(long startMillis) {
         this.millis = startMillis;
     }
 
     /** Move time forward by {@code deltaMillis} (must be >= 0). */
-    void advance(long deltaMillis) {
+    public void advance(long deltaMillis) {
         millis += deltaMillis;
     }
 

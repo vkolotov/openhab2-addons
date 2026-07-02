@@ -30,17 +30,27 @@
 				<description>If enabled, will automatically connect to the device and reconnect if connection is lost.</description>
 				<default>true</default>
 			</parameter>
-			<!--
-				connectionSecurity / passkey (per-device LE encryption: none / encrypted / encrypted-with-fallback /
-				pin) are intentionally NOT exposed in the UI. The modes are implemented and honoured by the Direct-BT
-				adapter (see DirectBTAdapterConstants + DirectBTBluetoothDevice.connectNative), and an existing Thing
-				config carrying one of these keys is still respected, but the encrypted modes cannot yet RECONNECT
-				reliably (Direct-BT "Defect 2": on bonding the peer distributes an identity address the stack does not
-				resolve on reconnect — needs native resolving-list support). Until that is fixed, offering these in the
-				UI would invite a half-working choice, so only the default "none" behaviour is surfaced. Re-add the
-				<parameter> block below to expose them once bonded reconnect is solid. See
-				docs/directbt-security-modes-review.md.
-			-->
+			<parameter name="connectionSecurity" type="text">
+				<label>Connection Security</label>
+				<description><![CDATA[LE connection security for this device (honoured by transports that support it,
+					e.g. the Direct-BT adapter).<br/>
+					<b>None</b>: unencrypted connection (default).<br/>
+					<b>Encrypted</b>: request an encrypted link (Just-Works pairing, no PIN). Strict: never falls back
+					to an unencrypted connection.<br/>
+					<b>PIN</b>: encrypted and authenticated link (Passkey Entry) using the configured Passkey. Strict:
+					the connection is refused rather than downgraded if the device cannot pair authenticated.]]></description>
+				<options>
+					<option value="none">None</option>
+					<option value="encrypted">Encrypted</option>
+					<option value="pin">PIN</option>
+				</options>
+				<default>none</default>
+			</parameter>
+			<parameter name="passkey" type="integer" min="0" max="999999">
+				<advanced>true</advanced>
+				<label>Passkey</label>
+				<description>The device's fixed 6-digit pairing PIN (0..999999), used when Connection Security is PIN.</description>
+			</parameter>
 		</config-description>
 
 	</thing-type>

@@ -509,65 +509,6 @@ class DeviceReconcilerTest {
     }
 
     // ---------------------------------------------------------------------------------------------
-    // Safe bailout for the encrypted-reconnect gap ("Defect 2"): a device that paired and then shows an identity
-    // flip (tracked address diverged from its advert) cannot be reconnected by Direct-BT (no resolving-list
-    // entry). After a few stuck connects the reconciler must degrade it to an unencrypted connection so it stays
-    // usable, instead of looping forever. A stuck connect WITHOUT an identity flip must NOT trigger the downgrade.
-    // ---------------------------------------------------------------------------------------------
-    @Test
-    void repeatedStuckConnectWithIdentityFlipBailsOutToUnencrypted() {
-        FakeDevicePort port = new FakeDevicePort();
-        port.wanted = true;
-        port.hasNative = true;
-        port.identityFlip = true; // paired, then flipped identity -> cannot reconnect encrypted
-        port.connectResult = HCIStatusCode.SUCCESS;
-
-        MutableClock clock = new MutableClock(START);
-        DeviceReconciler r = reconciler(port, scanOff(), clock);
-
-        // Drive several stuck-connect cycles: each connect never settles, deadline fires, device re-found.
-        for (int i = 0; i < 3; i++) {
-            r.reconcile(); // issue connect -> CONNECTING
-            port.hasNative = true;
-            port.flagConnecting = true;
-            clock.advance(CONNECT_DEADLINE_MS + 10_000); // past deadline + backoff
-            r.reconcile(); // stuck -> clears pending, counts the identity-flip failure
-            port.flagConnecting = false;
-            port.hasNative = true; // re-found for the next attempt
-            clock.advance(CONNECT_RETRY_MS + 10_000);
-        }
-
-        assertTrue(port.encryptionFallbackDisabled,
-                "after repeated stuck connects with an identity flip, degrade to an unencrypted connection");
-    }
-
-    @Test
-    void repeatedStuckConnectWithoutIdentityFlipDoesNotBailOut() {
-        FakeDevicePort port = new FakeDevicePort();
-        port.wanted = true;
-        port.hasNative = true;
-        port.identityFlip = false; // plain RF/transient stuck connect, not the Defect-2 case
-        port.connectResult = HCIStatusCode.SUCCESS;
-
-        MutableClock clock = new MutableClock(START);
-        DeviceReconciler r = reconciler(port, scanOff(), clock);
-
-        for (int i = 0; i < 5; i++) {
-            r.reconcile();
-            port.hasNative = true;
-            port.flagConnecting = true;
-            clock.advance(CONNECT_DEADLINE_MS + 10_000);
-            r.reconcile();
-            port.flagConnecting = false;
-            port.hasNative = true;
-            clock.advance(CONNECT_RETRY_MS + 10_000);
-        }
-
-        assertFalse(port.encryptionFallbackDisabled,
-                "a stuck connect without an identity flip must never downgrade encryption");
-    }
-
-    // ---------------------------------------------------------------------------------------------
     // Security enforcement (fail closed): when the configured mode requires authentication ("pin") but the link
     // negotiated down (peer can't do MITM), the reconciler must REFUSE — disconnect and NOT resolve GATT — rather
     // than silently expose data over a weaker-than-demanded link.

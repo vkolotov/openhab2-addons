@@ -678,8 +678,8 @@ public class DirectBTBridgeHandler extends AbstractBluetoothBridgeHandler<Direct
 
     /**
      * The per-device connection security mode, read from the device Thing's {@code connectionSecurity} config
-     * (mirrors {@link #isDeviceEnabled}). One of {@code none} / {@code encrypted} / {@code encrypted-with-fallback}
-     * / {@code pin} (see {@link DirectBTAdapterConstants}). This is per-device rather than per-bridge so an
+     * (mirrors {@link #isDeviceEnabled}). One of {@code none} / {@code encrypted} / {@code pin}
+     * (see {@link DirectBTAdapterConstants}). This is per-device rather than per-bridge so an
      * encryption request is only ever made where it is wanted. Falls back to {@code none} for an
      * unknown/handleless device.
      */

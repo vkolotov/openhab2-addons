@@ -52,10 +52,6 @@ class FakeDevicePort implements DevicePort {
     boolean pairing;
     // Whether the device holds stored SMP keys a reconnect would reuse (BTDevice.isPrePaired()).
     boolean prePaired;
-    // Whether the tracked identity has diverged from the advertised address (the Defect-2 fingerprint).
-    boolean identityFlip;
-    // Latched true once the safe-bailout downgraded this device to an unencrypted connection.
-    boolean encryptionFallbackDisabled;
     // Whether the configured security requirement (e.g. authenticated "pin") is unmet on the current link.
     boolean securityUnmet;
 
@@ -153,16 +149,6 @@ class FakeDevicePort implements DevicePort {
     public void clearStalePairing() {
         clearStalePairingCalls++;
         prePaired = false;
-    }
-
-    @Override
-    public boolean hasIdentityFlip() {
-        return identityFlip;
-    }
-
-    @Override
-    public void disableEncryptionFallback() {
-        encryptionFallbackDisabled = true;
     }
 
     @Override

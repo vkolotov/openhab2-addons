@@ -22,8 +22,6 @@ import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executors;
 
-import org.direct_bt.BDAddressAndType;
-import org.direct_bt.BDAddressType;
 import org.direct_bt.BTDevice;
 import org.direct_bt.BTGattChar;
 import org.direct_bt.BTGattService;
@@ -45,6 +43,7 @@ import org.mockito.quality.Strictness;
 import org.openhab.binding.bluetooth.BluetoothAddress;
 import org.openhab.binding.bluetooth.BluetoothCharacteristic;
 import org.openhab.binding.bluetooth.BluetoothDeviceListener;
+import org.openhab.binding.bluetooth.directbt.internal.reconcile.MutableClock;
 import org.openhab.binding.bluetooth.directbt.internal.reconcile.ResetBudget;
 import org.slf4j.LoggerFactory;
 
@@ -129,6 +128,67 @@ class DirectBTBluetoothDeviceTest {
         assertFalse(device().hasNativeDevice(), "reconnect drops the live handle so a fresh advert re-connects");
     }
 
+    @Test
+    void reconnectWithinGraceOfConnectIsRefusedWhileLinkIsUp() {
+        // The generic handler may request a bounce the moment it sees CONNECTED with services unresolved, but the
+        // reconciler's post-connect GATT resolve can outlast one poll period. Within the grace window the bounce
+        // must be refused (the in-flight resolve IS the recovery), else every fresh connection gets torn down
+        // mid-resolve and the device loops connect/bounce forever.
+        MutableClock clock = new MutableClock(1_000_000);
+        DirectBTBluetoothDevice dev = new DirectBTBluetoothDevice(bridge(), ADDRESS, clock);
+        dev.updateBTDevice(nativeDevice());
+        when(nativeDevice().getConnected()).thenReturn(true);
+        dev.markConnected();
+
+        clock.advance(DirectBTBluetoothDevice.RECONNECT_GRACE_MILLIS - 1);
+        assertTrue(dev.reconnect());
+
+        assertTrue(dev.hasNativeDevice(), "bounce within the grace window is refused; the handle stays");
+        assertTrue(dev.isFlagConnected(), "the connection is untouched while the resolve is in flight");
+        verify(nativeDevice(), never()).disconnect();
+    }
+
+    @Test
+    void reconnectAfterGraceIsHonoured() {
+        MutableClock clock = new MutableClock(1_000_000);
+        DirectBTBluetoothDevice dev = new DirectBTBluetoothDevice(bridge(), ADDRESS, clock);
+        dev.updateBTDevice(nativeDevice());
+        when(nativeDevice().getConnected()).thenReturn(true);
+        dev.markConnected();
+
+        clock.advance(DirectBTBluetoothDevice.RECONNECT_GRACE_MILLIS + 1);
+        assertTrue(dev.reconnect());
+
+        // Past the grace an unresolved link is genuinely stuck: the bounce proceeds (and tears the link down).
+        assertFalse(dev.hasNativeDevice(), "after the grace the bounce drops the handle for a fresh re-connect");
+    }
+
+    // --- markDisconnected() zombie-ACL guard ------------------------------------------------------
+
+    @Test
+    void markDisconnectedTearsDownALiveNativeLink() {
+        device().updateBTDevice(nativeDevice());
+        when(nativeDevice().getConnected()).thenReturn(true);
+
+        device().markDisconnected();
+
+        // Nulling the handle of a LIVE link would leak the ACL: the connected peripheral stops advertising and
+        // rediscovery can never re-attach. The link must be torn down before the handle is dropped.
+        verify(nativeDevice()).disconnect();
+        assertFalse(device().hasNativeDevice());
+    }
+
+    @Test
+    void markDisconnectedDoesNotDisconnectAnAlreadyDownLink() {
+        device().updateBTDevice(nativeDevice());
+        when(nativeDevice().getConnected()).thenReturn(false);
+
+        device().markDisconnected();
+
+        verify(nativeDevice(), never()).disconnect();
+        assertFalse(device().hasNativeDevice());
+    }
+
     // --- DevicePort native truth -----------------------------------------------------------------
 
     @Test
@@ -210,54 +270,6 @@ class DirectBTBluetoothDeviceTest {
     }
 
     @Test
-    void connectNativeRequestsEncryptionForEncryptedPreferredToo() {
-        device().updateBTDevice(nativeDevice());
-        when(nativeDevice().connectLE(anyShort(), anyShort(), anyShort(), anyShort(), anyShort(), anyShort()))
-                .thenReturn(HCIStatusCode.SUCCESS);
-        // "encrypted-preferred" requests the same ENC_ONLY level as "auto"; they differ only in bailout policy.
-        when(bridge().getDeviceConnectionSecurity(any()))
-                .thenReturn(DirectBTAdapterConstants.CONNECTION_SECURITY_ENCRYPTED_WITH_FALLBACK);
-
-        assertEquals(HCIStatusCode.SUCCESS, device().connectNative());
-
-        verify(nativeDevice()).setConnSecurity(BTSecurityLevel.ENC_ONLY, SMPIOCapability.NO_INPUT_NO_OUTPUT);
-    }
-
-    // --- encryption bailout is mode-gated: encrypted-preferred downgrades, strict auto does NOT --------------
-
-    @Test
-    void disableEncryptionFallbackDowngradesUnderEncryptedPreferred() {
-        device().updateBTDevice(nativeDevice());
-        when(nativeDevice().connectLE(anyShort(), anyShort(), anyShort(), anyShort(), anyShort(), anyShort()))
-                .thenReturn(HCIStatusCode.SUCCESS);
-        when(bridge().getDeviceConnectionSecurity(any()))
-                .thenReturn(DirectBTAdapterConstants.CONNECTION_SECURITY_ENCRYPTED_WITH_FALLBACK);
-
-        device().disableEncryptionFallback(); // the reconciler's safe bailout
-        device().connectNative();
-
-        // After the bailout, encrypted-preferred connects UNENCRYPTED (NONE) so the device stays usable.
-        verify(nativeDevice()).setConnSecurity(BTSecurityLevel.NONE, SMPIOCapability.NO_INPUT_NO_OUTPUT);
-        verify(nativeDevice(), never()).setConnSecurity(BTSecurityLevel.ENC_ONLY, SMPIOCapability.NO_INPUT_NO_OUTPUT);
-    }
-
-    @Test
-    void disableEncryptionFallbackIsIgnoredUnderStrictAuto() {
-        device().updateBTDevice(nativeDevice());
-        when(nativeDevice().connectLE(anyShort(), anyShort(), anyShort(), anyShort(), anyShort(), anyShort()))
-                .thenReturn(HCIStatusCode.SUCCESS);
-        when(bridge().getDeviceConnectionSecurity(any()))
-                .thenReturn(DirectBTAdapterConstants.CONNECTION_SECURITY_ENCRYPTED);
-
-        device().disableEncryptionFallback(); // must be a no-op under strict auto
-        device().connectNative();
-
-        // Strict "auto" NEVER downgrades: it must still request ENC_ONLY, not NONE, so a lock never talks plaintext.
-        verify(nativeDevice()).setConnSecurity(BTSecurityLevel.ENC_ONLY, SMPIOCapability.NO_INPUT_NO_OUTPUT);
-        verify(nativeDevice(), never()).setConnSecurity(BTSecurityLevel.NONE, SMPIOCapability.NO_INPUT_NO_OUTPUT);
-    }
-
-    @Test
     void connectNativeRequestsAuthenticatedSecurityForPinMode() {
         device().updateBTDevice(nativeDevice());
         when(nativeDevice().connectLE(anyShort(), anyShort(), anyShort(), anyShort(), anyShort(), anyShort()))
@@ -269,21 +281,6 @@ class DirectBTBluetoothDeviceTest {
 
         verify(nativeDevice()).setConnSecurity(BTSecurityLevel.ENC_AUTH, SMPIOCapability.KEYBOARD_ONLY);
         verify(nativeDevice(), never()).setConnSecurity(BTSecurityLevel.ENC_ONLY, SMPIOCapability.NO_INPUT_NO_OUTPUT);
-    }
-
-    @Test
-    void pinModeIsNotSubjectToTheEncryptionBailout() {
-        device().updateBTDevice(nativeDevice());
-        when(nativeDevice().connectLE(anyShort(), anyShort(), anyShort(), anyShort(), anyShort(), anyShort()))
-                .thenReturn(HCIStatusCode.SUCCESS);
-        when(bridge().getDeviceConnectionSecurity(any())).thenReturn(DirectBTAdapterConstants.CONNECTION_SECURITY_PIN);
-
-        device().disableEncryptionFallback(); // only encrypted-preferred honours this; pin must ignore it
-        device().connectNative();
-
-        // pin still requests authenticated security, never NONE.
-        verify(nativeDevice()).setConnSecurity(BTSecurityLevel.ENC_AUTH, SMPIOCapability.KEYBOARD_ONLY);
-        verify(nativeDevice(), never()).setConnSecurity(BTSecurityLevel.NONE, SMPIOCapability.NO_INPUT_NO_OUTPUT);
     }
 
     // --- pin mode fails closed: authenticated requirement must be enforced, never downgraded -----------------
@@ -315,8 +312,7 @@ class DirectBTBluetoothDeviceTest {
         device().updateBTDevice(nativeDevice());
         when(nativeDevice().getPairingMode()).thenReturn(PairingMode.JUST_WORKS);
         for (String mode : List.of(DirectBTAdapterConstants.CONNECTION_SECURITY_NONE,
-                DirectBTAdapterConstants.CONNECTION_SECURITY_ENCRYPTED,
-                DirectBTAdapterConstants.CONNECTION_SECURITY_ENCRYPTED_WITH_FALLBACK)) {
+                DirectBTAdapterConstants.CONNECTION_SECURITY_ENCRYPTED)) {
             when(bridge().getDeviceConnectionSecurity(any())).thenReturn(mode);
             assertFalse(device().securityRequirementUnmet(), mode + " has no authenticated requirement to enforce");
         }
@@ -410,38 +406,6 @@ class DirectBTBluetoothDeviceTest {
     @Test
     void clearStalePairingWithoutHandleIsANoOp() {
         assertDoesNotThrow(() -> device().clearStalePairing());
-    }
-
-    // --- identity-flip detection (Defect-2 safe bailout fingerprint) -----------------------------
-
-    @Test
-    void hasIdentityFlipIsFalseWithoutHandle() {
-        assertFalse(device().hasIdentityFlip(), "no handle -> no identity flip");
-    }
-
-    @Test
-    void hasIdentityFlipIsTrueWhenTrackedTypeDivergesFromAdvertised() {
-        device().updateBTDevice(nativeDevice());
-        // Advertised RANDOM, tracked flipped to PUBLIC after pairing distributed an identity -> the Defect-2 case.
-        when(nativeDevice().getVisibleAddressAndType()).thenReturn(addr(BDAddressType.BDADDR_LE_RANDOM));
-        when(nativeDevice().getAddressAndType()).thenReturn(addr(BDAddressType.BDADDR_LE_PUBLIC));
-
-        assertTrue(device().hasIdentityFlip(), "tracked PUBLIC vs advertised RANDOM is the identity flip");
-    }
-
-    @Test
-    void hasIdentityFlipIsFalseWhenTypesMatch() {
-        device().updateBTDevice(nativeDevice());
-        when(nativeDevice().getVisibleAddressAndType()).thenReturn(addr(BDAddressType.BDADDR_LE_RANDOM));
-        when(nativeDevice().getAddressAndType()).thenReturn(addr(BDAddressType.BDADDR_LE_RANDOM));
-
-        assertFalse(device().hasIdentityFlip(), "matching address types -> no flip (the normal case)");
-    }
-
-    private static BDAddressAndType addr(BDAddressType type) {
-        BDAddressAndType a = mock(BDAddressAndType.class);
-        a.type = type; // public field
-        return a;
     }
 
     @Test

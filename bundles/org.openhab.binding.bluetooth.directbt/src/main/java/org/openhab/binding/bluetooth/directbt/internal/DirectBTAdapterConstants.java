@@ -46,13 +46,6 @@ public class DirectBTAdapterConstants {
     public static final String CONNECTION_SECURITY_ENCRYPTED = "encrypted";
 
     /**
-     * Just-Works LE encryption, RESILIENT: request encryption, but if the device pairs and then cannot reconnect
-     * (the identity-flip / resolving-list gap), automatically fall back to an unencrypted connection so it stays
-     * usable. Use for devices where availability matters more than confidentiality.
-     */
-    public static final String CONNECTION_SECURITY_ENCRYPTED_WITH_FALLBACK = "encrypted-with-fallback";
-
-    /**
      * Authenticated (MITM-protected) LE encryption via Passkey Entry: the peripheral displays / has a fixed PIN,
      * and we supply the configured {@link #CONFIGURATION_PASSKEY} when the device asks (SMP PASSKEY_EXPECTED).
      * Uses {@code setConnSecurity(ENC_AUTH, KEYBOARD_ONLY)}. Opt-in per device.

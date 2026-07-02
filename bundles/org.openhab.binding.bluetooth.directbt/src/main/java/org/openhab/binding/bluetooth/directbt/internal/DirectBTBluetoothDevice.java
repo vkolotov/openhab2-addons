@@ -12,6 +12,7 @@
  */
 package org.openhab.binding.bluetooth.directbt.internal;
 
+import java.time.Clock;
 import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
@@ -87,17 +88,13 @@ public class DirectBTBluetoothDevice extends BaseBluetoothDevice implements Devi
     // two different cases: a real idle disconnect after services are resolved, and a generic "connected but GATT
     // unresolved" retry. Only the former should clear this flag.
     private volatile boolean wantConnected;
-    // Safe-bailout latch: set when an encryption-configured device repeatedly fails to reconnect after pairing
-    // (the identity-flip / resolving-list gap, "Defect 2"). Once latched, connectNative() degrades to unencrypted
-    // (NONE) so the device stays USABLE instead of looping forever. Reset by a clean disconnect intent. See
-    // disableEncryptionFallback()/docs/directbt-encryption-pairing-findings.md.
-    private volatile boolean encryptionFallbackToNone;
-
     // When the reconciler last marked this device connected. Guards reconnect() (the generic handler's
     // GATT-unresolved bounce) against firing while the post-connect GATT resolve is still in flight.
     private volatile long connectedAtMillis;
     /** How long after a connect the handler's GATT-recovery bounce is refused (resolve still in flight). */
     static final long RECONNECT_GRACE_MILLIS = 15_000;
+    // Clock behind the grace window (injectable for tests; the reconciler shares it).
+    private final Clock clock;
 
     // Maps an openHAB characteristic UUID to the Direct-BT characteristic handle (populated on discovery).
     private final Map<UUID, BTGattChar> gattCharByUuid = new ConcurrentHashMap<>();
@@ -105,13 +102,19 @@ public class DirectBTBluetoothDevice extends BaseBluetoothDevice implements Devi
     private final Map<UUID, BTGattCharListener> notifyListeners = new ConcurrentHashMap<>();
 
     public DirectBTBluetoothDevice(DirectBTBridgeHandler adapter, BluetoothAddress address) {
+        this(adapter, address, Clock.systemUTC());
+    }
+
+    /** Test constructor: inject the clock driving the reconnect-grace window and the device reconciler. */
+    DirectBTBluetoothDevice(DirectBTBridgeHandler adapter, BluetoothAddress address, Clock clock) {
         super(adapter, address);
         this.bridge = adapter;
         this.executor = adapter.getExecutor();
+        this.clock = clock;
         this.reconciler = new DeviceReconciler(logger, this, () -> {
             AdapterReconciler ar = bridge.getAdapterReconciler();
             return ar != null && ar.isScanOff();
-        }, adapter.getResetBudget(), bridge::requestAdapterReset);
+        }, adapter.getResetBudget(), bridge::requestAdapterReset, clock);
     }
 
     /** @return this device's reconciler (driven by the bridge's reconcile tick). */
@@ -196,7 +199,7 @@ public class DirectBTBluetoothDevice extends BaseBluetoothDevice implements Devi
         // encrypted link). Without the grace the handler bounces every freshly-established connection before its
         // resolve finishes -> an endless connect/bounce loop. A bounce within the grace of the last
         // markConnected() is refused (the in-flight resolve IS the recovery); after it, honoured (resolve hung).
-        if (isNativeConnected() && System.currentTimeMillis() - connectedAtMillis < RECONNECT_GRACE_MILLIS) {
+        if (isNativeConnected() && clock.millis() - connectedAtMillis < RECONNECT_GRACE_MILLIS) {
             logger.debug("Reconnect requested for {} within grace of connect; GATT resolve in flight, ignoring",
                     address);
             bridge.requeueReconcile(); // reconciler re-runs resolveGatt if still unresolved
@@ -319,7 +322,7 @@ public class DirectBTBluetoothDevice extends BaseBluetoothDevice implements Devi
 
     @Override
     public void markConnected() {
-        connectedAtMillis = System.currentTimeMillis();
+        connectedAtMillis = clock.millis();
         setConnectionState(ConnectionState.CONNECTED);
     }
 
@@ -387,17 +390,16 @@ public class DirectBTBluetoothDevice extends BaseBluetoothDevice implements Devi
             // BTRole::Master -- verified in direct_bt source + live: it left sec[... auto UNSET, pairing NONE ...],
             // i.e. no security requested from our side). setConnSecurity with an explicit level DOES take in master
             // role and drives the request from the central side. Level per mode:
-            // - "encrypted" / "encrypted-with-fallback": Just Works -> ENC_ONLY + NO_INPUT_NO_OUTPUT (encrypted,
-            // unauthenticated). "encrypted" is STRICT (never downgrade); "encrypted-with-fallback" permits the
-            // identity-flip safe-bailout to latch us down to NONE (encryptionFallbackToNone).
+            // - "encrypted": Just Works -> ENC_ONLY + NO_INPUT_NO_OUTPUT (encrypted, unauthenticated). STRICT:
+            // never downgrades to an unencrypted connection.
             // - "pin": Passkey Entry -> ENC_AUTH + KEYBOARD_ONLY (encrypted AND MITM-authenticated). The device asks
             // for the key (SMP PASSKEY_EXPECTED) and the bridge supplies the configured passkey; KEYBOARD_ONLY tells
             // the peer we input the key it holds. Enforced fail-closed via securityRequirementUnmet().
-            // - "none" (default, or after a bailout): NONE. See docs/directbt-encryption-pairing-findings.md.
+            // - "none" (default): NONE. See docs/directbt-encryption-pairing-findings.md.
             String securityMode = bridge.getDeviceConnectionSecurity(address);
             if (DirectBTAdapterConstants.CONNECTION_SECURITY_PIN.equalsIgnoreCase(securityMode)) {
                 dev.setConnSecurity(BTSecurityLevel.ENC_AUTH, SMPIOCapability.KEYBOARD_ONLY);
-            } else if (wantsEncryption(securityMode) && !encryptionFallbackToNone) {
+            } else if (DirectBTAdapterConstants.CONNECTION_SECURITY_ENCRYPTED.equalsIgnoreCase(securityMode)) {
                 dev.setConnSecurity(BTSecurityLevel.ENC_ONLY, SMPIOCapability.NO_INPUT_NO_OUTPUT);
             } else {
                 dev.setConnSecurity(BTSecurityLevel.NONE, SMPIOCapability.NO_INPUT_NO_OUTPUT);
@@ -452,49 +454,6 @@ public class DirectBTBluetoothDevice extends BaseBluetoothDevice implements Devi
         } catch (RuntimeException e) {
             logger.debug("Direct-BT clearStalePairing for {} threw", address, e);
         }
-    }
-
-    @Override
-    public boolean hasIdentityFlip() {
-        BTDevice dev = device;
-        if (dev == null) {
-            return false;
-        }
-        try {
-            // "Defect 2" fingerprint: on pairing, a device that distributes an IRK/identity has its tracked
-            // addressAndType flipped (e.g. RANDOM -> PUBLIC identity) away from its advertised visibleAddressAndType.
-            // Direct-BT does not add it to the controller's HW resolving list (an acknowledged TODO), so the next
-            // create-connection targets the identity address the device is not advertising under and never
-            // establishes. A divergence between the tracked and the visible address type is that condition.
-            var tracked = dev.getAddressAndType();
-            var visible = dev.getVisibleAddressAndType();
-            return tracked != null && visible != null && tracked.type != visible.type;
-        } catch (RuntimeException e) {
-            return false;
-        }
-    }
-
-    @Override
-    public void disableEncryptionFallback() {
-        // Only "encrypted-with-fallback" permits the downgrade. Under the STRICT "encrypted" mode a device that
-        // must never talk unencrypted (e.g. a lock) keeps retrying instead — we refuse to silently drop encryption.
-        if (!DirectBTAdapterConstants.CONNECTION_SECURITY_ENCRYPTED_WITH_FALLBACK
-                .equalsIgnoreCase(bridge.getDeviceConnectionSecurity(address))) {
-            return;
-        }
-        if (!encryptionFallbackToNone) {
-            encryptionFallbackToNone = true;
-            logger.warn("Encrypted reconnect to {} keeps failing (address-identity resolution gap); falling back to an "
-                    + "unencrypted connection for this device so it stays usable. Set connectionSecurity=none "
-                    + "to silence this, or =encrypted to keep retrying encryption; see "
-                    + "docs/directbt-encryption-pairing-findings.md.", address);
-        }
-    }
-
-    /** @return true iff the given connectionSecurity mode requests Just-Works LE encryption (with or w/o fallback). */
-    private static boolean wantsEncryption(String securityMode) {
-        return DirectBTAdapterConstants.CONNECTION_SECURITY_ENCRYPTED.equalsIgnoreCase(securityMode)
-                || DirectBTAdapterConstants.CONNECTION_SECURITY_ENCRYPTED_WITH_FALLBACK.equalsIgnoreCase(securityMode);
     }
 
     @Override
