@@ -17,6 +17,7 @@ import java.util.concurrent.TimeUnit;
 
 import org.eclipse.jdt.annotation.NonNullByDefault;
 import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * A shared minimum-interval gate for adapter {@code reset()}, used by both the adapter and discovery
@@ -31,21 +32,20 @@ public class ResetBudget {
 
     private static final long DEFAULT_MIN_INTERVAL_MS = TimeUnit.SECONDS.toMillis(8);
 
-    private final Logger logger;
+    private final Logger logger = LoggerFactory.getLogger(ResetBudget.class);
     private final long minIntervalMs;
     private final Clock clock;
     private long nextResetNotBefore;
 
-    public ResetBudget(Logger logger) {
-        this(logger, DEFAULT_MIN_INTERVAL_MS);
+    public ResetBudget() {
+        this(DEFAULT_MIN_INTERVAL_MS);
     }
 
-    public ResetBudget(Logger logger, long minIntervalMs) {
-        this(logger, minIntervalMs, Clock.systemUTC());
+    public ResetBudget(long minIntervalMs) {
+        this(minIntervalMs, Clock.systemUTC());
     }
 
-    public ResetBudget(Logger logger, long minIntervalMs, Clock clock) {
-        this.logger = logger;
+    public ResetBudget(long minIntervalMs, Clock clock) {
         this.minIntervalMs = minIntervalMs;
         this.clock = clock;
     }

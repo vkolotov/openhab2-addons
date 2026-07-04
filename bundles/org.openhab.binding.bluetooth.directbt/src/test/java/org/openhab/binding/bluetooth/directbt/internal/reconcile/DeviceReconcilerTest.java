@@ -27,10 +27,8 @@ import org.junit.jupiter.api.Test;
  * Regression harness for the {@link DeviceReconciler} — the per-device connection state machine.
  * <p>
  * Each test reproduces a specific field failure we had to fix, so a revert of the fix re-breaks the test.
- * Cross-references: {@code docs/directbt-reconciler-design.md} (canonical model + phase table),
- * {@code docs/directbt-stability-fix-inventory.md} (the change inventory),
- * {@code docs/directbt-csr-wedge-investigation.md} (the CSR quirks). Timing is driven by a {@link MutableClock}
- * (no sleeps); the native device is modelled by {@link FakeDevicePort}.
+ * Timing is driven by a {@link MutableClock} (no sleeps); the native device is modelled by
+ * {@link FakeDevicePort}.
  *
  * @author Vlad Kolotov - Initial contribution
  */

@@ -12,6 +12,7 @@
  */
 package org.openhab.binding.bluetooth.directbt.internal;
 
+import java.util.Locale;
 import java.util.Set;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
@@ -84,7 +85,7 @@ public class DirectBTDiscoveryService extends AbstractDiscoveryService {
         var adapters = manager.getAdapters();
         logger.debug("Direct-BT discovery: {} adapter(s) enumerated", adapters.size());
         for (BTAdapter adapter : adapters) {
-            String address = adapter.getAddressAndType().address.toString().toUpperCase();
+            String address = adapter.getAddressAndType().address.toString().toUpperCase(Locale.ROOT);
             // Bridge id is the adapter MAC (stable across reboot, unique per adapter), so device UIDs read
             // bluetooth:generic:<adapterMAC>:<deviceMAC> — fully qualified by which adapter they connect through.
             ThingUID uid = new ThingUID(DirectBTAdapterConstants.THING_TYPE_DIRECTBT, address.replace(":", ""));

@@ -40,6 +40,6 @@ final class ReconcileTestSupport {
 
     /** A reset budget on the given clock with the default cooldown. */
     static ResetBudget budget(MutableClock clock) {
-        return new ResetBudget(logger(), BUDGET_COOLDOWN_MS, clock);
+        return new ResetBudget(BUDGET_COOLDOWN_MS, clock);
     }
 }

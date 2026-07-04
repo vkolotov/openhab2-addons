@@ -29,32 +29,6 @@ public class DirectBTAdapterConstants {
 
     public static final String PROPERTY_ADDRESS = "address";
 
-    /**
-     * Per-device config key (declared on the core generic device thing-type in the generic bundle's
-     * {@code generic.xml}) selecting the LE connection security for that one device. Read by
-     * {@link DirectBTBridgeHandler#getDeviceConnectionSecurity}.
-     */
-    public static final String CONFIGURATION_CONNECTION_SECURITY = "connectionSecurity";
-
-    /** Unbonded, no encryption — the proven dead-stable default. */
-    public static final String CONNECTION_SECURITY_NONE = "none";
-
-    /**
-     * Just-Works LE encryption, STRICT: request encryption and keep retrying if it does not hold; never downgrade.
-     * Use for devices that must never talk unencrypted (e.g. locks). Opt-in per device.
-     */
-    public static final String CONNECTION_SECURITY_ENCRYPTED = "encrypted";
-
-    /**
-     * Authenticated (MITM-protected) LE encryption via Passkey Entry: the peripheral displays / has a fixed PIN,
-     * and we supply the configured {@link #CONFIGURATION_PASSKEY} when the device asks (SMP PASSKEY_EXPECTED).
-     * Uses {@code setConnSecurity(ENC_AUTH, KEYBOARD_ONLY)}. Opt-in per device.
-     */
-    public static final String CONNECTION_SECURITY_PIN = "pin";
-
-    /** Per-device config key holding the static passkey/PIN (0..999999) for {@link #CONNECTION_SECURITY_PIN}. */
-    public static final String CONFIGURATION_PASSKEY = "passkey";
-
     private DirectBTAdapterConstants() {
     }
 }

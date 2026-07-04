@@ -12,9 +12,11 @@
  */
 package org.openhab.binding.bluetooth.directbt.internal;
 
+import java.nio.file.Path;
 import java.time.Clock;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
@@ -108,7 +110,7 @@ public class DirectBTBridgeHandler extends AbstractBluetoothBridgeHandler<Direct
     private final AtomicBoolean reconcilePending = new AtomicBoolean();
     // When the last reconcile tick (periodic or event-driven) last ran, for the MIN_OBSERVE_INTERVAL_MS floor.
     private volatile long lastTickAt;
-    private final ResetBudget resetBudget = new ResetBudget(LoggerFactory.getLogger(ResetBudget.class));
+    private final ResetBudget resetBudget = new ResetBudget();
     private @Nullable AdapterReconciler adapterReconciler;
     private boolean managerReady;
     private volatile boolean disposed;
@@ -187,7 +189,7 @@ public class DirectBTBridgeHandler extends AbstractBluetoothBridgeHandler<Direct
                 // file I/O, and this is a native callback thread).
                 BondStore store = bondStore;
                 BluetoothAddress deviceAddress = toAddress(device);
-                if (store != null && !DirectBTAdapterConstants.CONNECTION_SECURITY_NONE
+                if (store != null && !BluetoothBindingConstants.CONNECTION_SECURITY_NONE
                         .equalsIgnoreCase(getDeviceConnectionSecurity(deviceAddress))) {
                     executor.submit(() -> store.save(device));
                 }
@@ -258,7 +260,7 @@ public class DirectBTBridgeHandler extends AbstractBluetoothBridgeHandler<Direct
             updateStatus(ThingStatus.OFFLINE, ThingStatusDetail.CONFIGURATION_ERROR, "address not set");
             return;
         }
-        this.adapterAddress = new BluetoothAddress(addr.toUpperCase());
+        this.adapterAddress = new BluetoothAddress(addr.toUpperCase(Locale.ROOT));
         this.backgroundDiscovery = config.backgroundDiscovery;
         updateStatus(ThingStatus.UNKNOWN, ThingStatusDetail.NONE, "Initializing");
         // Native load + Direct-BT init can block; do it off the main thread, then retry until the adapter
@@ -275,9 +277,9 @@ public class DirectBTBridgeHandler extends AbstractBluetoothBridgeHandler<Direct
      */
     private synchronized void initializeDirectBT() {
         if (managerReady) {
-            // Manager already up; this recurring tick only serves to (re)acquire the adapter if it was not present
-            // yet (dongle plugged in later). Discovery + connection are owned entirely by the reconcile driver,
-            // which is started from bringUpAdapter() once the adapter is up.
+            // Manager already up; adapter (re)acquisition is driven by the ChangedAdapterSetListener callbacks
+            // (adapterAdded fires when a dongle is plugged in later), so this retry job has nothing left to do.
+            cancelInitJob();
             return;
         }
         try {
@@ -294,7 +296,7 @@ public class DirectBTBridgeHandler extends AbstractBluetoothBridgeHandler<Direct
             // Registering the listener immediately invokes adapterAdded() for adapters already present.
             mgr.addChangedAdapterSetListener(changedAdapterSetListener);
             managerReady = true;
-            // Job intentionally NOT cancelled: it keeps retrying adapter acquisition if not present yet.
+            // The retry job cancels itself on its next tick (see above); adapterAdded takes over from here.
         } catch (Exception e) {
             logger.debug("Direct-BT initialization failed, will retry", e);
             updateStatus(ThingStatus.OFFLINE, ThingStatusDetail.COMMUNICATION_ERROR, "Direct-BT init failed");
@@ -307,7 +309,7 @@ public class DirectBTBridgeHandler extends AbstractBluetoothBridgeHandler<Direct
         if (disposed || wanted == null) {
             return;
         }
-        String mac = added.getAddressAndType().address.toString().toUpperCase();
+        String mac = added.getAddressAndType().address.toString().toUpperCase(Locale.ROOT);
         if (!mac.equals(wanted.toString())) {
             logger.trace("Direct-BT ignoring adapter {}; bridge wants {}", mac, wanted);
             return; // not our adapter
@@ -318,8 +320,8 @@ public class DirectBTBridgeHandler extends AbstractBluetoothBridgeHandler<Direct
         // Bond persistence is per adapter (the LTK binds the peer to THIS adapter's identity), so the store
         // directory is keyed by the adapter MAC. Created here because the MAC is only certain once the
         // adapter is up.
-        bondStore = new BondStore(java.nio.file.Path.of(OpenHAB.getUserDataFolder(), "bluetooth", "directbt-keys",
-                mac.replace(":", "").toLowerCase(java.util.Locale.ROOT)));
+        bondStore = new BondStore(Path.of(OpenHAB.getUserDataFolder(), "bluetooth", "directbt-keys",
+                mac.replace(":", "").toLowerCase(Locale.ROOT)));
         bringUpAdapter(added, wanted);
     }
 
@@ -330,7 +332,7 @@ public class DirectBTBridgeHandler extends AbstractBluetoothBridgeHandler<Direct
     }
 
     // ============================================================================================
-    // Level-triggered reconciler driver. See docs/directbt-reconciler-design.md.
+    // Level-triggered reconciler driver.
     // The reconcilers (adapter, discovery, per-device) are the ONLY things that drive the radio; no timer or
     // event ever issues start/stopDiscovery or connectLE directly. Events merely requeue a tick.
     // ============================================================================================
@@ -675,7 +677,12 @@ public class DirectBTBridgeHandler extends AbstractBluetoothBridgeHandler<Direct
     }
 
     private synchronized void onAdapterRemoved(BTAdapter removed) {
-        if (adapter == removed) {
+        BluetoothAddress wanted = adapterAddress;
+        if (adapter == null || wanted == null) {
+            return;
+        }
+        String removedMac = removed.getAddressAndType().address.toString();
+        if (wanted.toString().equalsIgnoreCase(removedMac)) {
             forEachDevice(DirectBTBluetoothDevice::close);
             detachAdapter();
             updateStatus(ThingStatus.OFFLINE, ThingStatusDetail.COMMUNICATION_ERROR, "Adapter removed");
@@ -721,7 +728,7 @@ public class DirectBTBridgeHandler extends AbstractBluetoothBridgeHandler<Direct
     /**
      * The per-device connection security mode, read from the device Thing's {@code connectionSecurity} config
      * (mirrors {@link #isDeviceEnabled}). One of {@code none} / {@code encrypted} / {@code pin}
-     * (see {@link DirectBTAdapterConstants}). This is per-device rather than per-bridge so an
+     * (see {@link BluetoothBindingConstants}). This is per-device rather than per-bridge so an
      * encryption request is only ever made where it is wanted. Falls back to {@code none} for an
      * unknown/handleless device.
      */
@@ -729,12 +736,12 @@ public class DirectBTBridgeHandler extends AbstractBluetoothBridgeHandler<Direct
         Thing childThing = findChildThing(address);
         if (childThing != null) {
             Object security = childThing.getConfiguration()
-                    .get(DirectBTAdapterConstants.CONFIGURATION_CONNECTION_SECURITY);
+                    .get(BluetoothBindingConstants.CONFIGURATION_CONNECTION_SECURITY);
             if (security instanceof String s && !s.isBlank()) {
                 return s.trim();
             }
         }
-        return DirectBTAdapterConstants.CONNECTION_SECURITY_NONE;
+        return BluetoothBindingConstants.CONNECTION_SECURITY_NONE;
     }
 
     /**
@@ -744,7 +751,7 @@ public class DirectBTBridgeHandler extends AbstractBluetoothBridgeHandler<Direct
     int getDevicePasskey(BluetoothAddress address) {
         Thing childThing = findChildThing(address);
         if (childThing != null) {
-            Object passkey = childThing.getConfiguration().get(DirectBTAdapterConstants.CONFIGURATION_PASSKEY);
+            Object passkey = childThing.getConfiguration().get(BluetoothBindingConstants.CONFIGURATION_PASSKEY);
             if (passkey instanceof Number n) {
                 return n.intValue();
             }
@@ -771,16 +778,8 @@ public class DirectBTBridgeHandler extends AbstractBluetoothBridgeHandler<Direct
         return null;
     }
 
-    /** Resolve the openHAB device for a Direct-BT device by address, or {@code null} if disposed. */
-    private @Nullable DirectBTBluetoothDevice findDevice(BTDevice btDevice) {
-        if (disposed) {
-            return null;
-        }
-        return getDevice(toAddress(btDevice));
-    }
-
     private static BluetoothAddress toAddress(BTDevice btDevice) {
-        return new BluetoothAddress(btDevice.getAddressAndType().address.toString().toUpperCase());
+        return new BluetoothAddress(btDevice.getAddressAndType().address.toString().toUpperCase(Locale.ROOT));
     }
 
     /** Pool for the device's blocking GATT operations. */
@@ -832,9 +831,15 @@ public class DirectBTBridgeHandler extends AbstractBluetoothBridgeHandler<Direct
             // shutdown; instead we cap the blocking work with a timeout. If it doesn't finish, we abandon it:
             // on a real shutdown the OS reclaims the sockets/threads anyway, and on a redeploy only a genuinely
             // wedged device is skipped (which is exactly the case where blocking would hang us).
+            // The worker takes reconcileLock so an in-flight tick (already past its disposed check) cannot race
+            // the teardown; the reconcile job itself was cancelled above. Lock order is this -> reconcileLock
+            // (same as onAdapterAdded -> startReconciler), and the tick never takes the handler monitor, so no
+            // inversion. If the lock holder is wedged in a native call, the join timeout still bounds dispose().
             runTimeBoxed("device close + adapter detach", DISPOSE_NATIVE_TIMEOUT_MS, () -> {
-                forEachDevice(DirectBTBluetoothDevice::close);
-                detachAdapter();
+                synchronized (reconcileLock) {
+                    forEachDevice(DirectBTBluetoothDevice::close);
+                    detachAdapter();
+                }
             });
             managerReady = false;
         }
@@ -844,7 +849,9 @@ public class DirectBTBridgeHandler extends AbstractBluetoothBridgeHandler<Direct
     private void cancelInitJob() {
         ScheduledFuture<?> job = initJob;
         if (job != null) {
-            job.cancel(true);
+            // cancel(false): the job body is non-blocking (getManager() is a getNow), and this is also called
+            // from the job's own tick, where self-interrupting the pool thread would be a dirty signal.
+            job.cancel(false);
             initJob = null;
         }
     }

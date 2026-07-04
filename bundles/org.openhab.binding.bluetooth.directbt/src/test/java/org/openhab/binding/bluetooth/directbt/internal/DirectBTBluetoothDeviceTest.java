@@ -41,11 +41,11 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
 import org.mockito.quality.Strictness;
 import org.openhab.binding.bluetooth.BluetoothAddress;
+import org.openhab.binding.bluetooth.BluetoothBindingConstants;
 import org.openhab.binding.bluetooth.BluetoothCharacteristic;
 import org.openhab.binding.bluetooth.BluetoothDeviceListener;
 import org.openhab.binding.bluetooth.directbt.internal.reconcile.MutableClock;
 import org.openhab.binding.bluetooth.directbt.internal.reconcile.ResetBudget;
-import org.slf4j.LoggerFactory;
 
 /**
  * Regression harness for {@link DirectBTBluetoothDevice} — the pure {@link org.openhab.binding.bluetooth.directbt
@@ -53,8 +53,8 @@ import org.slf4j.LoggerFactory;
  * (an interface) and a mocked {@link DirectBTBridgeHandler}. Native calls (connectLE / setConnSecurity /
  * getConnected) go to the mock, so these tests lock down the device's decisions without a real controller.
  * <p>
- * Cross-reference: the connect-intent split (connect/disconnect/reconnect) is the T-GEN fix; the connectLE
- * parameter pinning is the dead-stable BLE profile from {@code docs/directbt-stability-fix-inventory.md}.
+ * The connectLE parameter pinning locks down the dead-stable BLE profile validated against live hardware
+ * (see the constants in {@link DirectBTBluetoothDevice}).
  *
  * @author Vlad Kolotov - Initial contribution
  */
@@ -78,7 +78,7 @@ class DirectBTBluetoothDeviceTest {
     void setUp() {
         DirectBTBridgeHandler b = bridge();
         when(b.getExecutor()).thenReturn(Executors.newSingleThreadExecutor());
-        when(b.getResetBudget()).thenReturn(new ResetBudget(LoggerFactory.getLogger("test"), 8000));
+        when(b.getResetBudget()).thenReturn(new ResetBudget(8000));
         device = new DirectBTBluetoothDevice(b, ADDRESS);
     }
 
@@ -282,7 +282,8 @@ class DirectBTBluetoothDeviceTest {
         when(nativeDevice().connectLE(anyShort(), anyShort(), anyShort(), anyShort(), anyShort(), anyShort()))
                 .thenReturn(HCIStatusCode.SUCCESS);
         // Default (bridge returns "none"): security is pinned to NONE / NO_INPUT_NO_OUTPUT — the proven profile.
-        when(bridge().getDeviceConnectionSecurity(any())).thenReturn(DirectBTAdapterConstants.CONNECTION_SECURITY_NONE);
+        when(bridge().getDeviceConnectionSecurity(any()))
+                .thenReturn(BluetoothBindingConstants.CONNECTION_SECURITY_NONE);
 
         assertEquals(HCIStatusCode.SUCCESS, device().connectNative());
 
@@ -299,7 +300,7 @@ class DirectBTBluetoothDeviceTest {
         when(nativeDevice().connectLE(anyShort(), anyShort(), anyShort(), anyShort(), anyShort(), anyShort()))
                 .thenReturn(HCIStatusCode.SUCCESS);
         when(bridge().getDeviceConnectionSecurity(any()))
-                .thenReturn(DirectBTAdapterConstants.CONNECTION_SECURITY_ENCRYPTED);
+                .thenReturn(BluetoothBindingConstants.CONNECTION_SECURITY_ENCRYPTED);
         BondStore store = mock(BondStore.class);
         when(bridge().getBondStore()).thenReturn(store);
 
@@ -314,7 +315,8 @@ class DirectBTBluetoothDeviceTest {
         device().updateBTDevice(nativeDevice());
         when(nativeDevice().connectLE(anyShort(), anyShort(), anyShort(), anyShort(), anyShort(), anyShort()))
                 .thenReturn(HCIStatusCode.SUCCESS);
-        when(bridge().getDeviceConnectionSecurity(any())).thenReturn(DirectBTAdapterConstants.CONNECTION_SECURITY_NONE);
+        when(bridge().getDeviceConnectionSecurity(any()))
+                .thenReturn(BluetoothBindingConstants.CONNECTION_SECURITY_NONE);
         BondStore store = mock(BondStore.class);
         when(bridge().getBondStore()).thenReturn(store);
 
@@ -346,7 +348,7 @@ class DirectBTBluetoothDeviceTest {
         // NOT setConnSecurityAuto: that is a no-op in the adapter's Master (central) role, so the central-driven
         // explicit level is what actually takes. ENC_ONLY + NO_INPUT_NO_OUTPUT = encrypted, unauthenticated.
         when(bridge().getDeviceConnectionSecurity(any()))
-                .thenReturn(DirectBTAdapterConstants.CONNECTION_SECURITY_ENCRYPTED);
+                .thenReturn(BluetoothBindingConstants.CONNECTION_SECURITY_ENCRYPTED);
 
         assertEquals(HCIStatusCode.SUCCESS, device().connectNative());
 
@@ -361,7 +363,7 @@ class DirectBTBluetoothDeviceTest {
         when(nativeDevice().connectLE(anyShort(), anyShort(), anyShort(), anyShort(), anyShort(), anyShort()))
                 .thenReturn(HCIStatusCode.SUCCESS);
         // "pin" -> authenticated Passkey Entry: ENC_AUTH (encrypted + MITM) with KEYBOARD_ONLY (we input the key).
-        when(bridge().getDeviceConnectionSecurity(any())).thenReturn(DirectBTAdapterConstants.CONNECTION_SECURITY_PIN);
+        when(bridge().getDeviceConnectionSecurity(any())).thenReturn(BluetoothBindingConstants.CONNECTION_SECURITY_PIN);
 
         assertEquals(HCIStatusCode.SUCCESS, device().connectNative());
 
@@ -374,7 +376,7 @@ class DirectBTBluetoothDeviceTest {
     @Test
     void securityRequirementUnmetWhenPinModeButLinkNotAuthenticated() {
         device().updateBTDevice(nativeDevice());
-        when(bridge().getDeviceConnectionSecurity(any())).thenReturn(DirectBTAdapterConstants.CONNECTION_SECURITY_PIN);
+        when(bridge().getDeviceConnectionSecurity(any())).thenReturn(BluetoothBindingConstants.CONNECTION_SECURITY_PIN);
         // SMP negotiated down to Just-Works (unauthenticated) because the peer can't do MITM. The achieved
         // PairingMode is the reliable signal (the requested level can read back too high).
         when(nativeDevice().getPairingMode()).thenReturn(PairingMode.JUST_WORKS);
@@ -386,7 +388,7 @@ class DirectBTBluetoothDeviceTest {
     @Test
     void securityRequirementMetWhenPinModeAndLinkAuthenticated() {
         device().updateBTDevice(nativeDevice());
-        when(bridge().getDeviceConnectionSecurity(any())).thenReturn(DirectBTAdapterConstants.CONNECTION_SECURITY_PIN);
+        when(bridge().getDeviceConnectionSecurity(any())).thenReturn(BluetoothBindingConstants.CONNECTION_SECURITY_PIN);
         when(nativeDevice().getPairingMode()).thenReturn(PairingMode.PASSKEY_ENTRY_res);
 
         assertFalse(device().securityRequirementUnmet(),
@@ -397,8 +399,8 @@ class DirectBTBluetoothDeviceTest {
     void securityRequirementNeverUnmetForNonPinModes() {
         device().updateBTDevice(nativeDevice());
         when(nativeDevice().getPairingMode()).thenReturn(PairingMode.JUST_WORKS);
-        for (String mode : List.of(DirectBTAdapterConstants.CONNECTION_SECURITY_NONE,
-                DirectBTAdapterConstants.CONNECTION_SECURITY_ENCRYPTED)) {
+        for (String mode : List.of(BluetoothBindingConstants.CONNECTION_SECURITY_NONE,
+                BluetoothBindingConstants.CONNECTION_SECURITY_ENCRYPTED)) {
             when(bridge().getDeviceConnectionSecurity(any())).thenReturn(mode);
             assertFalse(device().securityRequirementUnmet(), mode + " has no authenticated requirement to enforce");
         }
@@ -407,7 +409,7 @@ class DirectBTBluetoothDeviceTest {
     @Test
     void securityRequirementUnmetFailsClosedOnNativeThrow() {
         device().updateBTDevice(nativeDevice());
-        when(bridge().getDeviceConnectionSecurity(any())).thenReturn(DirectBTAdapterConstants.CONNECTION_SECURITY_PIN);
+        when(bridge().getDeviceConnectionSecurity(any())).thenReturn(BluetoothBindingConstants.CONNECTION_SECURITY_PIN);
         when(nativeDevice().getPairingMode()).thenThrow(new RuntimeException("cannot read achieved pairing mode"));
 
         assertTrue(device().securityRequirementUnmet(),

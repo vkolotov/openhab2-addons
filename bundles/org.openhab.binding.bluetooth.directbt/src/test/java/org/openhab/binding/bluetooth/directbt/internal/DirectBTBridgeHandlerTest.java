@@ -17,6 +17,7 @@ import static org.mockito.Mockito.*;
 
 import java.math.BigDecimal;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.Executors;
 
@@ -34,6 +35,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
 import org.mockito.quality.Strictness;
 import org.openhab.binding.bluetooth.BluetoothAddress;
+import org.openhab.binding.bluetooth.BluetoothBindingConstants;
 import org.openhab.binding.bluetooth.directbt.internal.reconcile.MutableClock;
 import org.openhab.binding.bluetooth.directbt.internal.reconcile.ResetBudget;
 import org.openhab.core.config.core.Configuration;
@@ -80,7 +82,7 @@ class DirectBTBridgeHandlerTest {
 
     @Test
     void connectionSecurityAddressMatchIsCaseInsensitive() {
-        childThings(childThing(DEVICE_ADDR.toLowerCase(), Map.of("connectionSecurity", "encrypted")));
+        childThings(childThing(DEVICE_ADDR.toLowerCase(Locale.ROOT), Map.of("connectionSecurity", "encrypted")));
 
         assertEquals("encrypted", handler().getDeviceConnectionSecurity(ADDRESS));
     }
@@ -89,17 +91,18 @@ class DirectBTBridgeHandlerTest {
     void connectionSecurityDefaultsToNoneWhenUnset() {
         childThings(childThing(DEVICE_ADDR, Map.of()));
 
-        assertEquals(DirectBTAdapterConstants.CONNECTION_SECURITY_NONE, handler().getDeviceConnectionSecurity(ADDRESS));
+        assertEquals(BluetoothBindingConstants.CONNECTION_SECURITY_NONE,
+                handler().getDeviceConnectionSecurity(ADDRESS));
     }
 
     @Test
     void connectionSecurityDefaultsToNoneWhenBlankOrNoChildThing() {
         childThings(childThing(DEVICE_ADDR, Map.of("connectionSecurity", "  ")));
-        assertEquals(DirectBTAdapterConstants.CONNECTION_SECURITY_NONE, handler().getDeviceConnectionSecurity(ADDRESS),
+        assertEquals(BluetoothBindingConstants.CONNECTION_SECURITY_NONE, handler().getDeviceConnectionSecurity(ADDRESS),
                 "a blank value must not select a mode");
 
         childThings(childThing("11:22:33:44:55:66", Map.of("connectionSecurity", "pin")));
-        assertEquals(DirectBTAdapterConstants.CONNECTION_SECURITY_NONE, handler().getDeviceConnectionSecurity(ADDRESS),
+        assertEquals(BluetoothBindingConstants.CONNECTION_SECURITY_NONE, handler().getDeviceConnectionSecurity(ADDRESS),
                 "an unknown device (no child Thing with this address) must default to none");
     }
 
@@ -237,7 +240,7 @@ class DirectBTBridgeHandlerTest {
     private DirectBTBluetoothDevice orphanWrapper() {
         DirectBTBridgeHandler b = mock(DirectBTBridgeHandler.class);
         when(b.getExecutor()).thenReturn(Executors.newSingleThreadExecutor());
-        when(b.getResetBudget()).thenReturn(new ResetBudget(LoggerFactory.getLogger("test"), 8000));
+        when(b.getResetBudget()).thenReturn(new ResetBudget(8000));
         return new DirectBTBluetoothDevice(b, ADDRESS);
     }
 

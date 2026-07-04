@@ -53,8 +53,8 @@ public abstract class Reconciler<D, O> {
     /** Time source; {@link Clock#systemUTC()} in production, a mutable clock in tests. */
     protected final Clock clock;
 
-    /** Intent. Volatile because event/caller threads set it while the driver thread reads it. */
-    protected volatile D desired;
+    /** Intent, fixed at construction. Entities whose intent varies derive it inside {@link #inSync}/{@link #act}. */
+    protected final D desired;
 
     /** Last polled native truth (recomputed every tick). */
     protected @Nullable O observed;
@@ -193,10 +193,6 @@ public abstract class Reconciler<D, O> {
     /** @return true if the last completed tick found the entity in-sync (and it is not paused). */
     public final boolean isInSync() {
         return !paused && inSyncSince != 0;
-    }
-
-    public final void setDesired(D newDesired) {
-        this.desired = newDesired;
     }
 
     /** Exponential backoff with a cap: BASE * 2^(n-1), capped. */

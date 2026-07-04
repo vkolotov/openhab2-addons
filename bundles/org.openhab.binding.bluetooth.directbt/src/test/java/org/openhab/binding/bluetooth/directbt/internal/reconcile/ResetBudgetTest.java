@@ -24,7 +24,7 @@ import org.junit.jupiter.api.Test;
  * A bare HCI reset transiently un-powers the controller and disrupts every connection, so two reconcilers
  * resetting within the cooldown can chase each other into an un-powered loop (observed live on the CSR as a
  * ~10s reset storm). The budget must permit a reset only once per cooldown regardless of how many requesters
- * ask. Cross-reference: {@code docs/directbt-reconciler-design.md} (§"Reusable mechanism", reset budget).
+ * ask.
  *
  * @author Vlad Kolotov - Initial contribution
  */
@@ -36,7 +36,7 @@ class ResetBudgetTest {
     @Test
     void secondResetWithinCooldownIsDeniedEvenFromAnotherRequester() {
         MutableClock clock = new MutableClock(START);
-        ResetBudget budget = new ResetBudget(logger(), COOLDOWN_MS, clock);
+        ResetBudget budget = new ResetBudget(COOLDOWN_MS, clock);
 
         assertTrue(budget.tryReset("adapter"), "first reset is permitted");
         assertFalse(budget.tryReset("device"), "a second reset within the cooldown (the storm) is denied");
@@ -46,7 +46,7 @@ class ResetBudgetTest {
     @Test
     void resetPermittedAgainAfterCooldownElapses() {
         MutableClock clock = new MutableClock(START);
-        ResetBudget budget = new ResetBudget(logger(), COOLDOWN_MS, clock);
+        ResetBudget budget = new ResetBudget(COOLDOWN_MS, clock);
 
         assertTrue(budget.tryReset("adapter"));
 

@@ -32,8 +32,7 @@ import org.mockito.InOrder;
  * the controller wedged in a power-off state that only a reboot cleared.
  * <p>
  * The native {@link BTAdapter} is a Mockito mock (it is an interface); only the few methods the reconciler
- * calls are stubbed. Cross-reference: {@code docs/directbt-csr-wedge-investigation.md},
- * {@code docs/directbt-stability-fix-inventory.md}, and the CSR bring-up commit 0c65c5ae.
+ * calls are stubbed.
  *
  * @author Vlad Kolotov - Initial contribution
  */
@@ -139,7 +138,7 @@ class AdapterReconcilerTest {
         when(a.reset()).thenReturn(HCIStatusCode.SUCCESS);
 
         MutableClock clock = new MutableClock(START);
-        ResetBudget budget = new ResetBudget(logger(), 100_000, clock); // cooldown longer than the whole test
+        ResetBudget budget = new ResetBudget(100_000, clock); // cooldown longer than the whole test
         AdapterReconciler r = reconciler(a, clock, budget);
 
         r.reconcile(); // out of sync since START

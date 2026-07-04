@@ -17,6 +17,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 
@@ -35,6 +36,7 @@ import org.eclipse.jdt.annotation.NonNullByDefault;
 import org.eclipse.jdt.annotation.Nullable;
 import org.openhab.binding.bluetooth.BaseBluetoothDevice;
 import org.openhab.binding.bluetooth.BluetoothAddress;
+import org.openhab.binding.bluetooth.BluetoothBindingConstants;
 import org.openhab.binding.bluetooth.BluetoothCharacteristic;
 import org.openhab.binding.bluetooth.BluetoothDescriptor;
 import org.openhab.binding.bluetooth.BluetoothService;
@@ -263,11 +265,12 @@ public class DirectBTBluetoothDevice extends BaseBluetoothDevice implements Devi
     }
 
     /**
-     * Reset the inherited GATT model: clear the cached service list and mark service discovery incomplete, so the
-     * next connect re-fires SERVICES_DISCOVERED.
+     * Reset the inherited GATT model: clear the cached service list, mark service discovery incomplete (so the
+     * next connect re-fires SERVICES_DISCOVERED), and drop the native characteristic-handle map.
      */
     private void resetGattModel() {
         clearServices();
+        gattCharByUuid.clear();
     }
 
     // --- DevicePort: the operations the DeviceReconciler drives (all polled native truth / idempotent) ----
@@ -360,7 +363,6 @@ public class DirectBTBluetoothDevice extends BaseBluetoothDevice implements Devi
     public void markDisconnected() {
         releaseNotifyListeners();
         resetGattModel();
-        gattCharByUuid.clear();
         // ZOMBIE-ACL GUARD: if the native link is still up, tear it down BEFORE dropping the handle. Nulling the
         // handle of a live connection leaks the ACL: nothing else holds a reference to disconnect it, the
         // peripheral stays connected (so it never advertises), and rediscovery/reconnect become impossible until
@@ -409,7 +411,6 @@ public class DirectBTBluetoothDevice extends BaseBluetoothDevice implements Devi
         // channel/poll map. Without it, a handler re-bound to an already-resolved device (a hot binding redeploy,
         // or any reconnect where the latch stayed true) sits on an empty channel map and silently never polls.
         resetGattModel();
-        gattCharByUuid.clear();
         try {
             // The reconciler has already ensured the adapter scan is OFF (the controller rejects create-connection
             // while scanning) and owns the connect lifecycle, so no inline pre-connect cleanup is needed. A former
@@ -429,12 +430,12 @@ public class DirectBTBluetoothDevice extends BaseBluetoothDevice implements Devi
             // - "pin": Passkey Entry -> ENC_AUTH + KEYBOARD_ONLY (encrypted AND MITM-authenticated). The device asks
             // for the key (SMP PASSKEY_EXPECTED) and the bridge supplies the configured passkey; KEYBOARD_ONLY tells
             // the peer we input the key it holds. Enforced fail-closed via securityRequirementUnmet().
-            // - "none" (default): NONE. See docs/directbt-encryption-pairing-findings.md.
+            // - "none" (default): NONE.
             String securityMode = bridge.getDeviceConnectionSecurity(address);
-            boolean secured = !DirectBTAdapterConstants.CONNECTION_SECURITY_NONE.equalsIgnoreCase(securityMode);
-            if (DirectBTAdapterConstants.CONNECTION_SECURITY_PIN.equalsIgnoreCase(securityMode)) {
+            boolean secured = !BluetoothBindingConstants.CONNECTION_SECURITY_NONE.equalsIgnoreCase(securityMode);
+            if (BluetoothBindingConstants.CONNECTION_SECURITY_PIN.equalsIgnoreCase(securityMode)) {
                 dev.setConnSecurity(BTSecurityLevel.ENC_AUTH, SMPIOCapability.KEYBOARD_ONLY);
-            } else if (DirectBTAdapterConstants.CONNECTION_SECURITY_ENCRYPTED.equalsIgnoreCase(securityMode)) {
+            } else if (BluetoothBindingConstants.CONNECTION_SECURITY_ENCRYPTED.equalsIgnoreCase(securityMode)) {
                 dev.setConnSecurity(BTSecurityLevel.ENC_ONLY, SMPIOCapability.NO_INPUT_NO_OUTPUT);
             } else {
                 dev.setConnSecurity(BTSecurityLevel.NONE, SMPIOCapability.NO_INPUT_NO_OUTPUT);
@@ -515,7 +516,7 @@ public class DirectBTBluetoothDevice extends BaseBluetoothDevice implements Devi
         // Only the authenticated "pin" mode has a requirement stricter than "connected" to enforce. It demands an
         // MITM-authenticated link (ENC_AUTH); if SMP negotiated down to Just-Works/unencrypted (peer can't do
         // MITM), the achieved level is below ENC_AUTH and we must refuse rather than expose GATT unauthenticated.
-        if (!DirectBTAdapterConstants.CONNECTION_SECURITY_PIN
+        if (!BluetoothBindingConstants.CONNECTION_SECURITY_PIN
                 .equalsIgnoreCase(bridge.getDeviceConnectionSecurity(address))) {
             return false;
         }
@@ -638,7 +639,7 @@ public class DirectBTBluetoothDevice extends BaseBluetoothDevice implements Devi
                 notifyListeners(BluetoothEventType.CHARACTERISTIC_UPDATED, characteristic, value);
                 return value;
             } catch (RuntimeException e) {
-                throw new java.util.concurrent.CompletionException(e);
+                throw new CompletionException(e);
             }
         }, executor);
     }
@@ -655,11 +656,10 @@ public class DirectBTBluetoothDevice extends BaseBluetoothDevice implements Devi
                 // withResponse=true (acknowledged write) unless only write-without-response is supported.
                 boolean withResponse = gattChar.getProperties().isSet(GattCharPropertySet.Type.WriteWithAck);
                 if (!gattChar.writeValue(value, withResponse)) {
-                    throw new java.util.concurrent.CompletionException(
-                            new RuntimeException("writeValue returned false"));
+                    throw new IllegalStateException("writeValue returned false");
                 }
             } catch (RuntimeException e) {
-                throw new java.util.concurrent.CompletionException(e);
+                throw new CompletionException(e);
             }
         }, executor);
     }
@@ -685,17 +685,15 @@ public class DirectBTBluetoothDevice extends BaseBluetoothDevice implements Devi
                     throw new IllegalStateException("Characteristic not available (disconnected?): " + charUuid);
                 }
                 if (!gattChar.addCharListener(listener)) {
-                    throw new java.util.concurrent.CompletionException(
-                            new RuntimeException("addCharListener returned false"));
+                    throw new IllegalStateException("addCharListener returned false");
                 }
                 if (!gattChar.enableNotificationOrIndication(new boolean[2])) {
                     gattChar.removeCharListener(listener);
-                    throw new java.util.concurrent.CompletionException(
-                            new RuntimeException("enableNotificationOrIndication returned false"));
+                    throw new IllegalStateException("enableNotificationOrIndication returned false");
                 }
             } catch (RuntimeException e) {
                 notifyListeners.remove(charUuid, listener); // roll back the reservation on failure
-                throw new java.util.concurrent.CompletionException(e);
+                throw new CompletionException(e);
             }
         }, executor);
     }
@@ -713,7 +711,7 @@ public class DirectBTBluetoothDevice extends BaseBluetoothDevice implements Devi
                 gattChar.configNotificationIndication(false, false, new boolean[2]);
                 gattChar.removeCharListener(listener);
             } catch (RuntimeException e) {
-                throw new java.util.concurrent.CompletionException(e);
+                throw new CompletionException(e);
             }
         }, executor);
     }

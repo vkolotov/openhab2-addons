@@ -24,8 +24,6 @@ import org.junit.jupiter.api.Test;
  * a specific entity: a thrown {@code act()} must not silently cancel the loop; a paused reconciler must freeze
  * its timers (so a long prerequisite outage does not age it toward an escalation storm on recovery); and
  * corrective actions must be exponentially backed off.
- * <p>
- * Cross-reference: {@code docs/directbt-reconciler-design.md} (§"Pause/freeze", §"Reusable mechanism").
  *
  * @author Vlad Kolotov - Initial contribution
  */
@@ -192,16 +190,5 @@ class ReconcilerTest {
         assertTrue(r.isPaused());
         r.unpause();
         assertFalse(r.isPaused());
-    }
-
-    @Test
-    void setDesiredChangesTheInSyncTarget() {
-        MutableClock clock = new MutableClock(START);
-        TestReconciler r = new TestReconciler(clock);
-        r.observedValue = false; // desired is TRUE by default -> out of sync
-        assertFalse(r.reconcile());
-
-        r.setDesired(Boolean.FALSE); // now desired matches observed
-        assertTrue(r.reconcile(), "after setDesired the observed value satisfies the new intent");
     }
 }
