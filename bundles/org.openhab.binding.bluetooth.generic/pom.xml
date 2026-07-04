@@ -14,10 +14,6 @@
 
   <name>openHAB Add-ons :: Bundles :: Generic Bluetooth Adapter</name>
 
-  <properties>
-    <bnd.importpackage>com.google.errorprone.annotations;resolution:=optional</bnd.importpackage>
-  </properties>
-
   <dependencies>
     <dependency>
       <groupId>org.openhab.addons.bundles</groupId>
