@@ -17,7 +17,6 @@ import java.util.concurrent.ScheduledExecutorService;
 
 import org.direct_bt.BTFactory;
 import org.direct_bt.BTManager;
-import org.direct_bt.osgi.DirectBTNativeLibraryProvider;
 import org.eclipse.jdt.annotation.NonNullByDefault;
 import org.eclipse.jdt.annotation.Nullable;
 import org.openhab.binding.bluetooth.util.RetryFuture;
@@ -25,7 +24,6 @@ import org.openhab.core.common.ThreadPoolManager;
 import org.osgi.service.component.annotations.Activate;
 import org.osgi.service.component.annotations.Component;
 import org.osgi.service.component.annotations.Deactivate;
-import org.osgi.service.component.annotations.Reference;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -51,13 +49,11 @@ public class DirectBTManagerFactory {
 
     private final Logger logger = LoggerFactory.getLogger(DirectBTManagerFactory.class);
     private final ScheduledExecutorService scheduler = ThreadPoolManager.getScheduledPool("bluetooth");
-    private final DirectBTNativeLibraryProvider nativeLibraryProvider;
 
     private @Nullable CompletableFuture<@Nullable BTManager> managerFuture;
 
     @Activate
-    public DirectBTManagerFactory(@Reference DirectBTNativeLibraryProvider nativeLibraryProvider) {
-        this.nativeLibraryProvider = nativeLibraryProvider;
+    public DirectBTManagerFactory() {
         initialize();
     }
 
@@ -74,8 +70,7 @@ public class DirectBTManagerFactory {
     }
 
     private void initialize() {
-        logger.debug("initializing DirectBTManagerFactory; Direct-BT natives ready in {}",
-                nativeLibraryProvider.getLibraryDirectory());
+        logger.debug("initializing DirectBTManagerFactory; Direct-BT native loader ready");
         this.managerFuture = RetryFuture.callWithRetry(() -> {
             try {
                 // The native libraries are extracted + System.load'ed inside the Direct-BT lib bundle (its
