@@ -23,13 +23,17 @@ import java.util.concurrent.Executors;
 
 import org.direct_bt.BDAddressAndType;
 import org.direct_bt.BDAddressType;
+import org.direct_bt.BTAdapter;
 import org.direct_bt.BTDevice;
+import org.direct_bt.BTMode;
+import org.direct_bt.HCIStatusCode;
 import org.eclipse.jdt.annotation.NonNullByDefault;
 import org.eclipse.jdt.annotation.Nullable;
 import org.jau.net.EUI48;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.InOrder;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
@@ -44,10 +48,12 @@ import org.openhab.core.thing.Thing;
 import org.slf4j.LoggerFactory;
 
 /**
- * Regression harness for the {@link DirectBTBridgeHandler} pieces the encryption feature depends on: the
+ * Regression harness for the {@link DirectBTBridgeHandler} pieces the encryption feature depends on — the
  * per-device security config lookups (mode + passkey, matched to the child Thing by address), the SMP
- * passkey reply, and the orphan-adoption matcher. Everything is exercised with mocked Things / native
- * devices — no controller, no OSGi.
+ * passkey reply, and the orphan-adoption matcher — plus the edge-triggered adapter power-up ladder
+ * ({@code powerUpAdapter}), which must stay behaviourally in lockstep with {@code AdapterReconciler}'s
+ * level-triggered copy until the two are folded together. Everything is exercised with mocked Things /
+ * native devices — no controller, no OSGi.
  *
  * @author Vlad Kolotov - Initial contribution
  */
@@ -212,6 +218,128 @@ class DirectBTBridgeHandlerTest {
                 LoggerFactory.getLogger("test")));
 
         assertSame(good, orphan.getBTDevice(), "one broken candidate must not prevent adopting the good one");
+    }
+
+    // --- adapter power-up ladder (powerUpAdapter) ---------------------------------------------------
+    // The edge-triggered bring-up copy of the power ladder. These tests lock down the decisions that were
+    // tuned against live CSR/Realtek controllers, mirroring AdapterReconcilerTest's coverage of the
+    // level-triggered copy in act()/escalate(): the two ladders must not drift apart until folded together.
+
+    /** Short bounded wait so the "never powers on" case fails in milliseconds, not the production 2s. */
+    private static final int WAIT_TRIES = 3;
+    private static final long WAIT_MS = 1;
+
+    private static @Nullable String powerUp(BTAdapter a) throws InterruptedException {
+        return DirectBTBridgeHandler.powerUpAdapter(a, LoggerFactory.getLogger("test"), WAIT_TRIES, WAIT_MS);
+    }
+
+    @Test
+    void powerUpDoesNothingWhenAlreadyInitializedAndPowered() throws InterruptedException {
+        BTAdapter a = mock(BTAdapter.class);
+        when(a.isInitialized()).thenReturn(true);
+        when(a.isPowered()).thenReturn(true);
+
+        assertNull(powerUp(a), "already up: success with no commands");
+        verify(a, never()).initialize(any(), anyBoolean());
+        verify(a, never()).setPowered(anyBoolean());
+        verify(a, never()).reset();
+    }
+
+    @Test
+    void powerUpInitializesWithPowerOnAsASingleStep() throws InterruptedException {
+        // The CSR8510 regression: initialize(...,false) followed by a separate power step stalled bring-up
+        // (initialize left powered=false and the follow-up reset() hung). Power-on MUST ride along with
+        // initialize as one native call.
+        BTAdapter a = mock(BTAdapter.class);
+        when(a.isInitialized()).thenReturn(false);
+        when(a.initialize(any(), anyBoolean())).thenReturn(HCIStatusCode.SUCCESS);
+        when(a.isPowered()).thenReturn(true); // initialize powered it on
+
+        assertNull(powerUp(a));
+        verify(a).initialize(BTMode.DUAL, true);
+        verify(a, never()).reset();
+        verify(a, never()).setPowered(anyBoolean());
+    }
+
+    @Test
+    void powerUpFailsClosedWhenInitializeFails() throws InterruptedException {
+        BTAdapter a = mock(BTAdapter.class);
+        when(a.isInitialized()).thenReturn(false);
+        when(a.initialize(any(), anyBoolean())).thenReturn(HCIStatusCode.INTERNAL_FAILURE);
+
+        String error = powerUp(a);
+        assertNotNull(error, "a failed initialize must fail the bring-up");
+        assertTrue(error.contains("initialization failed"), error);
+        // No fallback poking on a controller that refused initialize — a blind reset() can wedge CSR.
+        verify(a, never()).reset();
+        verify(a, never()).setPowered(anyBoolean());
+    }
+
+    @Test
+    void powerUpTriesSetPoweredBeforeReset() throws InterruptedException {
+        // Initialized but off: setPowered(true) is the gentle path; reset() must NOT run when it takes.
+        BTAdapter a = mock(BTAdapter.class);
+        when(a.isInitialized()).thenReturn(true);
+        when(a.isPowered()).thenReturn(false, true); // off at the gate, on after setPowered
+        when(a.setPowered(true)).thenReturn(true);
+
+        assertNull(powerUp(a));
+        verify(a).setPowered(true);
+        verify(a, never()).reset(); // a blind reset() can hang/wedge some CSR controllers
+    }
+
+    @Test
+    void powerUpFallsBackToResetOnlyWhenSetPoweredFails() throws InterruptedException {
+        BTAdapter a = mock(BTAdapter.class);
+        when(a.isInitialized()).thenReturn(true);
+        // off at the gate, still off right after reset (so the ladder must setPowered again), then on.
+        // (the post-reset debug log also reads isPowered once, hence the extra false)
+        when(a.isPowered()).thenReturn(false, false, false, true);
+        when(a.setPowered(true)).thenReturn(false, true);
+        when(a.reset()).thenReturn(HCIStatusCode.SUCCESS);
+
+        assertNull(powerUp(a));
+        InOrder inOrder = inOrder(a);
+        inOrder.verify(a).setPowered(true); // gentle path first
+        inOrder.verify(a).reset(); // fallback only after it failed
+        inOrder.verify(a).setPowered(true); // reset succeeded but left the adapter off -> power it
+    }
+
+    @Test
+    void powerUpReportsFailureWhenResetFails() throws InterruptedException {
+        BTAdapter a = mock(BTAdapter.class);
+        when(a.isInitialized()).thenReturn(true);
+        when(a.isPowered()).thenReturn(false);
+        when(a.setPowered(true)).thenReturn(false);
+        when(a.reset()).thenReturn(HCIStatusCode.TIMEOUT);
+
+        String error = powerUp(a);
+        assertNotNull(error);
+        assertTrue(error.contains("power-up failed"), error);
+    }
+
+    @Test
+    void powerUpWaitsBoundedForAsynchronousPowerOn() throws InterruptedException {
+        // Power-on can complete asynchronously after the command returns; the ladder must poll (bounded)
+        // until the controller reports POWERED before the caller attaches listeners / starts discovery.
+        BTAdapter a = mock(BTAdapter.class);
+        when(a.isInitialized()).thenReturn(true);
+        when(a.setPowered(true)).thenReturn(true);
+        when(a.isPowered()).thenReturn(false, false, true); // off at the gate, off on first poll, then on
+
+        assertNull(powerUp(a), "success once the controller reports POWERED within the wait budget");
+    }
+
+    @Test
+    void powerUpFailsWhenTheControllerNeverReportsPowered() throws InterruptedException {
+        BTAdapter a = mock(BTAdapter.class);
+        when(a.isInitialized()).thenReturn(true);
+        when(a.setPowered(true)).thenReturn(true);
+        when(a.isPowered()).thenReturn(false); // never comes up
+
+        String error = powerUp(a);
+        assertNotNull(error, "the wait is bounded; a controller that never powers must fail the bring-up");
+        assertTrue(error.contains("did not power on"), error);
     }
 
     // --- helpers -----------------------------------------------------------------------------------

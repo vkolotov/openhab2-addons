@@ -592,53 +592,10 @@ public class DirectBTBridgeHandler extends AbstractBluetoothBridgeHandler<Direct
         try {
             logger.debug("Direct-BT onAdapterAdded {} pre-state: initialized={} powered={}", wanted,
                     added.isInitialized(), added.isPowered());
-            // Bring the adapter to an initialized + powered state FIRST. Three cases:
-            // - never initialized -> initialize(), then power on if needed
-            // - initialized but off -> reset() (some controllers do not recover from setPowered(true) alone)
-            // - already powered -> nothing to do
-            // Order matters: addStatusListener() / startDiscovery() must come AFTER the adapter is
-            // initialized & powered. Calling addStatusListener() on a freshly-replayed, not-yet-initialized
-            // adapter crashes the native layer with a null-reference (jaulib helper_jni.hpp:512).
-            if (!added.isInitialized()) {
-                // Power the adapter ON as part of initialize (BTMode.DUAL, true). Splitting init from power
-                // (initialize(...,false) then a separate reset()) stalled bring-up on some CSR controllers
-                // (observed on the CSR8510 A10 / bcdDevice 88.91 on 212: initialize left powered=false and the
-                // follow-up added.reset() hung, so the reconciler never started and the bridge sat UNKNOWN forever).
-                HCIStatusCode rc = added.initialize(BTMode.DUAL, true);
-                logger.debug("Direct-BT adapter {} initialize: {} (powered={} initialized={})", wanted, rc,
-                        added.isPowered(), added.isInitialized());
-                if (rc != HCIStatusCode.SUCCESS) {
-                    updateStatus(ThingStatus.OFFLINE, ThingStatusDetail.COMMUNICATION_ERROR,
-                            "Adapter initialization failed: " + rc + " (is bluetoothd disabled for this adapter?)");
-                    return;
-                }
-            }
-            if (!added.isPowered()) {
-                // Already initialized but off (or initialize did not power it): try setPowered() first, and only
-                // fall back to a full reset() if that does not take. Avoid resetting unconditionally — a blind
-                // reset() can hang/wedge some CSR controllers.
-                if (!added.setPowered(true)) {
-                    HCIStatusCode rc = added.reset();
-                    logger.debug("Direct-BT adapter {} reset: {} (powered={} initialized={})", wanted, rc,
-                            added.isPowered(), added.isInitialized());
-                    if (rc == HCIStatusCode.SUCCESS && !added.isPowered()) {
-                        added.setPowered(true);
-                    }
-                    if (rc != HCIStatusCode.SUCCESS) {
-                        updateStatus(ThingStatus.OFFLINE, ThingStatusDetail.COMMUNICATION_ERROR,
-                                "Adapter power-up failed: " + rc + " (is bluetoothd disabled for this adapter?)");
-                        return;
-                    }
-                }
-            }
-            // Power-on may be asynchronous; wait (bounded) for the controller to report POWERED before
-            // starting discovery, otherwise startDiscovery() fails with NOT_POWERED.
-            for (int i = 0; i < POWER_ON_WAIT_TRIES && !added.isPowered(); i++) {
-                Thread.sleep(POWER_ON_WAIT_MS);
-            }
-            if (!added.isPowered()) {
+            String powerUpError = powerUpAdapter(added, logger, POWER_ON_WAIT_TRIES, POWER_ON_WAIT_MS);
+            if (powerUpError != null) {
                 updateStatus(ThingStatus.OFFLINE, ThingStatusDetail.COMMUNICATION_ERROR,
-                        "Adapter did not power on (is bluetoothd disabled for this adapter?)");
+                        powerUpError + " (is bluetoothd disabled for this adapter?)");
                 return;
             }
             // The power-wait may have slept while dispose() ran; bail before mutating native state.
@@ -674,6 +631,60 @@ public class DirectBTBridgeHandler extends AbstractBluetoothBridgeHandler<Direct
             logger.debug("Failed to bring up Direct-BT adapter {}", wanted, e);
             updateStatus(ThingStatus.OFFLINE, ThingStatusDetail.COMMUNICATION_ERROR, "Adapter bring-up failed");
         }
+    }
+
+    /**
+     * The EDGE-TRIGGERED adapter power-up ladder, run once when the manager hands us the adapter. Three cases:
+     * <ul>
+     * <li>never initialized -> {@code initialize(BTMode.DUAL, true)} — power ON as part of initialize. Splitting
+     * init from power ({@code initialize(...,false)} then a separate {@code reset()}) stalled bring-up on some CSR
+     * controllers (observed on the CSR8510 A10 / bcdDevice 88.91: initialize left powered=false and the follow-up
+     * reset() hung, so the reconciler never started and the bridge sat UNKNOWN forever);</li>
+     * <li>initialized but off -> try {@code setPowered(true)} first, and only fall back to a full {@code reset()}
+     * if that does not take — a blind reset() can hang/wedge some CSR controllers;</li>
+     * <li>already powered -> nothing to do.</li>
+     * </ul>
+     * Power-on may be asynchronous, so afterwards wait (bounded: {@code waitTries * waitMs}) for the controller to
+     * report POWERED — the caller must not attach listeners or start discovery before that (addStatusListener() on
+     * a not-yet-initialized adapter crashes the native layer with a null-reference, jaulib helper_jni.hpp:512).
+     * <p>
+     * NOTE: this ladder deliberately mirrors the LEVEL-TRIGGERED copy in {@link AdapterReconciler}'s
+     * {@code act()}/{@code escalate()} (which re-runs the same decisions every tick once the driver is up). The
+     * two must stay behaviourally in lockstep until they are folded together; {@code DirectBTBridgeHandlerTest}
+     * locks the shared semantics down against a mocked adapter.
+     *
+     * @return {@code null} on success, or a human-readable failure reason for the Thing status.
+     */
+    static @Nullable String powerUpAdapter(BTAdapter added, Logger logger, int waitTries, long waitMs)
+            throws InterruptedException {
+        if (!added.isInitialized()) {
+            HCIStatusCode rc = added.initialize(BTMode.DUAL, true);
+            logger.debug("Direct-BT adapter initialize: {} (powered={} initialized={})", rc, added.isPowered(),
+                    added.isInitialized());
+            if (rc != HCIStatusCode.SUCCESS) {
+                return "Adapter initialization failed: " + rc;
+            }
+        }
+        if (!added.isPowered()) {
+            if (!added.setPowered(true)) {
+                HCIStatusCode rc = added.reset();
+                logger.debug("Direct-BT adapter reset: {} (powered={} initialized={})", rc, added.isPowered(),
+                        added.isInitialized());
+                if (rc == HCIStatusCode.SUCCESS && !added.isPowered()) {
+                    added.setPowered(true);
+                }
+                if (rc != HCIStatusCode.SUCCESS) {
+                    return "Adapter power-up failed: " + rc;
+                }
+            }
+        }
+        for (int i = 0; i < waitTries && !added.isPowered(); i++) {
+            Thread.sleep(waitMs);
+        }
+        if (!added.isPowered()) {
+            return "Adapter did not power on";
+        }
+        return null;
     }
 
     private synchronized void onAdapterRemoved(BTAdapter removed) {
