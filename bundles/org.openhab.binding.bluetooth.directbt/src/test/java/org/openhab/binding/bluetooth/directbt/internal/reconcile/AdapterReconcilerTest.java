@@ -23,6 +23,7 @@ import org.direct_bt.ScanType;
 import org.eclipse.jdt.annotation.NonNullByDefault;
 import org.eclipse.jdt.annotation.Nullable;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.mockito.InOrder;
 
 /**
@@ -185,6 +186,42 @@ class AdapterReconcilerTest {
         r.reconcileScan(false);
 
         verify(a).stopDiscovery();
+    }
+
+    // ---------------------------------------------------------------------------------------------
+    // Scan is DUTY-CYCLED (window < interval), not 100% duty. A window == interval scan keeps the radio busy
+    // the whole time and starves a connected device's ACL, so once DiscoveryPolicy.PAUSE_CONNECTED_UNTIL_READY
+    // resumes the scan the connected device drops (supervision timeout). With two wanted devices one is always
+    // still discovering while the other is connected -> perpetual scan -> both drop in a loop (RTL8761BU).
+    // This locks the window strictly below the interval so the fix can't regress to the full-duty scan.
+    // ---------------------------------------------------------------------------------------------
+    @Test
+    void startedScanIsDutyCycledSoConnectedDevicesSurvive() {
+        BTAdapter a = mock(BTAdapter.class);
+        // scan wanted ON, adapter not yet discovering with no lingering scan -> reconciler issues startDiscovery.
+        when(a.isDiscovering()).thenReturn(false);
+        when(a.getCurrentScanType()).thenReturn(ScanType.NONE);
+        when(a.startDiscovery(any(), any(), anyBoolean(), anyShort(), anyShort(), anyByte(), anyBoolean()))
+                .thenReturn(HCIStatusCode.SUCCESS);
+
+        AdapterReconciler r = reconciler(a, new MutableClock(START), budget(new MutableClock(START)));
+        r.reconcileScan(true);
+
+        ArgumentCaptor<Short> interval = ArgumentCaptor.forClass(Short.class);
+        ArgumentCaptor<Short> window = ArgumentCaptor.forClass(Short.class);
+        // startDiscovery(gattServer, policy, active, le_scan_interval, le_scan_window, filter_policy, filter_dup)
+        verify(a).startDiscovery(any(), any(), anyBoolean(), interval.capture(), window.capture(), anyByte(),
+                anyBoolean());
+
+        short iv = interval.getValue();
+        short win = window.getValue();
+        // Both are valid LE scan params (0.625ms units, spec range 0x0004..0x4000).
+        assertTrue(win >= 0x0004 && win <= 0x4000, "scan window in spec range");
+        assertTrue(iv >= 0x0004 && iv <= 0x4000, "scan interval in spec range");
+        // The fix: window strictly below interval leaves radio gaps for a connected device's ACL. A full-duty
+        // scan (window == interval) is the exact regression that dropped concurrent devices.
+        assertTrue(win < iv, "scan must be duty-cycled (window < interval) so connections survive; was window=" + win
+                + " interval=" + iv);
     }
 
     // ---------------------------------------------------------------------------------------------

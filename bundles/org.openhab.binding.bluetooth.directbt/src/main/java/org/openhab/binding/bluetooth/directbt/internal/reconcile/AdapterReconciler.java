@@ -65,9 +65,19 @@ public class AdapterReconciler extends Reconciler<Boolean, AdapterReconciler.Obs
 
     private static final long ESCALATE_AFTER_MS = 6000;
 
-    // Scan parameters (were DiscoveryReconciler's).
-    private static final short LE_SCAN_INTERVAL = (short) 24;
-    private static final short LE_SCAN_WINDOW = (short) 24;
+    // Scan parameters (were DiscoveryReconciler's). Units of 0.625ms.
+    //
+    // DUTY-CYCLED so the scan can coexist with a live connection. With window == interval the radio scans
+    // 100% of the time and leaves NO slots for a connected device's ACL, so once DiscoveryPolicy
+    // PAUSE_CONNECTED_UNTIL_READY resumes the scan (after a device reaches readiness) the connected device's
+    // connection events are all missed -> supervision timeout -> disconnect. With two wanted devices one is
+    // always still needing discovery while the other is connected, so the scan is effectively always on and
+    // both devices drop in a loop every few minutes (observed on RTL8761BU; single device never hits it).
+    // Window 24 (15ms) within interval 144 (90ms) = ~17% duty leaves the radio free 83% of the time for ACL
+    // traffic, which is the standard scan-while-connected ratio. Discovery of a new device is slightly slower
+    // (only listening ~1/6 of the time) but connections stay up.
+    private static final short LE_SCAN_INTERVAL = (short) 144; // 90ms
+    private static final short LE_SCAN_WINDOW = (short) 24; // 15ms (~17% duty)
     private static final byte FILTER_POLICY = (byte) 0;
     private static final boolean FILTER_DUP = true;
     private static final int STOP_SETTLE_TRIES = 15;
