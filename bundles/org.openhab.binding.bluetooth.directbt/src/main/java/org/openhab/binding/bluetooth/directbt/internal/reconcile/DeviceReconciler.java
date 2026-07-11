@@ -79,6 +79,9 @@ public class DeviceReconciler extends Reconciler<Boolean, DeviceReconciler.Obser
 
     // Timestamps (epoch millis). connectingSince drives the stuck deadline; lastConnectAttemptAt spaces retries.
     private long connectingSince;
+    // Consecutive failed GATT resolves on a link the flags claim is connected (stale-flag detector).
+    private static final int RESOLVE_FAIL_STREAK_LIMIT = 3;
+    private int resolveFailStreak;
     private long lastConnectAttemptAt;
     // Epoch millis of the tick at which we first observed pairing in progress during the current CONNECTING window,
     // or 0 if not currently pairing. Used to freeze the connect deadline across an SMP negotiation (see act()).
@@ -124,6 +127,16 @@ public class DeviceReconciler extends Reconciler<Boolean, DeviceReconciler.Obser
      */
     public boolean needsConnection() {
         return port.isWanted() && port.hasNativeDevice() && !port.isNativeConnected();
+    }
+
+    /**
+     * Whether this device is natively connected but still resolving its GATT model. The link exists but the
+     * service walk (many sequential ATT round-trips) is in flight — on a weak-RSSI link a concurrent LE scan
+     * steals enough radio slots that the walk times out and restarts forever, so inbox/background scanning
+     * must yield to this state exactly like it yields to {@link #needsConnection() establishing}.
+     */
+    public boolean isResolvingGatt() {
+        return port.isWanted() && port.isNativeConnected() && !port.isGattResolved();
     }
 
     @Override
@@ -193,6 +206,26 @@ public class DeviceReconciler extends Reconciler<Boolean, DeviceReconciler.Obser
             if (!o.gattResolved) {
                 logger.debug("[reconcile:{}] connected but GATT unresolved; resolving", name);
                 port.resolveGatt();
+                // TRUST BUT VERIFY the "connected" verdict. Direct-BT's Java-side getConnected() and
+                // getConnectionHandle() can both go stale after a silent link drop: they keep reporting a
+                // connection while the native side has none and the device is out advertising. In that state
+                // every resolve returns empty (GATTHandler nullptr) and this branch loops forever. A real,
+                // healthy link resolves GATT in one or two attempts — so a short streak of failed resolves IS
+                // the disconnect signal. Tear the flag down and let the normal rediscover->connect path
+                // rebuild from a fresh advertisement.
+                if (!port.isGattResolved()) {
+                    if (++resolveFailStreak >= RESOLVE_FAIL_STREAK_LIMIT) {
+                        logger.warn(
+                                "[reconcile:{}] GATT resolve failed {} times on a supposedly-connected link; treating as silently dropped",
+                                name, resolveFailStreak);
+                        resolveFailStreak = 0;
+                        port.markDisconnected();
+                    }
+                } else {
+                    resolveFailStreak = 0;
+                }
+            } else {
+                resolveFailStreak = 0;
             }
             return; // connected: no connect work
         }

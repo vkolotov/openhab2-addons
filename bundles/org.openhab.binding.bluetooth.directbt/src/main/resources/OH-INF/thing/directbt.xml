@@ -35,6 +35,37 @@
 				<advanced>true</advanced>
 				<default>300</default>
 			</parameter>
+			<parameter name="scanIntervalSlots" type="integer" min="4" max="16384">
+				<label>LE Scan Interval (slots)</label>
+				<description>LE scan interval in 0.625 ms slots. Together with the scan window this sets the scan duty
+					cycle
+					(window/interval): the radio listens for the window out of every interval. Default 144 (90 ms).</description>
+				<advanced>true</advanced>
+				<default>144</default>
+			</parameter>
+			<parameter name="scanWindowSlots" type="integer" min="4" max="16384">
+				<label>LE Scan Window (slots)</label>
+				<description>LE scan window in 0.625 ms slots. Default 24 (15 ms) = ~17% duty with the default interval.
+					Raise toward
+					the interval to discover weak/far advertisers faster, but beware: a near-100% duty scan
+					starves connected devices'
+					ACL slots and can drop their connections. Values above
+					the interval are clamped to it.</description>
+				<advanced>true</advanced>
+				<default>24</default>
+			</parameter>
+			<parameter name="scanDuplicateFilter" type="boolean">
+				<label>Scan Duplicate Filter</label>
+				<description>Controller-side duplicate advert filtering. Off (default): every advertisement is reported, so
+					devices
+					stay fresh and can be connected whenever their Thing becomes ready. On: each static-address device
+					is reported only
+					ONCE per scan session — a Thing that was not ready at that single moment never sees the
+					device again until the scan
+					restarts.</description>
+				<advanced>true</advanced>
+				<default>false</default>
+			</parameter>
 		</config-description>
 
 	</bridge-type>

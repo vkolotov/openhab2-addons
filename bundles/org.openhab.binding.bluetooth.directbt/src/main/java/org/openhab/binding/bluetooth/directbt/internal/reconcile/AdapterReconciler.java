@@ -76,10 +76,23 @@ public class AdapterReconciler extends Reconciler<Boolean, AdapterReconciler.Obs
     // Window 24 (15ms) within interval 144 (90ms) = ~17% duty leaves the radio free 83% of the time for ACL
     // traffic, which is the standard scan-while-connected ratio. Discovery of a new device is slightly slower
     // (only listening ~1/6 of the time) but connections stay up.
-    private static final short LE_SCAN_INTERVAL = (short) 144; // 90ms
-    private static final short LE_SCAN_WINDOW = (short) 24; // 15ms (~17% duty)
+    //
+    // Both are bridge-configurable (scanIntervalSlots/scanWindowSlots): a low duty cycle can be too sparse
+    // to ever catch a weak/far advertiser (most of its adverts are corrupted, and the few clean ones land in
+    // the dead time between scan windows). Defaults stay conservative.
+    public static final short DEFAULT_LE_SCAN_INTERVAL = (short) 144; // 90ms
+    public static final short DEFAULT_LE_SCAN_WINDOW = (short) 24; // 15ms (~17% duty)
+    private volatile short leScanInterval = DEFAULT_LE_SCAN_INTERVAL;
+    private volatile short leScanWindow = DEFAULT_LE_SCAN_WINDOW;
     private static final byte FILTER_POLICY = (byte) 0;
-    private static final boolean FILTER_DUP = true;
+    // Controller-side duplicate filtering. WITH the filter, a STATIC-address device is reported ONCE per
+    // scan session — rotating-privacy phones keep "reappearing" to the filter, fixed-address devices do
+    // not. Since the scan runs continuously, a device whose Thing wasn't ready to connect at that single
+    // deviceFound moment never gets a native handle again and its reconciler waits forever.
+    // Default OFF: per-advert events keep activity stamps fresh (no false inactivity cleanup) and give the
+    // reconciler a handle whenever a device becomes wanted. The advert flood is bounded by the duty-cycled
+    // scan window and the bridge's observe-frequency cap.
+    private volatile boolean filterDuplicates = false;
     private static final int STOP_SETTLE_TRIES = 15;
     private static final long STOP_SETTLE_MS = 100;
     private static final long SCAN_DESYNC_RESET_AFTER_MS = 6000;
@@ -103,6 +116,26 @@ public class AdapterReconciler extends Reconciler<Boolean, AdapterReconciler.Obs
         super("adapter", logger, Boolean.TRUE, clock); // desired = powered
         this.adapterSupplier = adapterSupplier;
         this.resetBudget = resetBudget;
+    }
+
+    /**
+     * Applies bridge-configured LE scan parameters (0.625 ms slots). Clamped to the BT-spec range
+     * [4, 16384]; the window is additionally clamped to the interval (window > interval is invalid).
+     * Takes effect on the next scan (re)start — an already-running scan is not restarted.
+     */
+    public void setScanParameters(int intervalSlots, int windowSlots, boolean filterDuplicates) {
+        int interval = Math.max(4, Math.min(16384, intervalSlots));
+        int window = Math.max(4, Math.min(interval, windowSlots));
+        if (interval != intervalSlots || window != windowSlots) {
+            logger.warn("[reconcile:adapter:scan] scan parameters clamped: interval {} -> {}, window {} -> {}",
+                    intervalSlots, interval, windowSlots, window);
+        }
+        this.leScanInterval = (short) interval;
+        this.leScanWindow = (short) window;
+        this.filterDuplicates = filterDuplicates;
+        logger.debug(
+                "[reconcile:adapter:scan] scan parameters set: interval={} slots, window={} slots (~{}% duty), filterDuplicates={}",
+                interval, window, (window * 100) / interval, filterDuplicates);
     }
 
     // --- power phase (base Reconciler) ----------------------------------------------------------
@@ -241,7 +274,7 @@ public class AdapterReconciler extends Reconciler<Boolean, AdapterReconciler.Obs
                 }
             }
             HCIStatusCode res = a.startDiscovery(null, DiscoveryPolicy.PAUSE_CONNECTED_UNTIL_READY, true,
-                    LE_SCAN_INTERVAL, LE_SCAN_WINDOW, FILTER_POLICY, FILTER_DUP);
+                    leScanInterval, leScanWindow, FILTER_POLICY, filterDuplicates);
             logger.debug("[reconcile:adapter:scan] start -> {} (discovering={} scanType={})", res, a.isDiscovering(),
                     a.getCurrentScanType());
         } catch (InterruptedException e) {

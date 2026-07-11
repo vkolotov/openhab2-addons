@@ -25,4 +25,21 @@ import org.openhab.binding.bluetooth.BaseBluetoothBridgeHandlerConfiguration;
 public class DirectBTAdapterConfiguration extends BaseBluetoothBridgeHandlerConfiguration {
 
     public @Nullable String address;
+
+    /**
+     * LE scan interval/window in 0.625 ms slots. The window/interval ratio is the scan duty cycle:
+     * the radio listens for {@code scanWindowSlots} out of every {@code scanIntervalSlots}. The
+     * conservative default (24/144 = ~17%) keeps established connections alive (a near-100% duty
+     * scan starves connected devices' ACL slots and drops them on some controllers), at the
+     * cost of slower discovery of weak/far advertisers.
+     */
+    public int scanIntervalSlots = 144;
+    public int scanWindowSlots = 24;
+
+    /**
+     * Controller-side duplicate advert filtering. OFF (default) reports every advert: activity stamps stay
+     * fresh and a device can be picked up whenever its Thing becomes ready. ON reports each static-address
+     * device ONCE per scan session — a Thing that wasn't ready at that moment never sees it again.
+     */
+    public boolean scanDuplicateFilter = false;
 }

@@ -187,8 +187,12 @@ public class DirectBTBluetoothDevice extends BaseBluetoothDevice implements Devi
         // Admission control: only wanted (listener-having) devices ever connect. The core connect-probes every
         // discovered device without a listener to fingerprint it; refusing those keeps the controller clean.
         if (getListeners().isEmpty()) {
+            logger.debug("connect() refused for {}: no listeners (instance {})", address,
+                    System.identityHashCode(this));
             return false;
         }
+        logger.debug("connect() accepted for {}: wantConnected=true (instance {})", address,
+                System.identityHashCode(this));
         wantConnected = true;
         bridge.requeueReconcile();
         // Return true (intent accepted) so the core's reconnect loop treats this as "connecting in progress" and
@@ -289,6 +293,11 @@ public class DirectBTBluetoothDevice extends BaseBluetoothDevice implements Devi
     public boolean isNativeConnected() {
         BTDevice dev = device;
         try {
+            // Direct-BT's Java-side connected flag can go stale after a silent link drop. We deliberately
+            // do NOT probe here: a pingGATT arbitration was tried and rejected, since it also fails on a
+            // healthy just-connected link whose services are not discovered yet, tearing down every fresh
+            // connection. Staleness is instead detected downstream by the reconciler's resolve-fail streak,
+            // whose teardown (unconditional disconnect + native remove) recovers the device.
             return dev != null && dev.getConnected();
         } catch (RuntimeException e) {
             return false;
@@ -370,13 +379,28 @@ public class DirectBTBluetoothDevice extends BaseBluetoothDevice implements Devi
         BTDevice dev = device;
         if (dev != null) {
             try {
-                if (dev.getConnected()) {
-                    logger.debug("Native link to {} still up on markDisconnected; disconnecting before dropping",
-                            address);
-                    dev.disconnect();
-                }
+                // UNCONDITIONAL best-effort disconnect: getConnected() is not a reliable gate. An object adopted
+                // from an orphaned controller ACL can report false while the controller still holds the link —
+                // skipping the disconnect then leaks the ACL permanently: the peripheral never advertises again,
+                // adoption re-mints a bare shell for it each tick, GATT never resolves on the shell, and the
+                // device stays unreachable until the HCI channel is closed. Disconnecting an
+                // actually-unconnected device is a cheap native no-op error.
+                logger.debug("markDisconnected for {}: unconditional best-effort native disconnect (getConnected={})",
+                        address, dev.getConnected());
+                dev.disconnect();
             } catch (RuntimeException e) {
                 logger.debug("Best-effort native disconnect for {} failed", address, e);
+            }
+            // DISCARD the native object, don't just unlink it. Direct-BT keeps BTDevice instances in a shared
+            // list, and after a silent link drop an instance can carry permanently stale connection state
+            // (both getConnected() and getConnectionHandle() keep reporting the dead link). If we only null
+            // our reference, the very next advertisement re-adopts the SAME poisoned object via updateBTDevice
+            // and the stale "connected" verdict returns: resolve-fail -> markDisconnected -> re-adopt, forever.
+            // remove() evicts it from the shared list so the next advertisement mints a FRESH native object.
+            try {
+                dev.remove();
+            } catch (RuntimeException e) {
+                logger.debug("Best-effort native remove for {} failed", address, e);
             }
         }
         // Drop the stale native handle: after a disconnect the BTDevice no longer represents a usable link, and a

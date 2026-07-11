@@ -219,13 +219,17 @@ class DirectBTBluetoothDeviceTest {
     }
 
     @Test
-    void markDisconnectedDoesNotDisconnectAnAlreadyDownLink() {
+    void markDisconnectedDisconnectsUnconditionally() {
+        // getConnected() must NOT gate the teardown: an object adopted from an orphaned controller ACL can
+        // report false while the controller still holds the link. Skipping the disconnect then leaks the ACL
+        // permanently (the peripheral stays captive and never advertises). Disconnecting an actually-down
+        // link is a cheap native no-op.
         device().updateBTDevice(nativeDevice());
         when(nativeDevice().getConnected()).thenReturn(false);
 
         device().markDisconnected();
 
-        verify(nativeDevice(), never()).disconnect();
+        verify(nativeDevice()).disconnect();
         assertFalse(device().hasNativeDevice());
     }
 
@@ -248,6 +252,17 @@ class DirectBTBluetoothDeviceTest {
 
         when(nativeDevice().getConnected()).thenReturn(false);
         assertFalse(device().isNativeConnected());
+    }
+
+    @Test
+    void isNativeConnectedDistrustsStaleConnectedFlag() {
+        // After a silent link drop Direct-BT's Java-side getConnected() can stay stale while the native
+        // truth is gone. The flag is still trusted at this layer; the reconciler's resolve-fail streak
+        // detects and recovers the stale case.
+        device().updateBTDevice(nativeDevice());
+        when(nativeDevice().getConnected()).thenReturn(true);
+        assertTrue(device().isNativeConnected(),
+                "the flag is trusted here; stale flags are detected by the reconciler's resolve-fail streak");
     }
 
     @Test

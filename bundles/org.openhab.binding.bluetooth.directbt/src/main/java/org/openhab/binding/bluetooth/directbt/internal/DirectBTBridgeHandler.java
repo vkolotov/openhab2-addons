@@ -96,6 +96,9 @@ public class DirectBTBridgeHandler extends AbstractBluetoothBridgeHandler<Direct
     // device needs discovering. Read from the bridge Thing config; a manual scan (activeScanEnabled) forces it on
     // regardless.
     private volatile boolean backgroundDiscovery;
+    private volatile int scanIntervalSlots = AdapterReconciler.DEFAULT_LE_SCAN_INTERVAL;
+    private volatile int scanWindowSlots = AdapterReconciler.DEFAULT_LE_SCAN_WINDOW;
+    private volatile boolean scanDuplicateFilter;
     private @Nullable BTManager manager;
     private @Nullable BTAdapter adapter;
     private @Nullable ScheduledFuture<?> initJob;
@@ -262,6 +265,9 @@ public class DirectBTBridgeHandler extends AbstractBluetoothBridgeHandler<Direct
         }
         this.adapterAddress = new BluetoothAddress(addr.toUpperCase(Locale.ROOT));
         this.backgroundDiscovery = config.backgroundDiscovery;
+        this.scanIntervalSlots = config.scanIntervalSlots;
+        this.scanWindowSlots = config.scanWindowSlots;
+        this.scanDuplicateFilter = config.scanDuplicateFilter;
         updateStatus(ThingStatus.UNKNOWN, ThingStatusDetail.NONE, "Initializing");
         // Native load + Direct-BT init can block; do it off the main thread, then retry until the adapter
         // is present (e.g. dongle plugged in later).
@@ -341,7 +347,9 @@ public class DirectBTBridgeHandler extends AbstractBluetoothBridgeHandler<Direct
     private void startReconciler() {
         synchronized (reconcileLock) {
             if (adapterReconciler == null) {
-                adapterReconciler = new AdapterReconciler(logger, () -> adapter, resetBudget);
+                AdapterReconciler ar = new AdapterReconciler(logger, () -> adapter, resetBudget);
+                ar.setScanParameters(scanIntervalSlots, scanWindowSlots, scanDuplicateFilter);
+                adapterReconciler = ar;
             }
             if (reconcileJob == null) {
                 reconcileJob = scheduler.scheduleWithFixedDelay(this::reconcileTick, 0, RECONCILE_INTERVAL_MS,
@@ -548,6 +556,12 @@ public class DirectBTBridgeHandler extends AbstractBluetoothBridgeHandler<Direct
             // Background/inbox discovery must yield to it, else the scan restarts between attempts and the
             // controller can never complete the create-connection (observed as a connect/clear-pending flap).
             if (rec.needsConnection()) {
+                establishing[0] = true;
+            }
+            // Connected but mid-GATT-walk: the scan steals radio slots the walk needs. Fatal on weak links —
+            // the walk times out, restarts, and the device never reaches "ready", which keeps the scan on: a
+            // self-sustaining starvation loop.
+            if (rec.isResolvingGatt()) {
                 establishing[0] = true;
             }
         });
