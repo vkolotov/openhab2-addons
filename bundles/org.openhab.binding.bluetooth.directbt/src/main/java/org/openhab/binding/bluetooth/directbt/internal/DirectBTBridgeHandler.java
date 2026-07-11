@@ -770,6 +770,22 @@ public class DirectBTBridgeHandler extends AbstractBluetoothBridgeHandler<Direct
     }
 
     /**
+     * The per-device LE PHY preference, read from the device Thing's {@code phy} config: one of
+     * {@code auto} / {@code 1m} / {@code 2m} / {@code coded}. Applied best-effort after each connect;
+     * {@code auto} means no PHY request is made (controller default).
+     */
+    String getDevicePhy(BluetoothAddress address) {
+        Thing childThing = findChildThing(address);
+        if (childThing != null) {
+            Object phy = childThing.getConfiguration().get("phy");
+            if (phy instanceof String s && !s.isBlank()) {
+                return s.trim().toLowerCase(Locale.ROOT);
+            }
+        }
+        return "auto";
+    }
+
+    /**
      * The per-device static passkey/PIN for authenticated (PASSKEY_ENTRY) pairing, read from the device Thing's
      * {@code passkey} config, or {@code -1} if none is configured. A valid BLE passkey is 0..999999.
      */

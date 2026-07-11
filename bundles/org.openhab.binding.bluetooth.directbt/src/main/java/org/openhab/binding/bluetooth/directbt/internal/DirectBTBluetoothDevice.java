@@ -29,6 +29,7 @@ import org.direct_bt.BTSecurityLevel;
 import org.direct_bt.EInfoReport;
 import org.direct_bt.GattCharPropertySet;
 import org.direct_bt.HCIStatusCode;
+import org.direct_bt.LE_PHYs;
 import org.direct_bt.PairingMode;
 import org.direct_bt.SMPIOCapability;
 import org.direct_bt.SMPPairingState;
@@ -361,6 +362,36 @@ public class DirectBTBluetoothDevice extends BaseBluetoothDevice implements Devi
     public void markConnected() {
         connectedAtMillis = clock.millis();
         setConnectionState(ConnectionState.CONNECTED);
+        applyPhyPreference();
+    }
+
+    /**
+     * Requests the configured LE PHY for the freshly established connection (device Thing config {@code phy}).
+     * Every connection starts on LE 1M; a "coded" preference buys roughly 12 dB of link budget for weak/far
+     * devices, "2m" doubles bandwidth. Best-effort: the controllers negotiate, and an unsupported PHY on
+     * either side simply leaves the connection on 1M.
+     */
+    private void applyPhyPreference() {
+        String phy = bridge.getDevicePhy(address);
+        if (phy == null || "auto".equals(phy)) {
+            return;
+        }
+        BTDevice dev = device;
+        if (dev == null) {
+            return;
+        }
+        LE_PHYs.PHY requested = switch (phy) {
+            case "2m" -> LE_PHYs.PHY.LE_2M;
+            case "coded" -> LE_PHYs.PHY.LE_CODED;
+            default -> LE_PHYs.PHY.LE_1M;
+        };
+        try {
+            LE_PHYs phys = new LE_PHYs(requested.value);
+            HCIStatusCode rc = dev.setConnectedLE_PHY(phys, phys);
+            logger.debug("LE PHY request {} for {} -> {}", phy, address, rc);
+        } catch (RuntimeException e) {
+            logger.debug("LE PHY request {} for {} threw", phy, address, e);
+        }
     }
 
     @Override

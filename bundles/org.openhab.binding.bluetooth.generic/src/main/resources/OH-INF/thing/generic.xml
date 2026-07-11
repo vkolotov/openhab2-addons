@@ -47,6 +47,24 @@
 				</options>
 				<default>none</default>
 			</parameter>
+			<parameter name="phy" type="text">
+				<label>LE PHY</label>
+				<description>Preferred LE PHY for the established connection. "coded" (long range) trades bandwidth for
+					roughly 12 dB
+					of extra link budget and suits weak/far devices; "2m" doubles bandwidth at slightly less
+					range. The preference is
+					requested after each connect and silently falls back to 1M when either side
+					does not support it. Only effective on
+					transports that expose PHY control (e.g. Direct-BT).</description>
+				<options>
+					<option value="auto">Auto (controller default)</option>
+					<option value="1m">LE 1M</option>
+					<option value="2m">LE 2M</option>
+					<option value="coded">LE Coded (long range)</option>
+				</options>
+				<default>auto</default>
+				<advanced>true</advanced>
+			</parameter>
 			<parameter name="passkey" type="integer" min="0" max="999999">
 				<advanced>true</advanced>
 				<label>Passkey</label>
