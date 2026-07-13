@@ -172,6 +172,10 @@ public class DirectBTBridgeHandler extends AbstractBluetoothBridgeHandler<Direct
 
         @Override
         public void deviceDisconnected(BTDevice device, HCIStatusCode reason, short handle, long timestamp) {
+            // Record and log why the link dropped so it is not lost; the core status otherwise shows only a bare
+            // "communication error". The reconciler still drives the actual reconnect via requeueReconcile().
+            logger.debug("Direct-BT deviceDisconnected: {} reason={}", device.getAddressAndType(), reason);
+            getDevice(toAddress(device)).setDisconnectReason(String.valueOf(reason));
             requeueReconcile();
         }
 
@@ -305,7 +309,9 @@ public class DirectBTBridgeHandler extends AbstractBluetoothBridgeHandler<Direct
             // The retry job cancels itself on its next tick (see above); adapterAdded takes over from here.
         } catch (Exception e) {
             logger.debug("Direct-BT initialization failed, will retry", e);
-            updateStatus(ThingStatus.OFFLINE, ThingStatusDetail.COMMUNICATION_ERROR, "Direct-BT init failed");
+            String msg = e.getMessage();
+            updateStatus(ThingStatus.OFFLINE, ThingStatusDetail.COMMUNICATION_ERROR,
+                    "Direct-BT init failed" + (msg != null ? ": " + msg : ""));
         }
     }
 
@@ -643,7 +649,9 @@ public class DirectBTBridgeHandler extends AbstractBluetoothBridgeHandler<Direct
             Thread.currentThread().interrupt();
         } catch (RuntimeException e) {
             logger.debug("Failed to bring up Direct-BT adapter {}", wanted, e);
-            updateStatus(ThingStatus.OFFLINE, ThingStatusDetail.COMMUNICATION_ERROR, "Adapter bring-up failed");
+            String msg = e.getMessage();
+            updateStatus(ThingStatus.OFFLINE, ThingStatusDetail.COMMUNICATION_ERROR,
+                    "Adapter bring-up failed" + (msg != null ? ": " + msg : ""));
         }
     }
 
