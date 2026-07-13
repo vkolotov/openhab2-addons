@@ -55,6 +55,13 @@ public class GenericDiscoveryParticipant implements BluetoothDiscoveryParticipan
             // the thingUID will never be null in practice but this makes the null checker happy
             return null;
         }
+        // If the transport reports the advertising connectability and the device is a non-connectable beacon
+        // (ADV_NONCONN_IND / ADV_SCAN_IND), do not claim it as a generic device: returning null lets discovery
+        // fall through to the default beacon result. When connectability is unknown (null) we keep the previous
+        // behavior and claim it (the process still connect-probes it via requiresConnection).
+        if (Boolean.FALSE.equals(device.getConnectable())) {
+            return null;
+        }
         String label = "Generic Connectable Bluetooth Device";
         Map<String, Object> properties = new HashMap<>();
         properties.put(BluetoothBindingConstants.CONFIGURATION_ADDRESS, device.getAddress().toString());
@@ -96,7 +103,11 @@ public class GenericDiscoveryParticipant implements BluetoothDiscoveryParticipan
 
     @Override
     public boolean requiresConnection(BluetoothDiscoveryDevice device) {
-        return true;
+        // When the transport reports advertising connectability we don't need a connection to decide: a
+        // connectable device is surfaced as generic directly from advertisement data (no connect probe), and a
+        // non-connectable beacon is declined in createResult(). Only when connectability is unknown (null) do we
+        // fall back to the legacy behavior of connecting to fingerprint/enrich the device.
+        return device.getConnectable() == null;
     }
 
     @Override

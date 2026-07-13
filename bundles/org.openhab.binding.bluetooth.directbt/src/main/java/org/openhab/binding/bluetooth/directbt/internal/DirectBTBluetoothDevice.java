@@ -169,6 +169,16 @@ public class DirectBTBluetoothDevice extends BaseBluetoothDevice implements Devi
                 manData.keySet().stream().filter(Objects::nonNull).findFirst()
                         .ifPresent(id -> setManufacturerId(id & 0xFFFF));
             }
+            // Derive advertising connectability from the AD PDU type so discovery can surface connectable
+            // devices without a connect probe and leave non-connectable beacons alone. Only definitive types
+            // update the flag; a bare SCAN_RSP / UNDEFINED frame carries no connectability info and must not
+            // downgrade a connectable device already observed via its ADV_IND frame.
+            EInfoReport.AD_PDU_Type evtType = eir.getEvtType();
+            if (evtType.isConnectable()) {
+                setConnectable(true);
+            } else if (evtType.isNonConnectable()) {
+                setConnectable(false);
+            }
         }
     }
 
