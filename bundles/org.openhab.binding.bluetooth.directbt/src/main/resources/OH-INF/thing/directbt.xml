@@ -66,6 +66,22 @@
 				<advanced>true</advanced>
 				<default>false</default>
 			</parameter>
+			<parameter name="connectionIntervalSlots" type="integer" min="6" max="3200">
+				<label>LE Connection Interval (slots)</label>
+				<description>LE connection interval in 1.25 ms slots. Direct-BT pins minimum and maximum to this same
+					value for
+					predictable controller scheduling. Default 24 (30 ms).</description>
+				<advanced>true</advanced>
+				<default>24</default>
+			</parameter>
+			<parameter name="connectionSupervisionTimeoutSlots" type="integer" min="10" max="3200">
+				<label>LE Supervision Timeout (slots)</label>
+				<description>LE supervision timeout in 10 ms slots. A longer timeout tolerates short RF fades on
+					long-range links,
+					but detects a truly lost peer more slowly. Default 600 (6 s).</description>
+				<advanced>true</advanced>
+				<default>600</default>
+			</parameter>
 		</config-description>
 
 	</bridge-type>

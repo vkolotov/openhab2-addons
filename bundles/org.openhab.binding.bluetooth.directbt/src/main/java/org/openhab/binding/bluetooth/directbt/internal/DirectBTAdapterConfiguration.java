@@ -37,6 +37,18 @@ public class DirectBTAdapterConfiguration extends BaseBluetoothBridgeHandlerConf
     public int scanWindowSlots = 24;
 
     /**
+     * LE connection interval in 1.25 ms slots. Direct-BT pins min=max to this value because testing showed
+     * a loose 30-50 ms range lets some controllers choose 50 ms, which caused peripheral-side GATT stalls.
+     */
+    public int connectionIntervalSlots = 24;
+
+    /**
+     * LE supervision timeout in 10 ms slots. A longer timeout tolerates short RF fades on long-range links,
+     * at the cost of slower detection when a peer is truly gone.
+     */
+    public int connectionSupervisionTimeoutSlots = 600;
+
+    /**
      * Controller-side duplicate advert filtering. OFF (default) reports every advert: activity stamps stay
      * fresh and a device can be picked up whenever its Thing becomes ready. ON reports each static-address
      * device ONCE per scan session — a Thing that wasn't ready at that moment never sees it again.

@@ -98,6 +98,8 @@ public class DirectBTBridgeHandler extends AbstractBluetoothBridgeHandler<Direct
     private volatile boolean backgroundDiscovery;
     private volatile int scanIntervalSlots = AdapterReconciler.DEFAULT_LE_SCAN_INTERVAL;
     private volatile int scanWindowSlots = AdapterReconciler.DEFAULT_LE_SCAN_WINDOW;
+    private volatile int connectionIntervalSlots = 24;
+    private volatile int connectionSupervisionTimeoutSlots = 600;
     private volatile boolean scanDuplicateFilter;
     private @Nullable BTManager manager;
     private @Nullable BTAdapter adapter;
@@ -271,6 +273,9 @@ public class DirectBTBridgeHandler extends AbstractBluetoothBridgeHandler<Direct
         this.backgroundDiscovery = config.backgroundDiscovery;
         this.scanIntervalSlots = config.scanIntervalSlots;
         this.scanWindowSlots = config.scanWindowSlots;
+        this.connectionIntervalSlots = clamp(config.connectionIntervalSlots, 6, 3200);
+        this.connectionSupervisionTimeoutSlots = clamp(config.connectionSupervisionTimeoutSlots,
+                Math.max(10, this.connectionIntervalSlots / 4 + 1), 3200);
         this.scanDuplicateFilter = config.scanDuplicateFilter;
         updateStatus(ThingStatus.UNKNOWN, ThingStatusDetail.NONE, "Initializing");
         // Native load + Direct-BT init can block; do it off the main thread, then retry until the adapter
@@ -341,6 +346,18 @@ public class DirectBTBridgeHandler extends AbstractBluetoothBridgeHandler<Direct
     @Nullable
     BondStore getBondStore() {
         return bondStore;
+    }
+
+    short getConnectionIntervalSlots() {
+        return (short) connectionIntervalSlots;
+    }
+
+    short getConnectionSupervisionTimeoutSlots() {
+        return (short) connectionSupervisionTimeoutSlots;
+    }
+
+    private static int clamp(int value, int min, int max) {
+        return Math.max(min, Math.min(max, value));
     }
 
     // ============================================================================================

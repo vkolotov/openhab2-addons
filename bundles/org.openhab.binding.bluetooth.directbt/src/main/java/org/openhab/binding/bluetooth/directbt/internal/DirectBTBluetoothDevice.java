@@ -63,21 +63,13 @@ import org.slf4j.LoggerFactory;
 @NonNullByDefault
 public class DirectBTBluetoothDevice extends BaseBluetoothDevice implements DevicePort {
 
-    // Scan-assisted LE connection parameters, tuned for reliability on marginal/weak-RSSI links (units of
-    // 0.625ms for scan, 1.25ms for conn interval, 10ms for supervision). PINNED to match the dead-stable BlueZ
-    // profile on the same hardware: BlueZ negotiates a TIGHT 30ms interval (min==max) + 2000ms supervision and
-    // never drops a read. With a loose 30-50ms range the controller picked 50ms, and on the 50ms link the
-    // peripheral periodically LL-ACKed a Read Request but never returned the Read Response (wire-validated:
-    // peripheral-side stall, not host/controller), which Direct-BT then correctly timed out -> disconnect.
-    // Pinning the interval to exactly 30ms (min==max==24) removes the wide-range window that triggers it.
-    // TODO: make these overridable via bridge-level config (the generic device thing-type is core-owned, so
-    // per-device config isn't available).
+    // Scan-assisted LE connection parameters, tuned for reliability on marginal/weak-RSSI links. Units:
+    // 0.625ms for scan, 1.25ms for connection interval, 10ms for supervision. The connection interval and
+    // supervision timeout are bridge-configurable; Direct-BT pins min=max to keep controller scheduling
+    // predictable.
     private static final short LE_SCAN_INTERVAL = (short) 24; // 15ms
     private static final short LE_SCAN_WINDOW = (short) 24; // 15ms
-    private static final short CONN_INTERVAL_MIN = (short) 24; // 30ms (pinned == max, matches BlueZ)
-    private static final short CONN_INTERVAL_MAX = (short) 24; // 30ms (pinned == min, matches BlueZ)
     private static final short CONN_LATENCY = (short) 0;
-    private static final short CONN_SUPERVISION_TIMEOUT = (short) 200; // 2000ms (units of 10ms, matches BlueZ)
 
     private final Logger logger = LoggerFactory.getLogger(DirectBTBluetoothDevice.class);
 
@@ -518,8 +510,9 @@ public class DirectBTBluetoothDevice extends BaseBluetoothDevice implements Devi
                     logger.debug("Persisted bond applied to {}; reconnect will reuse the stored keys", address);
                 }
             }
-            return dev.connectLE(LE_SCAN_INTERVAL, LE_SCAN_WINDOW, CONN_INTERVAL_MIN, CONN_INTERVAL_MAX, CONN_LATENCY,
-                    CONN_SUPERVISION_TIMEOUT);
+            short interval = bridge.getConnectionIntervalSlots();
+            short supervision = bridge.getConnectionSupervisionTimeoutSlots();
+            return dev.connectLE(LE_SCAN_INTERVAL, LE_SCAN_WINDOW, interval, interval, CONN_LATENCY, supervision);
         } catch (RuntimeException e) {
             logger.debug("Direct-BT connectNative to {} threw", address, e);
             return HCIStatusCode.INTERNAL_FAILURE;
