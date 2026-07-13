@@ -643,7 +643,11 @@ public class DirectBTBridgeHandler extends AbstractBluetoothBridgeHandler<Direct
             // and will turn the scan on at its first tick because no wanted device is connected yet.
             added.stopDiscovery();
             this.adapter = added;
-            updateStatus(ThingStatus.ONLINE);
+            // Include the adapter address + discovery mode in the ONLINE description: a stable, informative
+            // annotation (not something that churns like RSSI), so the UI shows which controller is bound and
+            // whether it is surfacing new devices to the inbox.
+            updateStatus(ThingStatus.ONLINE, ThingStatusDetail.NONE, "Adapter " + wanted
+                    + (backgroundDiscovery ? " (background discovery on)" : " (background discovery off)"));
             startReconciler();
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
