@@ -89,11 +89,34 @@ public class DirectBTDiscoveryService extends AbstractDiscoveryService {
             // Bridge id is the adapter MAC (stable across reboot, unique per adapter), so device UIDs read
             // bluetooth:generic:<adapterMAC>:<deviceMAC> — fully qualified by which adapter they connect through.
             ThingUID uid = new ThingUID(DirectBTAdapterConstants.THING_TYPE_DIRECTBT, address.replace(":", ""));
-            String name = adapter.getName();
+            String name = sanitizeName(adapter.getName());
             thingDiscovered(DiscoveryResultBuilder.create(uid)
-                    .withLabel("Direct-BT Adapter " + (name == null || name.isEmpty() ? address : name))
+                    .withLabel("Direct-BT Adapter " + (name.isEmpty() ? address : name))
                     .withProperty(DirectBTAdapterConstants.PROPERTY_ADDRESS, address)
                     .withRepresentationProperty(DirectBTAdapterConstants.PROPERTY_ADDRESS).build());
         }
+    }
+
+    /**
+     * The controller local name comes from a fixed 248-byte HCI field that should be NUL-padded, but some
+     * adapters ship it padded with junk (e.g. the TP-Link UB500 emits {@code "TP-Link UB500 Adapter"}
+     * followed by a run of 0xFF bytes, which decode to {@code ÿÿÿ…} — U+00FF). NUL termination is already
+     * handled upstream; strip only a <em>trailing</em> run of 0xFF/control padding so legitimate interior
+     * non-ASCII (accented UTF-8 names) is preserved.
+     */
+    static String sanitizeName(@Nullable String name) {
+        if (name == null) {
+            return "";
+        }
+        int end = name.length();
+        while (end > 0) {
+            char c = name.charAt(end - 1);
+            if (c == 0x00ff || c < 0x20) {
+                end--;
+            } else {
+                break;
+            }
+        }
+        return name.substring(0, end).trim();
     }
 }
