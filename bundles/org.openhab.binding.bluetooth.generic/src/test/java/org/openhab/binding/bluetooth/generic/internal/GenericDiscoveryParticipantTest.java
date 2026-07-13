@@ -48,12 +48,19 @@ class GenericDiscoveryParticipantTest {
     private final GenericDiscoveryParticipant participant = new GenericDiscoveryParticipant();
 
     private BluetoothDiscoveryDevice deviceWithConnectable(@Nullable Boolean connectable) {
+        return device(connectable, null);
+    }
+
+    private BluetoothDiscoveryDevice device(@Nullable Boolean connectable, @Nullable String name) {
         BluetoothAdapter adapter = org.mockito.Mockito.mock(BluetoothAdapter.class);
         when(adapter.getUID()).thenReturn(new ThingUID("bluetooth:directbt:rtl"));
         BluetoothDiscoveryDevice device = org.mockito.Mockito.mock(BluetoothDiscoveryDevice.class);
         when(device.getAdapter()).thenReturn(adapter);
         when(device.getAddress()).thenReturn(new BluetoothAddress("12:34:56:78:9A:BC"));
         when(device.getConnectable()).thenReturn(connectable);
+        when(device.getName()).thenReturn(name);
+        // no manufacturer id -> no vendor suffix appended, so the label assertions test the name logic alone
+        when(device.getManufacturerId()).thenReturn(null);
         return device;
     }
 
@@ -80,5 +87,27 @@ class GenericDiscoveryParticipantTest {
                 "unknown connectability must keep the legacy connect-to-fingerprint behavior");
         assertNotNull(participant.createResult(device),
                 "unknown connectability still claims the device (as before)");
+    }
+
+    @Test
+    void advertisedNameIsUsedAsLabel() {
+        DiscoveryResult result = participant.createResult(device(Boolean.TRUE, "Living Room Speaker"));
+        assertNotNull(result);
+        assertEquals("Living Room Speaker", result.getLabel());
+    }
+
+    @Test
+    void missingNameFallsBackToGenericLabel() {
+        DiscoveryResult result = participant.createResult(device(Boolean.TRUE, null));
+        assertNotNull(result);
+        assertEquals("Generic Connectable Bluetooth Device", result.getLabel());
+    }
+
+    @Test
+    void addressAsNameFallsBackToGenericLabel() {
+        // some devices report their own address as the "name"; that is not a useful label
+        DiscoveryResult result = participant.createResult(device(Boolean.TRUE, "12-34-56-78-9A-BC"));
+        assertNotNull(result);
+        assertEquals("Generic Connectable Bluetooth Device", result.getLabel());
     }
 }

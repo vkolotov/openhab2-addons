@@ -62,7 +62,14 @@ public class GenericDiscoveryParticipant implements BluetoothDiscoveryParticipan
         if (Boolean.FALSE.equals(device.getConnectable())) {
             return null;
         }
-        String label = "Generic Connectable Bluetooth Device";
+        // Prefer the advertised device name (Complete/Shortened Local Name AD field, exposed as getName()) so
+        // the inbox shows something recognizable. Many devices don't advertise a name (or only expose it via
+        // GATT after connecting), and some report their address as the name; in those cases fall back to a
+        // generic label. The manufacturer (from the company id) is appended when known.
+        String name = device.getName();
+        boolean hasName = name != null && !name.isEmpty()
+                && !name.equals(device.getAddress().toString().replace(':', '-'));
+        String label = hasName ? name : "Generic Connectable Bluetooth Device";
         Map<String, Object> properties = new HashMap<>();
         properties.put(BluetoothBindingConstants.CONFIGURATION_ADDRESS, device.getAddress().toString());
         Integer txPower = device.getTxPower();
