@@ -280,6 +280,17 @@ public class DirectBTBluetoothDevice extends BaseBluetoothDevice implements Devi
         gattCharByUuid.clear();
     }
 
+    /**
+     * Direct-BT's Java read API reports native read failure as an empty byte array. On real devices that should be
+     * producing non-empty GATT values, this is the signature of cached {@code BTGattChar} objects whose native owner
+     * has been detached after a link drop. Tear the native handle down so the reconciler rebuilds from a fresh advert.
+     */
+    private void markStaleGatt(String reason) {
+        logger.warn("Direct-BT stale GATT model for {}: {}; forcing rediscover/reconnect", address, reason);
+        markDisconnected();
+        bridge.requeueReconcile();
+    }
+
     // --- DevicePort: the operations the DeviceReconciler drives (all polled native truth / idempotent) ----
 
     @Override
@@ -690,8 +701,7 @@ public class DirectBTBluetoothDevice extends BaseBluetoothDevice implements Devi
                 }
                 byte[] value = gattChar.readValue();
                 if (value.length == 0) {
-                    logger.debug("Direct-BT read of {} on {} returned empty value; suppressing update", charUuid,
-                            address);
+                    markStaleGatt("read of " + charUuid + " returned no native value");
                     return value;
                 }
                 notifyListeners(BluetoothEventType.CHARACTERISTIC_UPDATED, characteristic, value);
@@ -857,18 +867,24 @@ public class DirectBTBluetoothDevice extends BaseBluetoothDevice implements Devi
 
         @Override
         public void notificationReceived(BTGattChar charDecl, byte[] value, long timestamp) {
-            forward(value);
+            forward(charDecl, value);
         }
 
         @Override
         public void indicationReceived(BTGattChar charDecl, byte[] value, long timestamp, boolean confirmationSent) {
-            forward(value);
+            forward(charDecl, value);
         }
 
-        private void forward(byte[] value) {
+        private void forward(BTGattChar charDecl, byte[] value) {
+            UUID actualCharUuid = UUID.fromString(charDecl.getUUID());
+            if (!charUuid.equals(actualCharUuid)) {
+                logger.debug("Ignoring notification for {} delivered to listener registered for {} on {}", actualCharUuid,
+                        charUuid, address);
+                return;
+            }
             BluetoothCharacteristic characteristic = null;
             for (BluetoothService s : getServices()) {
-                BluetoothCharacteristic c = s.getCharacteristic(charUuid);
+                BluetoothCharacteristic c = s.getCharacteristic(actualCharUuid);
                 if (c != null) {
                     characteristic = c;
                     break;
