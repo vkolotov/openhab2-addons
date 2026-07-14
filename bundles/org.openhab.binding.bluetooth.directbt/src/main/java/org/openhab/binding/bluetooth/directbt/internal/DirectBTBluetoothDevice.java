@@ -112,6 +112,10 @@ public class DirectBTBluetoothDevice extends BaseBluetoothDevice implements Devi
     // Active notification listeners per characteristic UUID, so we can unregister on disable/dispose.
     private final Map<UUID, BTGattCharListener> notifyListeners = new ConcurrentHashMap<>();
 
+    private static long elapsedMillis(long startedNanos) {
+        return (System.nanoTime() - startedNanos) / 1_000_000;
+    }
+
     public DirectBTBluetoothDevice(DirectBTBridgeHandler adapter, BluetoothAddress address) {
         this(adapter, address, Clock.systemUTC());
     }
@@ -468,6 +472,7 @@ public class DirectBTBluetoothDevice extends BaseBluetoothDevice implements Devi
 
     @Override
     public HCIStatusCode connectNative() {
+        long started = System.nanoTime();
         BTDevice dev = device;
         if (dev == null) {
             return HCIStatusCode.INTERNAL_FAILURE;
@@ -501,6 +506,11 @@ public class DirectBTBluetoothDevice extends BaseBluetoothDevice implements Devi
             // - "none" (default): NONE.
             String securityMode = bridge.getDeviceConnectionSecurity(address);
             boolean secured = !BluetoothBindingConstants.CONNECTION_SECURITY_NONE.equalsIgnoreCase(securityMode);
+            logger.debug(
+                    "Direct-BT connect procedure for {} begin: securityMode={}, secured={}, bondApplied={}, scanWindow/interval={}/{}, connInterval={}, supervision={}, native={}",
+                    address, securityMode, secured, bondApplied, LE_SCAN_WINDOW, LE_SCAN_INTERVAL,
+                    bridge.getConnectionIntervalSlots(), bridge.getConnectionSupervisionTimeoutSlots(), dev);
+            long securityStarted = System.nanoTime();
             if (BluetoothBindingConstants.CONNECTION_SECURITY_PIN.equalsIgnoreCase(securityMode)) {
                 dev.setConnSecurity(BTSecurityLevel.ENC_AUTH, SMPIOCapability.KEYBOARD_ONLY);
             } else if (BluetoothBindingConstants.CONNECTION_SECURITY_ENCRYPTED.equalsIgnoreCase(securityMode)) {
@@ -508,6 +518,8 @@ public class DirectBTBluetoothDevice extends BaseBluetoothDevice implements Devi
             } else {
                 dev.setConnSecurity(BTSecurityLevel.NONE, SMPIOCapability.NO_INPUT_NO_OUTPUT);
             }
+            logger.debug("Direct-BT connect procedure for {} security setup took {}ms", address,
+                    elapsedMillis(securityStarted));
             // BOND PERSISTENCE (restart survival): before the first connect of this device object, upload any
             // persisted SMP keys so the reconnect reuses the stored bond (PRE_PAIRED) instead of re-pairing —
             // essential for peers that limit pairings or only pair in an explicit pairing mode. Once per
@@ -517,15 +529,26 @@ public class DirectBTBluetoothDevice extends BaseBluetoothDevice implements Devi
             if (secured && !bondApplied) {
                 bondApplied = true; // one attempt per device object; a fresh pairing overwrites the store anyway
                 BondStore store = bridge.getBondStore();
-                if (store != null && store.apply(dev)) {
+                long bondStarted = System.nanoTime();
+                boolean applied = store != null && store.apply(dev);
+                logger.debug("Direct-BT connect procedure for {} persisted bond lookup/apply took {}ms, applied={}",
+                        address, elapsedMillis(bondStarted), applied);
+                if (applied) {
                     logger.debug("Persisted bond applied to {}; reconnect will reuse the stored keys", address);
                 }
             }
             short interval = bridge.getConnectionIntervalSlots();
             short supervision = bridge.getConnectionSupervisionTimeoutSlots();
-            return dev.connectLE(LE_SCAN_INTERVAL, LE_SCAN_WINDOW, interval, interval, CONN_LATENCY, supervision);
+            long connectStarted = System.nanoTime();
+            HCIStatusCode rc = dev.connectLE(LE_SCAN_INTERVAL, LE_SCAN_WINDOW, interval, interval, CONN_LATENCY,
+                    supervision);
+            logger.debug(
+                    "Direct-BT connect procedure for {} connectLE returned {} after {}ms (total {}ms), nativeConnected={}, handle=0x{}",
+                    address, rc, elapsedMillis(connectStarted), elapsedMillis(started), dev.getConnected(),
+                    Integer.toHexString(dev.getConnectionHandle() & 0xFFFF));
+            return rc;
         } catch (RuntimeException e) {
-            logger.debug("Direct-BT connectNative to {} threw", address, e);
+            logger.debug("Direct-BT connectNative to {} threw after {}ms", address, elapsedMillis(started), e);
             return HCIStatusCode.INTERNAL_FAILURE;
         }
     }
@@ -632,6 +655,7 @@ public class DirectBTBluetoothDevice extends BaseBluetoothDevice implements Devi
 
     @Override
     public boolean discoverServices() {
+        long started = System.nanoTime();
         BTDevice dev = device;
         if (dev == null) {
             return false;
@@ -641,28 +665,59 @@ public class DirectBTBluetoothDevice extends BaseBluetoothDevice implements Devi
             // re-map every characteristic even for services already present in the openHAB model (otherwise
             // gattCharByUuid stays empty after a reconnect and read/write/notify fail with "not found").
             gattCharByUuid.clear();
-            for (BTGattService gattService : dev.getGattServices()) {
+            logger.debug("Direct-BT GATT discovery for {} begin: nativeConnected={}, handle=0x{}, native={}", address,
+                    dev.getConnected(), Integer.toHexString(dev.getConnectionHandle() & 0xFFFF), dev);
+            long getServicesStarted = System.nanoTime();
+            Iterable<BTGattService> nativeServices = dev.getGattServices();
+            logger.debug("Direct-BT GATT discovery for {} getGattServices() returned after {}ms", address,
+                    elapsedMillis(getServicesStarted));
+            int serviceCount = 0;
+            int newServiceCount = 0;
+            int charCount = 0;
+            int newCharCount = 0;
+            for (BTGattService gattService : nativeServices) {
+                serviceCount++;
+                long serviceStarted = System.nanoTime();
                 UUID serviceUuid = UUID.fromString(gattService.getUUID());
                 BluetoothService existing = getServices(serviceUuid);
                 if (existing == null) {
+                    newServiceCount++;
                     BluetoothService service = new BluetoothService(serviceUuid, true);
                     for (BTGattChar gattChar : gattService.getChars()) {
+                        charCount++;
+                        newCharCount++;
                         UUID charUuid = UUID.fromString(gattChar.getUUID());
                         BluetoothCharacteristic characteristic = new BluetoothCharacteristic(charUuid, 0);
                         characteristic.setProperties(mapProperties(gattChar.getProperties()));
                         service.addCharacteristic(characteristic);
                         gattCharByUuid.put(charUuid, gattChar);
+                        logger.trace("Direct-BT GATT discovery for {} mapped new char {} -> {}", address, charUuid,
+                                gattChar);
                     }
                     addService(service);
+                    logger.debug("Direct-BT GATT discovery for {} added service {} with {} chars in {}ms", address,
+                            serviceUuid, service.getCharacteristics().size(), elapsedMillis(serviceStarted));
                 } else {
+                    int mapped = 0;
                     // Service already in the model (reconnect): just refresh the native handles.
                     for (BTGattChar gattChar : gattService.getChars()) {
-                        gattCharByUuid.put(UUID.fromString(gattChar.getUUID()), gattChar);
+                        charCount++;
+                        mapped++;
+                        UUID charUuid = UUID.fromString(gattChar.getUUID());
+                        gattCharByUuid.put(charUuid, gattChar);
+                        logger.trace("Direct-BT GATT discovery for {} refreshed char {} -> {}", address, charUuid,
+                                gattChar);
                     }
+                    logger.debug("Direct-BT GATT discovery for {} refreshed service {} with {} chars in {}ms", address,
+                            serviceUuid, mapped, elapsedMillis(serviceStarted));
                 }
             }
+            logger.debug(
+                    "Direct-BT GATT discovery for {} complete in {}ms: services={}, newServices={}, chars={}, newChars={}, mappedChars={}, modelServices={}",
+                    address, elapsedMillis(started), serviceCount, newServiceCount, charCount, newCharCount,
+                    gattCharByUuid.size(), getServices().size());
         } catch (RuntimeException e) {
-            logger.debug("Direct-BT service discovery for {} failed", address, e);
+            logger.debug("Direct-BT service discovery for {} failed after {}ms", address, elapsedMillis(started), e);
             return false;
         }
         if (!getServices().isEmpty()) {
@@ -747,11 +802,14 @@ public class DirectBTBluetoothDevice extends BaseBluetoothDevice implements Devi
             return CompletableFuture.completedFuture(null); // already enabled / being enabled
         }
         return CompletableFuture.runAsync(() -> {
+            long started = System.nanoTime();
             try {
                 BTGattChar gattChar = connectedChar(charUuid);
                 if (gattChar == null) {
                     throw new IllegalStateException("Characteristic not available (disconnected?): " + charUuid);
                 }
+                logger.debug("Direct-BT enable notifications for {} char {} begin: native={}", address, charUuid,
+                        gattChar);
                 if (!gattChar.addCharListener(listener)) {
                     throw new IllegalStateException("addCharListener returned false");
                 }
@@ -759,8 +817,12 @@ public class DirectBTBluetoothDevice extends BaseBluetoothDevice implements Devi
                     gattChar.removeCharListener(listener);
                     throw new IllegalStateException("enableNotificationOrIndication returned false");
                 }
+                logger.debug("Direct-BT enable notifications for {} char {} complete in {}ms", address, charUuid,
+                        elapsedMillis(started));
             } catch (RuntimeException e) {
                 notifyListeners.remove(charUuid, listener); // roll back the reservation on failure
+                logger.debug("Direct-BT enable notifications for {} char {} failed after {}ms", address, charUuid,
+                        elapsedMillis(started), e);
                 throw new CompletionException(e);
             }
         }, executor);

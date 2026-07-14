@@ -86,6 +86,10 @@ public class DeviceReconciler extends Reconciler<Boolean, DeviceReconciler.Obser
     // Epoch millis of the tick at which we first observed pairing in progress during the current CONNECTING window,
     // or 0 if not currently pairing. Used to freeze the connect deadline across an SMP negotiation (see act()).
     private long pairingSince;
+    // Gate timing diagnostics. These do not drive behavior; they explain where connection setup time is spent.
+    private long waitingNativeHandleSince;
+    private long waitingScanOffSince;
+    private long waitingRetrySince;
 
     /**
      * @param scanIsOff returns the adapter's polled scan state == OFF (connect step waits for this).
@@ -205,7 +209,9 @@ public class DeviceReconciler extends Reconciler<Boolean, DeviceReconciler.Obser
             }
             if (!o.gattResolved) {
                 logger.debug("[reconcile:{}] connected but GATT unresolved; resolving", name);
+                long resolveStarted = now;
                 port.resolveGatt();
+                long resolveElapsed = clock.millis() - resolveStarted;
                 // TRUST BUT VERIFY the "connected" verdict. Direct-BT's Java-side getConnected() and
                 // getConnectionHandle() can both go stale after a silent link drop: they keep reporting a
                 // connection while the native side has none and the device is out advertising. In that state
@@ -220,9 +226,13 @@ public class DeviceReconciler extends Reconciler<Boolean, DeviceReconciler.Obser
                                 name, resolveFailStreak);
                         resolveFailStreak = 0;
                         port.markDisconnected();
+                    } else {
+                        logger.debug("[reconcile:{}] GATT resolve attempt failed after {}ms (streak {}/{})", name,
+                                resolveElapsed, resolveFailStreak, RESOLVE_FAIL_STREAK_LIMIT);
                     }
                 } else {
                     resolveFailStreak = 0;
+                    logger.debug("[reconcile:{}] GATT resolve completed in {}ms", name, resolveElapsed);
                 }
             } else {
                 resolveFailStreak = 0;
@@ -284,22 +294,42 @@ public class DeviceReconciler extends Reconciler<Boolean, DeviceReconciler.Obser
         if (!port.hasNativeDevice()) {
             // No native handle yet (cold start, or just cleared on a drop). Discovery must surface it first; the
             // discovery reconciler keeps the scan ON for us because wantsDiscovery() is true.
+            if (waitingNativeHandleSince == 0) {
+                waitingNativeHandleSince = now;
+                logger.debug("[reconcile:{}] waiting for discovery/native handle before connect", name);
+            }
             return;
+        } else if (waitingNativeHandleSince != 0) {
+            logger.debug("[reconcile:{}] native handle available after {}ms", name, now - waitingNativeHandleSince);
+            waitingNativeHandleSince = 0;
         }
         if (now - lastConnectAttemptAt < CONNECT_RETRY_MS) {
+            if (waitingRetrySince == 0) {
+                waitingRetrySince = now;
+            }
             return; // space out attempts
+        } else if (waitingRetrySince != 0) {
+            logger.debug("[reconcile:{}] connect retry spacing waited {}ms", name, now - waitingRetrySince);
+            waitingRetrySince = 0;
         }
         if (!scanIsOff.getAsBoolean()) {
             // We hold a native handle now, so the device no longer wants discovery; the discovery reconciler will
             // stop the scan (its desired flips to OFF), which then lets this connect fire on a later tick. Wait.
-            logger.trace("[reconcile:{}] waiting for scan to stop before connect", name);
+            if (waitingScanOffSince == 0) {
+                waitingScanOffSince = now;
+                logger.debug("[reconcile:{}] waiting for scan to stop before connect", name);
+            }
             return;
+        } else if (waitingScanOffSince != 0) {
+            logger.debug("[reconcile:{}] scan stopped after {}ms; connect gate open", name, now - waitingScanOffSince);
+            waitingScanOffSince = 0;
         }
         lastConnectAttemptAt = now;
         port.markConnecting();
         connectingSince = now;
+        long connectStarted = clock.millis();
         HCIStatusCode rc = port.connectNative();
-        logger.debug("[reconcile:{}] connectNative -> {}", name, rc);
+        logger.debug("[reconcile:{}] connectNative -> {} in {}ms", name, rc, clock.millis() - connectStarted);
         if (rc != HCIStatusCode.SUCCESS) {
             // Command rejected outright (e.g. COMMAND_DISALLOWED): not connecting after all. Reset flag so the
             // next tick re-evaluates from DISCONNECTED rather than sitting in a phantom CONNECTING.
