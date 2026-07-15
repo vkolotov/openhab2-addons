@@ -209,6 +209,11 @@ public class DeviceReconciler extends Reconciler<Boolean, DeviceReconciler.Obser
             }
             if (!o.gattResolved) {
                 logger.debug("[reconcile:{}] connected but GATT unresolved; resolving", name);
+                if (port.isGattResolving()) {
+                    resolveFailStreak = 0;
+                    logger.debug("[reconcile:{}] GATT resolve already in flight; waiting", name);
+                    return;
+                }
                 long resolveStarted = now;
                 port.resolveGatt();
                 long resolveElapsed = clock.millis() - resolveStarted;
@@ -220,7 +225,11 @@ public class DeviceReconciler extends Reconciler<Boolean, DeviceReconciler.Obser
                 // the disconnect signal. Tear the flag down and let the normal rediscover->connect path
                 // rebuild from a fresh advertisement.
                 if (!port.isGattResolved()) {
-                    if (++resolveFailStreak >= RESOLVE_FAIL_STREAK_LIMIT) {
+                    if (port.isGattResolving()) {
+                        resolveFailStreak = 0;
+                        logger.debug("[reconcile:{}] GATT resolve still in flight after {}ms; waiting", name,
+                                resolveElapsed);
+                    } else if (++resolveFailStreak >= RESOLVE_FAIL_STREAK_LIMIT) {
                         logger.warn(
                                 "[reconcile:{}] GATT resolve failed {} times on a supposedly-connected link; treating as silently dropped",
                                 name, resolveFailStreak);

@@ -19,7 +19,9 @@ import java.math.BigDecimal;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 
 import org.direct_bt.BDAddressAndType;
 import org.direct_bt.BDAddressType;
@@ -40,6 +42,7 @@ import org.mockito.junit.jupiter.MockitoSettings;
 import org.mockito.quality.Strictness;
 import org.openhab.binding.bluetooth.BluetoothAddress;
 import org.openhab.binding.bluetooth.BluetoothBindingConstants;
+import org.openhab.binding.bluetooth.BluetoothDevice;
 import org.openhab.binding.bluetooth.directbt.internal.reconcile.MutableClock;
 import org.openhab.binding.bluetooth.directbt.internal.reconcile.ResetBudget;
 import org.openhab.core.config.core.Configuration;
@@ -218,6 +221,39 @@ class DirectBTBridgeHandlerTest {
                 LoggerFactory.getLogger("test")));
 
         assertSame(good, orphan.getBTDevice(), "one broken candidate must not prevent adopting the good one");
+    }
+
+    @Test
+    void deviceFoundDoesNotBlockOnDiscoveryFanout() throws Exception {
+        CountDownLatch discoveryEntered = new CountDownLatch(1);
+        CountDownLatch releaseDiscovery = new CountDownLatch(1);
+        CountDownLatch discoveryCompleted = new CountDownLatch(1);
+        DirectBTBridgeHandler h = new DirectBTBridgeHandler(bridgeThing(), managerFactory(), new MutableClock(0)) {
+            @Override
+            public void deviceDiscovered(BluetoothDevice device) {
+                discoveryEntered.countDown();
+                try {
+                    releaseDiscovery.await(2, TimeUnit.SECONDS);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+                discoveryCompleted.countDown();
+            }
+        };
+        BTDevice nativeDevice = nativeDevice(DEVICE_ADDR);
+
+        DirectBTBluetoothDevice wrapper = h.handleDeviceFound(nativeDevice);
+
+        try {
+            assertNotNull(wrapper);
+            assertSame(nativeDevice, wrapper.getBTDevice(), "native handle update must happen before callback return");
+            assertTrue(discoveryEntered.await(1, TimeUnit.SECONDS), "discovery fanout should still run asynchronously");
+            assertFalse(discoveryCompleted.await(100, TimeUnit.MILLISECONDS),
+                    "discovery fanout should still be blocked while deviceFound has already returned");
+        } finally {
+            releaseDiscovery.countDown();
+        }
+        assertTrue(discoveryCompleted.await(1, TimeUnit.SECONDS));
     }
 
     // --- adapter power-up ladder (powerUpAdapter) ---------------------------------------------------

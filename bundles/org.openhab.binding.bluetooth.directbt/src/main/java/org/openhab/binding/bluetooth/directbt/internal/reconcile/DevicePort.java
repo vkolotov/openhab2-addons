@@ -37,6 +37,9 @@ public interface DevicePort {
     /** @return true iff GATT characteristics have been resolved/mapped since the current connection. */
     boolean isGattResolved();
 
+    /** @return true iff a GATT service discovery call is already running for the current connection. */
+    boolean isGattResolving();
+
     /** @return our remembered openHAB connection-state == CONNECTED. */
     boolean isFlagConnected();
 

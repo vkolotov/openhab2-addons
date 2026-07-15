@@ -46,6 +46,7 @@ class FakeDevicePort implements DevicePort {
     boolean hasNative;
     boolean nativeConnected;
     boolean gattResolved;
+    boolean gattResolving;
     boolean flagConnected;
     boolean flagConnecting;
     // Whether an SMP negotiation is currently in progress (true while setConnSecurityAuto iterates the ladder).
@@ -85,6 +86,11 @@ class FakeDevicePort implements DevicePort {
     @Override
     public boolean isGattResolved() {
         return gattResolved;
+    }
+
+    @Override
+    public boolean isGattResolving() {
+        return gattResolving;
     }
 
     @Override
@@ -159,7 +165,9 @@ class FakeDevicePort implements DevicePort {
     @Override
     public void resolveGatt() {
         resolveGattCalls++;
-        gattResolved = true;
+        if (!gattResolving) {
+            gattResolved = true;
+        }
     }
 
     @Override

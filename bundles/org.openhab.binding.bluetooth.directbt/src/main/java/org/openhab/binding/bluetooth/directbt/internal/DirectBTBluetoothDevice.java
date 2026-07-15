@@ -746,6 +746,11 @@ public class DirectBTBluetoothDevice extends BaseBluetoothDevice implements Devi
         return true;
     }
 
+    @Override
+    public boolean isGattResolving() {
+        return gattDiscoveryInFlight.get();
+    }
+
     /** @return the cached native characteristic, or {@code null} if not connected/known. */
     private @Nullable BTGattChar connectedChar(UUID charUuid) {
         BTDevice dev = device;
@@ -956,10 +961,14 @@ public class DirectBTBluetoothDevice extends BaseBluetoothDevice implements Devi
         private void forward(BTGattChar charDecl, byte[] value) {
             UUID actualCharUuid = UUID.fromString(charDecl.getUUID());
             if (!charUuid.equals(actualCharUuid)) {
-                logger.debug("Ignoring notification for {} delivered to listener registered for {} on {}", actualCharUuid,
-                        charUuid, address);
+                logger.debug("Ignoring notification for {} delivered to listener registered for {} on {}",
+                        actualCharUuid, charUuid, address);
                 return;
             }
+            executor.execute(() -> forwardOnExecutor(actualCharUuid, value));
+        }
+
+        private void forwardOnExecutor(UUID actualCharUuid, byte[] value) {
             BluetoothCharacteristic characteristic = null;
             for (BluetoothService s : getServices()) {
                 BluetoothCharacteristic c = s.getCharacteristic(actualCharUuid);

@@ -20,10 +20,13 @@ import java.util.List;
 import java.util.Objects;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 
 import org.direct_bt.BTDevice;
 import org.direct_bt.BTGattChar;
+import org.direct_bt.BTGattCharListener;
 import org.direct_bt.BTGattService;
 import org.direct_bt.BTSecurityLevel;
 import org.direct_bt.GattCharPropertySet;
@@ -36,6 +39,7 @@ import org.eclipse.jdt.annotation.Nullable;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
@@ -599,6 +603,40 @@ class DirectBTBluetoothDeviceTest {
 
         verify(gattChar).removeCharListener(any());
         assertFalse(device().isNotifying(characteristic()));
+    }
+
+    @Test
+    void notificationCallbackDoesNotBlockOnOpenhabListeners() throws Exception {
+        BTGattChar gattChar = connectWithChar(GattCharPropertySet.Type.Notify);
+        when(gattChar.addCharListener(any())).thenReturn(true);
+        when(gattChar.enableNotificationOrIndication(any())).thenReturn(true);
+        BluetoothDeviceListener listener = mock(BluetoothDeviceListener.class);
+        CountDownLatch listenerEntered = new CountDownLatch(1);
+        CountDownLatch releaseListener = new CountDownLatch(1);
+        CountDownLatch listenerCompleted = new CountDownLatch(1);
+        doAnswer(invocation -> {
+            listenerEntered.countDown();
+            releaseListener.await(2, TimeUnit.SECONDS);
+            listenerCompleted.countDown();
+            return null;
+        }).when(listener).onCharacteristicUpdate(any(), any());
+        device().addListener(listener);
+        device().enableNotifications(characteristic()).get();
+
+        ArgumentCaptor<BTGattCharListener> listenerCaptor = ArgumentCaptor.forClass(BTGattCharListener.class);
+        verify(gattChar).addCharListener(listenerCaptor.capture());
+
+        CompletableFuture<Void> callback = CompletableFuture
+                .runAsync(() -> listenerCaptor.getValue().notificationReceived(gattChar, new byte[] { 0x01 }, 1L));
+        try {
+            callback.get(200, TimeUnit.MILLISECONDS);
+            assertTrue(listenerEntered.await(1, TimeUnit.SECONDS), "event delivery should still run asynchronously");
+            assertFalse(listenerCompleted.await(100, TimeUnit.MILLISECONDS),
+                    "listener should still be blocked while native callback has already returned");
+        } finally {
+            releaseListener.countDown();
+        }
+        assertTrue(listenerCompleted.await(1, TimeUnit.SECONDS));
     }
 
     // --- helpers (unwrap the @Nullable mocks/SUT into @NonNull locals) ----------------------------

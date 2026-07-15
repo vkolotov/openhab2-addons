@@ -148,6 +148,29 @@ class DeviceReconcilerTest {
         assertEquals(0, port.markDisconnectedCalls);
     }
 
+    @Test
+    void connectedButGattAlreadyResolvingWaitsWithoutCountingFailure() {
+        FakeDevicePort port = new FakeDevicePort();
+        port.wanted = true;
+        port.hasNative = true;
+        port.nativeConnected = true;
+        port.flagConnected = true;
+        port.gattResolved = false;
+        port.gattResolving = true;
+
+        MutableClock clock = new MutableClock(START);
+        DeviceReconciler r = reconciler(port, scanOff(), clock);
+
+        for (int i = 0; i < 4; i++) {
+            r.reconcile();
+            clock.advance(10_000);
+        }
+
+        assertEquals(0, port.resolveGattCalls, "must not start another discovery while one is in flight");
+        assertEquals(0, port.disconnectNativeCalls, "in-flight GATT discovery is progress, not a stale link");
+        assertEquals(0, port.markDisconnectedCalls, "must not tear down a link while its service walk is running");
+    }
+
     // ---------------------------------------------------------------------------------------------
     // Connect blocked while scanning: the controller rejects create-connection while a scan runs, so
     // connectNative() must NOT be issued until scan is observed OFF.

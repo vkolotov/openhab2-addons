@@ -137,7 +137,7 @@ public class DirectBTBridgeHandler extends AbstractBluetoothBridgeHandler<Direct
         @Override
         public boolean deviceFound(BTDevice device, long timestamp) {
             logger.debug("Direct-BT deviceFound: {}", device.getAddressAndType());
-            DirectBTBluetoothDevice btDevice = onDeviceFound(device);
+            DirectBTBluetoothDevice btDevice = handleDeviceFound(device);
             requeueReconcile(); // hint: a wanted device may now be connectable
             // Direct-BT's return value is ownership, not discovery flow-control: false removes the native device
             // from the shared list and the BTDevice can no longer be used for a later connect. Keep only devices
@@ -148,7 +148,7 @@ public class DirectBTBridgeHandler extends AbstractBluetoothBridgeHandler<Direct
         @Override
         public void deviceUpdated(BTDevice device, EIRDataTypeSet updateMask, long timestamp) {
             logger.trace("Direct-BT deviceUpdated: {}", device.getAddressAndType());
-            onDeviceFound(device);
+            handleDeviceFound(device);
         }
 
         @Override
@@ -236,12 +236,12 @@ public class DirectBTBridgeHandler extends AbstractBluetoothBridgeHandler<Direct
     private class DirectBTChangedAdapterSetListener implements ChangedAdapterSetListener {
         @Override
         public void adapterAdded(BTAdapter added) {
-            onAdapterAdded(added);
+            scheduler.execute(() -> onAdapterAdded(added));
         }
 
         @Override
         public void adapterRemoved(BTAdapter removed) {
-            onAdapterRemoved(removed);
+            scheduler.execute(() -> onAdapterRemoved(removed));
         }
     }
 
@@ -764,13 +764,14 @@ public class DirectBTBridgeHandler extends AbstractBluetoothBridgeHandler<Direct
         statusListener = null;
     }
 
-    private @Nullable DirectBTBluetoothDevice onDeviceFound(BTDevice btDevice) {
+    @Nullable
+    DirectBTBluetoothDevice handleDeviceFound(BTDevice btDevice) {
         if (disposed) {
             return null;
         }
         DirectBTBluetoothDevice device = getDevice(toAddress(btDevice));
         device.updateBTDevice(btDevice);
-        deviceDiscovered(device);
+        executor.execute(() -> deviceDiscovered(device));
         return device;
     }
 
