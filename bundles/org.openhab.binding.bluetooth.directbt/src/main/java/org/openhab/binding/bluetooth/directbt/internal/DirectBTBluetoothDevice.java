@@ -20,6 +20,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import org.direct_bt.BTDevice;
 import org.direct_bt.BTGattChar;
@@ -111,6 +112,10 @@ public class DirectBTBluetoothDevice extends BaseBluetoothDevice implements Devi
     private final Map<UUID, BTGattChar> gattCharByUuid = new ConcurrentHashMap<>();
     // Active notification listeners per characteristic UUID, so we can unregister on disable/dispose.
     private final Map<UUID, BTGattCharListener> notifyListeners = new ConcurrentHashMap<>();
+    // Direct-BT materializes Java service/characteristic wrappers during getGattServices()/getChars(). Running that
+    // from two openHAB threads for the same native device races the native Java-object references and has been
+    // observed live as DBTGattChar/DBTGattService null-reference failures.
+    private final AtomicBoolean gattDiscoveryInFlight = new AtomicBoolean();
 
     private static long elapsedMillis(long startedNanos) {
         return (System.nanoTime() - startedNanos) / 1_000_000;
@@ -655,12 +660,21 @@ public class DirectBTBluetoothDevice extends BaseBluetoothDevice implements Devi
 
     @Override
     public boolean discoverServices() {
-        long started = System.nanoTime();
-        BTDevice dev = device;
-        if (dev == null) {
-            return false;
+        if (!gattDiscoveryInFlight.compareAndSet(false, true)) {
+            logger.debug("Direct-BT GATT discovery for {} already in flight; resolved={}", address, isGattResolved());
+            return isGattResolved();
         }
+        long started = System.nanoTime();
         try {
+            if (isGattResolved()) {
+                logger.debug("Direct-BT GATT discovery for {} skipped: already resolved with {} mapped chars", address,
+                        gattCharByUuid.size());
+                return true;
+            }
+            BTDevice dev = device;
+            if (dev == null) {
+                return false;
+            }
             // Always refresh the native handle map: on a reconnect the BTGattChar handles are new, so we must
             // re-map every characteristic even for services already present in the openHAB model (otherwise
             // gattCharByUuid stays empty after a reconnect and read/write/notify fail with "not found").
@@ -719,6 +733,8 @@ public class DirectBTBluetoothDevice extends BaseBluetoothDevice implements Devi
         } catch (RuntimeException e) {
             logger.debug("Direct-BT service discovery for {} failed after {}ms", address, elapsedMillis(started), e);
             return false;
+        } finally {
+            gattDiscoveryInFlight.set(false);
         }
         if (!getServices().isEmpty()) {
             notifyListeners(BluetoothEventType.SERVICES_DISCOVERED);
