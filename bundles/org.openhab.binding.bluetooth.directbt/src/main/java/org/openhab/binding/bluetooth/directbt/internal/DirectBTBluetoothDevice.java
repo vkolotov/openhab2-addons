@@ -44,6 +44,7 @@ import org.openhab.binding.bluetooth.BluetoothCharacteristic;
 import org.openhab.binding.bluetooth.BluetoothDescriptor;
 import org.openhab.binding.bluetooth.BluetoothService;
 import org.openhab.binding.bluetooth.directbt.internal.reconcile.AdapterReconciler;
+import org.openhab.binding.bluetooth.directbt.internal.reconcile.DeviceActorDiagnostics;
 import org.openhab.binding.bluetooth.directbt.internal.reconcile.DevicePort;
 import org.openhab.binding.bluetooth.directbt.internal.reconcile.DeviceReconciler;
 import org.openhab.binding.bluetooth.notification.BluetoothConnectionStatusNotification;
@@ -157,6 +158,10 @@ public class DirectBTBluetoothDevice extends BaseBluetoothDevice implements Devi
     /** @return this device's reconciler (driven by the bridge's reconcile tick). */
     DeviceReconciler getReconciler() {
         return reconciler;
+    }
+
+    public DeviceActorDiagnostics getActorDiagnostics() {
+        return reconciler.actorDiagnostics();
     }
 
     /**

@@ -20,7 +20,7 @@ import org.eclipse.jdt.annotation.NonNullByDefault;
  * @author Vlad Kolotov - Initial contribution
  */
 @NonNullByDefault
-final class DeviceActorDiagnostics {
+public final class DeviceActorDiagnostics {
     private final String deviceId;
     private final long generation;
     private final DeviceActorState state;
@@ -44,7 +44,7 @@ final class DeviceActorDiagnostics {
         return deviceId;
     }
 
-    long generation() {
+    public long generation() {
         return generation;
     }
 
@@ -52,19 +52,32 @@ final class DeviceActorDiagnostics {
         return state;
     }
 
+    public String stateName() {
+        return state.name();
+    }
+
     DeviceWaitingOn waitingOn() {
         return waitingOn;
     }
 
-    long stateStartedAt() {
+    public String waitingOnName() {
+        return waitingOn.name();
+    }
+
+    public long stateStartedAt() {
         return stateStartedAt;
     }
 
-    long timeInStateMs() {
+    public long timeInStateMs() {
         return timeInStateMs;
     }
 
-    String lastCause() {
+    public String lastCause() {
         return lastCause;
+    }
+
+    public String summary() {
+        return "state=" + state + " waitingOn=" + waitingOn + " generation=" + generation + " timeInStateMs="
+                + timeInStateMs + " cause=" + lastCause;
     }
 }

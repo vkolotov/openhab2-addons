@@ -46,12 +46,12 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
-import org.openhab.binding.bluetooth.directbt.internal.reconcile.MutableClock;
 import org.mockito.quality.Strictness;
 import org.openhab.binding.bluetooth.BluetoothAddress;
 import org.openhab.binding.bluetooth.BluetoothBindingConstants;
 import org.openhab.binding.bluetooth.BluetoothCharacteristic;
 import org.openhab.binding.bluetooth.BluetoothDeviceListener;
+import org.openhab.binding.bluetooth.directbt.internal.reconcile.DeviceActorDiagnostics;
 import org.openhab.binding.bluetooth.directbt.internal.reconcile.MutableClock;
 import org.openhab.binding.bluetooth.directbt.internal.reconcile.ResetBudget;
 
@@ -121,6 +121,20 @@ class DirectBTBluetoothDeviceTest {
 
         assertTrue(device().disconnect());
         assertFalse(device().isWanted(), "disconnect() is a real intent change: no longer wanted");
+    }
+
+    @Test
+    void actorDiagnosticsAreExposedThroughDevice() {
+        enableDevice(true);
+        device().addListener(mock(BluetoothDeviceListener.class));
+        device().connect();
+
+        device().getReconciler().reconcile();
+
+        DeviceActorDiagnostics diagnostics = device().getActorDiagnostics();
+        assertEquals("DISCOVERING", diagnostics.stateName());
+        assertEquals("NATIVE_HANDLE", diagnostics.waitingOnName());
+        assertTrue(diagnostics.summary().contains("state=DISCOVERING"));
     }
 
     @Test
