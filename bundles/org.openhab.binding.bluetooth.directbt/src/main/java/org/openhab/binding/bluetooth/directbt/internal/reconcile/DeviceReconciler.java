@@ -228,8 +228,7 @@ public class DeviceReconciler extends Reconciler<Boolean, DeviceReconciler.Obser
         } else if (!scanIsOff.getAsBoolean()) {
             shadowRuntime.start(new ConnectProcedure(CONNECT_DEADLINE_MS), "wanted:connectLease");
         } else {
-            shadowRuntime.shadowObserve(DeviceActorState.CONNECTING, DeviceWaitingOn.CONNECT_LEASE,
-                    "wanted:connectReady");
+            shadowRuntime.start(new ConnectProcedure(CONNECT_DEADLINE_MS), "wanted:connectReady");
         }
     }
 

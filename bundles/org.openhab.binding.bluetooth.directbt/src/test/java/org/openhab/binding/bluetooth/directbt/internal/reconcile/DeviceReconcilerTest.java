@@ -133,6 +133,23 @@ class DeviceReconcilerTest {
     }
 
     @Test
+    void shadowRuntimeConnectReadyProbeDoesNotDuplicateLiveConnect() {
+        FakeDevicePort port = new FakeDevicePort();
+        port.wanted = true;
+        port.hasNative = true;
+        port.nativeConnected = false;
+
+        DeviceReconciler r = reconciler(port, scanOff(), new MutableClock(START));
+        r.reconcile();
+
+        assertEquals(DeviceActorState.CONNECTING, r.actorDiagnostics().state());
+        assertEquals(DeviceWaitingOn.CONNECT_LEASE, r.actorDiagnostics().waitingOn());
+        assertEquals(1, port.connectNativeCalls, "live reconciler still owns the real connect command");
+        assertEquals(1, port.markConnectingCalls);
+        assertEquals(0, port.disconnectNativeCalls);
+    }
+
+    @Test
     void shadowRuntimeConnectProbeIsOverriddenByLaterOnlineObservation() {
         FakeDevicePort port = new FakeDevicePort();
         port.wanted = true;
