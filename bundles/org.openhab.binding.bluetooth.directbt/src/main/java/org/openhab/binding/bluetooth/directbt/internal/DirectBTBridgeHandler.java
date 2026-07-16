@@ -627,13 +627,23 @@ public class DirectBTBridgeHandler extends AbstractBluetoothBridgeHandler<Direct
      */
     void requestAdapterReset() {
         BTAdapter a = adapter;
-        if (a != null) {
+        if (a == null) {
+            return;
+        }
+        // OFF the reconcile tick, always: DBTAdapter.reset() is a native call observed to hang indefinitely
+        // (2026-07-16: 5+ min inside resetImpl, wedging every reconcile and device operation behind the tick's
+        // forEachDevice lock). A hung reset must cost at most one pool thread, never the reconcile loop.
+        logger.warn("Direct-BT adapter reset requested; running async");
+        executor.execute(() -> {
+            long started = System.nanoTime();
             HCIStatusCode rc = a.reset();
-            logger.warn("Direct-BT adapter reset on device request -> {} (powered={})", rc, a.isPowered());
+            logger.warn("Direct-BT adapter reset -> {} after {}ms (powered={})", rc,
+                    (System.nanoTime() - started) / 1_000_000, a.isPowered());
             if (rc == HCIStatusCode.SUCCESS && !a.isPowered()) {
                 a.setPowered(true);
             }
-        }
+            requeueReconcile();
+        });
     }
 
     private void bringUpAdapter(BTAdapter added, BluetoothAddress wanted) {

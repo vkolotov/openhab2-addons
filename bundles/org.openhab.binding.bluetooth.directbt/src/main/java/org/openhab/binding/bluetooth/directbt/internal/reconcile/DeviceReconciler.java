@@ -92,6 +92,11 @@ public class DeviceReconciler extends Reconciler<Boolean, DeviceReconciler.Obser
     // not servable yet" (warm-up) instead of a silent-drop symptom. Genuinely dead links fail via ATT
     // timeouts (10+ s per attempt), never instantly.
     private static final long GATT_WARMUP_GRACE_MS = 5000;
+
+    // Consecutive COMMAND_DISALLOWED connect rejections before the adapter reset is requested. One or two are
+    // the benign connect/scan race; a persistent streak is the wedged-controller case.
+    private static final int COMMAND_DISALLOWED_RESET_STREAK = 3;
+    private int commandDisallowedStreak;
     private int resolveFailStreak;
     // Epoch millis of the tick at which we first observed the current in-flight GATT discovery (0 = none).
     private long resolveInFlightSince;
@@ -408,10 +413,24 @@ public class DeviceReconciler extends Reconciler<Boolean, DeviceReconciler.Obser
             // next tick re-evaluates from DISCONNECTED rather than sitting in a phantom CONNECTING.
             clearConnectWindow();
             port.markDisconnected();
-            if (rc == HCIStatusCode.COMMAND_DISALLOWED && resetBudget.tryReset(name)) {
-                logger.warn("[reconcile:{}] connect COMMAND_DISALLOWED; requesting adapter reset", name);
-                requestAdapterReset.run();
+            if (rc == HCIStatusCode.COMMAND_DISALLOWED) {
+                // A single COMMAND_DISALLOWED is usually the connect/scan race (the controller refuses
+                // create-connection while a scan is starting/running) — retry via the normal path, which
+                // re-gates on the scan being observed OFF. Only a PERSISTENT streak is the wedged-controller
+                // (CSR quirk) case that justifies the adapter reset — a native call that has been observed to
+                // hang, so it must be a last resort.
+                if (++commandDisallowedStreak >= COMMAND_DISALLOWED_RESET_STREAK && resetBudget.tryReset(name)) {
+                    logger.warn("[reconcile:{}] connect COMMAND_DISALLOWED x{}; requesting adapter reset", name,
+                            commandDisallowedStreak);
+                    commandDisallowedStreak = 0;
+                    requestAdapterReset.run();
+                } else {
+                    logger.debug("[reconcile:{}] connect COMMAND_DISALLOWED (streak {}/{}); retrying", name,
+                            commandDisallowedStreak, COMMAND_DISALLOWED_RESET_STREAK);
+                }
             }
+        } else {
+            commandDisallowedStreak = 0;
         }
     }
 

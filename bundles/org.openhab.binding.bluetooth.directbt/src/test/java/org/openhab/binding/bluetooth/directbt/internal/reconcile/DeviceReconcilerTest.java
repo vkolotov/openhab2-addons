@@ -408,11 +408,12 @@ class DeviceReconcilerTest {
     }
 
     // ---------------------------------------------------------------------------------------------
-    // COMMAND_DISALLOWED spiral (CSR quirk): a connect rejected outright must reset to DISCONNECTED (no
-    // phantom CONNECTING) AND request exactly one budgeted adapter reset.
+    // COMMAND_DISALLOWED: a connect rejected outright must reset to DISCONNECTED (no phantom CONNECTING).
+    // One or two rejections are the benign connect/scan race and must NOT trigger the adapter reset (a
+    // native call observed to hang); only a persistent streak is the wedged-controller (CSR quirk) case.
     // ---------------------------------------------------------------------------------------------
     @Test
-    void connectCommandDisallowedResetsFlagAndRequestsAdapterReset() {
+    void connectCommandDisallowedResetsAdapterOnlyAfterAStreak() {
         FakeDevicePort port = new FakeDevicePort();
         port.wanted = true;
         port.hasNative = true;
@@ -423,12 +424,20 @@ class DeviceReconcilerTest {
         DeviceReconciler r = new DeviceReconciler(logger(), port, scanOff(), budget(clock), resets::incrementAndGet,
                 clock);
 
-        r.reconcile();
-
+        r.reconcile(); // rejection #1
         assertEquals(1, port.connectNativeCalls);
         assertFalse(port.flagConnecting, "a rejected connect must not leave us stuck in a phantom CONNECTING");
         assertEquals(1, port.markDisconnectedCalls, "reset to DISCONNECTED so the next tick re-evaluates cleanly");
-        assertEquals(1, resets.get(), "COMMAND_DISALLOWED triggers one budgeted adapter reset");
+        assertEquals(0, resets.get(), "a single COMMAND_DISALLOWED is the scan race, not a wedged controller");
+
+        for (int i = 0; i < 2; i++) { // rejections #2 and #3
+            port.hasNative = true; // markDisconnected cleared the handle; the device is re-found each time
+            clock.advance(15_000); // past connect retry spacing and act backoff
+            r.expediteNextAct();
+            r.reconcile();
+        }
+        assertEquals(3, port.connectNativeCalls);
+        assertEquals(1, resets.get(), "a persistent COMMAND_DISALLOWED streak requests one budgeted adapter reset");
     }
 
     // ---------------------------------------------------------------------------------------------
