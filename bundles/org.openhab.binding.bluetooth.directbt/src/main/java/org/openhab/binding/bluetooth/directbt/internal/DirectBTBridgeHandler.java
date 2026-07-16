@@ -72,6 +72,10 @@ public class DirectBTBridgeHandler extends AbstractBluetoothBridgeHandler<Direct
     // scheduler or native callback threads.
     private final ExecutorService executor = ThreadPoolManager.getPool("bluetooth-directbt");
 
+    // Separate pool for openHAB notification fanout, so delivering CHARACTERISTIC_UPDATED events is never
+    // queued behind the blocking GATT calls above (a readValue can hold a pool thread for up to 12 s).
+    private final ExecutorService notifyExecutor = ThreadPoolManager.getPool("bluetooth-directbt-notify");
+
     // --- Level-triggered reconciler -----------------------------------------------------------------
     // Direct-BT is eventually-consistent: a command returning SUCCESS means only "accepted", not "done",
     // and its status events (deviceConnected/deviceDisconnected) are HINTS that may be dropped (the silent
@@ -856,6 +860,11 @@ public class DirectBTBridgeHandler extends AbstractBluetoothBridgeHandler<Direct
     /** Pool for the device's blocking GATT operations. */
     ExecutorService getExecutor() {
         return executor;
+    }
+
+    /** Pool for openHAB notification fanout (isolated from the blocking GATT operations). */
+    ExecutorService getNotifyExecutor() {
+        return notifyExecutor;
     }
 
     @Override

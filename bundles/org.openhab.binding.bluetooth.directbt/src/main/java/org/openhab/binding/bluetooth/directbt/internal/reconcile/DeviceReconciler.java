@@ -81,7 +81,15 @@ public class DeviceReconciler extends Reconciler<Boolean, DeviceReconciler.Obser
     private long connectingSince;
     // Consecutive failed GATT resolves on a link the flags claim is connected (stale-flag detector).
     private static final int RESOLVE_FAIL_STREAK_LIMIT = 3;
+
+    // Longest an in-flight GATT discovery is trusted as "progress". A legitimate discovery is bounded by its
+    // native per-op ~12 s timeouts (worst observed on prod: ~9 s; several timing-out ops still finish well
+    // under a minute), so an in-flight state older than this means the discovery thread hung and recovery
+    // must proceed without it.
+    private static final long RESOLVE_IN_FLIGHT_MAX_MS = 120_000;
     private int resolveFailStreak;
+    // Epoch millis of the tick at which we first observed the current in-flight GATT discovery (0 = none).
+    private long resolveInFlightSince;
     private long lastConnectAttemptAt;
     // Epoch millis of the tick at which we first observed pairing in progress during the current CONNECTING window,
     // or 0 if not currently pairing. Used to freeze the connect deadline across an SMP negotiation (see act()).
@@ -211,9 +219,23 @@ public class DeviceReconciler extends Reconciler<Boolean, DeviceReconciler.Obser
                 logger.debug("[reconcile:{}] connected but GATT unresolved; resolving", name);
                 if (port.isGattResolving()) {
                     resolveFailStreak = 0;
-                    logger.debug("[reconcile:{}] GATT resolve already in flight; waiting", name);
+                    if (resolveInFlightSince == 0) {
+                        resolveInFlightSince = now;
+                    }
+                    // In-flight discovery is progress, not failure — but not forever: a discovery whose
+                    // thread hung in native code would otherwise suppress recovery indefinitely.
+                    if (now - resolveInFlightSince > RESOLVE_IN_FLIGHT_MAX_MS) {
+                        logger.warn(
+                                "[reconcile:{}] GATT resolve in flight for {}ms (cap {}ms); treating the discovery as hung and tearing down",
+                                name, now - resolveInFlightSince, RESOLVE_IN_FLIGHT_MAX_MS);
+                        resolveInFlightSince = 0;
+                        port.markDisconnected();
+                    } else {
+                        logger.debug("[reconcile:{}] GATT resolve already in flight; waiting", name);
+                    }
                     return;
                 }
+                resolveInFlightSince = 0;
                 long resolveStarted = now;
                 port.resolveGatt();
                 long resolveElapsed = clock.millis() - resolveStarted;
@@ -227,6 +249,9 @@ public class DeviceReconciler extends Reconciler<Boolean, DeviceReconciler.Obser
                 if (!port.isGattResolved()) {
                     if (port.isGattResolving()) {
                         resolveFailStreak = 0;
+                        if (resolveInFlightSince == 0) {
+                            resolveInFlightSince = now;
+                        }
                         logger.debug("[reconcile:{}] GATT resolve still in flight after {}ms; waiting", name,
                                 resolveElapsed);
                     } else if (++resolveFailStreak >= RESOLVE_FAIL_STREAK_LIMIT) {
@@ -241,15 +266,18 @@ public class DeviceReconciler extends Reconciler<Boolean, DeviceReconciler.Obser
                     }
                 } else {
                     resolveFailStreak = 0;
+                    resolveInFlightSince = 0;
                     logger.debug("[reconcile:{}] GATT resolve completed in {}ms", name, resolveElapsed);
                 }
             } else {
                 resolveFailStreak = 0;
+                resolveInFlightSince = 0;
             }
             return; // connected: no connect work
         }
 
         // From here: wanted AND not natively connected.
+        resolveInFlightSince = 0; // any in-flight-discovery age belongs to the connection that just ended
 
         // (6) PENDING-STUCK — a CONNECTING that never produced a native connection.
         if (o.flagConnecting && connectingSince != 0) {

@@ -171,6 +171,30 @@ class DeviceReconcilerTest {
         assertEquals(0, port.markDisconnectedCalls, "must not tear down a link while its service walk is running");
     }
 
+    @Test
+    void connectedButGattResolvingForeverEscalatesAfterCap() {
+        FakeDevicePort port = new FakeDevicePort();
+        port.wanted = true;
+        port.hasNative = true;
+        port.nativeConnected = true;
+        port.flagConnected = true;
+        port.gattResolved = false;
+        port.gattResolving = true; // never clears: the discovery thread hung in native code
+
+        MutableClock clock = new MutableClock(START);
+        DeviceReconciler r = reconciler(port, scanOff(), clock);
+
+        r.reconcile(); // first observation starts the in-flight age
+        clock.advance(119_000);
+        r.reconcile(); // still under the 120 s cap
+        assertEquals(0, port.markDisconnectedCalls, "under the cap the reconciler must keep waiting");
+
+        clock.advance(2_000);
+        r.reconcile(); // past the cap
+        assertEquals(1, port.markDisconnectedCalls, "a hung discovery must not suppress recovery forever");
+        assertEquals(0, port.resolveGattCalls, "the hung discovery must not be joined by another one");
+    }
+
     // ---------------------------------------------------------------------------------------------
     // Connect blocked while scanning: the controller rejects create-connection while a scan runs, so
     // connectNative() must NOT be issued until scan is observed OFF.

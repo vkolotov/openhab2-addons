@@ -19,6 +19,7 @@ import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.Executor;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.atomic.AtomicBoolean;
 
@@ -76,6 +77,8 @@ public class DirectBTBluetoothDevice extends BaseBluetoothDevice implements Devi
 
     private final DirectBTBridgeHandler bridge;
     private final ExecutorService executor;
+    // Per-device serialized executor for openHAB notification fanout (see constructor comment).
+    private final Executor notifyExecutor;
     // This device's reconciler (owns connect/state-flag/gatt). Driven by the bridge's single reconcile tick.
     private final DeviceReconciler reconciler;
 
@@ -116,6 +119,12 @@ public class DirectBTBluetoothDevice extends BaseBluetoothDevice implements Devi
     // from two openHAB threads for the same native device races the native Java-object references and has been
     // observed live as DBTGattChar/DBTGattService null-reference failures.
     private final AtomicBoolean gattDiscoveryInFlight = new AtomicBoolean();
+    // When the in-flight guard was taken (clock.millis(); 0 = not held). Used to detect a hung discovery.
+    private volatile long gattDiscoveryStartedMs;
+
+    // A discovery older than this holds the guard because its thread hung in native code (every native op
+    // inside a discovery has ~12 s timeouts, so a live one finishes in well under a minute).
+    private static final long GATT_DISCOVERY_STUCK_MS = 300_000;
 
     private static long elapsedMillis(long startedNanos) {
         return (System.nanoTime() - startedNanos) / 1_000_000;
@@ -130,6 +139,10 @@ public class DirectBTBluetoothDevice extends BaseBluetoothDevice implements Devi
         super(adapter, address);
         this.bridge = adapter;
         this.executor = adapter.getExecutor();
+        // Per-device FIFO over the bridge's notify pool: fanout must not run on the native reader thread
+        // (it could block the L2CAP receive path), but updates for one device must keep native delivery
+        // order or listeners can observe characteristic values regressing.
+        this.notifyExecutor = new SerialExecutor(adapter.getNotifyExecutor());
         this.clock = clock;
         this.reconciler = new DeviceReconciler(logger, this, () -> {
             AdapterReconciler ar = bridge.getAdapterReconciler();
@@ -661,9 +674,22 @@ public class DirectBTBluetoothDevice extends BaseBluetoothDevice implements Devi
     @Override
     public boolean discoverServices() {
         if (!gattDiscoveryInFlight.compareAndSet(false, true)) {
-            logger.debug("Direct-BT GATT discovery for {} already in flight; resolved={}", address, isGattResolved());
-            return isGattResolved();
+            // LAST-RESORT GUARD RECOVERY: if a previous discovery never returned (a truly hung native/JNI
+            // call — its finally never runs), the in-flight guard would block this device's GATT forever.
+            // All native ops inside a discovery have ~12 s timeouts, so a guard this old means the owning
+            // thread is hung, not slow. Stealing re-admits the (small) concurrent-materialization risk the
+            // guard exists to prevent — acceptable against a permanently dead device, hence ERROR.
+            long heldSince = gattDiscoveryStartedMs;
+            if (heldSince == 0 || clock.millis() - heldSince <= GATT_DISCOVERY_STUCK_MS) {
+                logger.debug("Direct-BT GATT discovery for {} already in flight; resolved={}", address,
+                        isGattResolved());
+                return isGattResolved();
+            }
+            logger.error(
+                    "Direct-BT GATT discovery for {} in flight for {}ms — previous discovery appears hung in native code (capture a thread dump); stealing the guard",
+                    address, clock.millis() - heldSince);
         }
+        gattDiscoveryStartedMs = clock.millis();
         long started = System.nanoTime();
         try {
             if (isGattResolved()) {
@@ -734,6 +760,7 @@ public class DirectBTBluetoothDevice extends BaseBluetoothDevice implements Devi
             logger.debug("Direct-BT service discovery for {} failed after {}ms", address, elapsedMillis(started), e);
             return false;
         } finally {
+            gattDiscoveryStartedMs = 0;
             gattDiscoveryInFlight.set(false);
         }
         if (!getServices().isEmpty()) {
@@ -965,7 +992,7 @@ public class DirectBTBluetoothDevice extends BaseBluetoothDevice implements Devi
                         actualCharUuid, charUuid, address);
                 return;
             }
-            executor.execute(() -> forwardOnExecutor(actualCharUuid, value));
+            notifyExecutor.execute(() -> forwardOnExecutor(actualCharUuid, value));
         }
 
         private void forwardOnExecutor(UUID actualCharUuid, byte[] value) {

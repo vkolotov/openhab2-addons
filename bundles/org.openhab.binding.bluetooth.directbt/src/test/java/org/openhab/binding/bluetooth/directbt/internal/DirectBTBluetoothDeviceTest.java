@@ -16,6 +16,8 @@ import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
 import java.util.UUID;
@@ -23,6 +25,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import org.direct_bt.BTDevice;
 import org.direct_bt.BTGattChar;
@@ -43,6 +46,7 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
+import org.openhab.binding.bluetooth.directbt.internal.reconcile.MutableClock;
 import org.mockito.quality.Strictness;
 import org.openhab.binding.bluetooth.BluetoothAddress;
 import org.openhab.binding.bluetooth.BluetoothBindingConstants;
@@ -82,6 +86,8 @@ class DirectBTBluetoothDeviceTest {
     void setUp() {
         DirectBTBridgeHandler b = bridge();
         when(b.getExecutor()).thenReturn(Executors.newSingleThreadExecutor());
+        // Multi-threaded on purpose: the per-device SerialExecutor must impose ordering, not the pool.
+        when(b.getNotifyExecutor()).thenReturn(Executors.newFixedThreadPool(4));
         when(b.getResetBudget()).thenReturn(new ResetBudget(8000));
         device = new DirectBTBluetoothDevice(b, ADDRESS);
     }
@@ -637,6 +643,77 @@ class DirectBTBluetoothDeviceTest {
             releaseListener.countDown();
         }
         assertTrue(listenerCompleted.await(1, TimeUnit.SECONDS));
+    }
+
+    @Test
+    void notificationsAreDeliveredInSubmissionOrder() throws Exception {
+        BTGattChar gattChar = connectWithChar(GattCharPropertySet.Type.Notify);
+        when(gattChar.addCharListener(any())).thenReturn(true);
+        when(gattChar.enableNotificationOrIndication(any())).thenReturn(true);
+
+        int count = 200;
+        List<Integer> received = Collections.synchronizedList(new ArrayList<>());
+        CountDownLatch all = new CountDownLatch(count);
+        BluetoothDeviceListener listener = mock(BluetoothDeviceListener.class);
+        doAnswer(invocation -> {
+            byte[] value = invocation.getArgument(1);
+            int seq = ((value[0] & 0xFF) << 8) | (value[1] & 0xFF);
+            if (seq % 2 == 0) {
+                Thread.sleep(1); // provoke inversions if delivery were parallel (notify pool has 4 threads)
+            }
+            received.add(seq);
+            all.countDown();
+            return null;
+        }).when(listener).onCharacteristicUpdate(any(), any());
+        device().addListener(listener);
+        device().enableNotifications(characteristic()).get();
+
+        ArgumentCaptor<BTGattCharListener> listenerCaptor = ArgumentCaptor.forClass(BTGattCharListener.class);
+        verify(gattChar).addCharListener(listenerCaptor.capture());
+        for (int i = 0; i < count; i++) {
+            listenerCaptor.getValue().notificationReceived(gattChar, new byte[] { (byte) (i >> 8), (byte) i }, i);
+        }
+
+        assertTrue(all.await(10, TimeUnit.SECONDS), "all notifications must be delivered");
+        for (int i = 0; i < count; i++) {
+            assertEquals(i, received.get(i), "delivery order must match native submission order at index " + i);
+        }
+    }
+
+    @Test
+    void stuckGattDiscoveryGuardIsStolenAfterCap() throws Exception {
+        MutableClock clock = new MutableClock(1_784_200_000_000L);
+        DirectBTBluetoothDevice device = new DirectBTBluetoothDevice(bridge(), ADDRESS, clock);
+        device.updateBTDevice(nativeDevice());
+        when(nativeDevice().getConnected()).thenReturn(true);
+
+        CountDownLatch hungEntered = new CountDownLatch(1);
+        CountDownLatch releaseHung = new CountDownLatch(1);
+        AtomicInteger calls = new AtomicInteger();
+        when(nativeDevice().getGattServices()).thenAnswer(invocation -> {
+            if (calls.incrementAndGet() == 1) {
+                hungEntered.countDown();
+                releaseHung.await(10, TimeUnit.SECONDS); // simulate a discovery hung in native code
+            }
+            return List.of();
+        });
+
+        Thread hung = new Thread(device::discoverServices, "hung-discovery");
+        hung.start();
+        try {
+            assertTrue(hungEntered.await(2, TimeUnit.SECONDS));
+
+            clock.advance(60_000); // under the cap: the guard must hold
+            assertFalse(device.discoverServices(), "under the cap a concurrent discovery must be refused");
+            assertEquals(1, calls.get(), "guard held: no second native discovery");
+
+            clock.advance(300_000); // past the cap: the guard is stale, steal it
+            device.discoverServices();
+            assertEquals(2, calls.get(), "stale guard must be stolen so the device can recover");
+        } finally {
+            releaseHung.countDown();
+            hung.join(2000);
+        }
     }
 
     // --- helpers (unwrap the @Nullable mocks/SUT into @NonNull locals) ----------------------------
