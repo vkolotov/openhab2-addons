@@ -57,6 +57,40 @@ class DeviceProcedureRunnerTest {
         assertEffects(runner.drainEffects(), ResolveGattProcedure.EFFECT_START_SUBSCRIBE_PROCEDURE);
     }
 
+    @Test
+    void replacedProcedureCleanupFromPreviousGenerationIsNotExposed() {
+        DeviceActor actor = new DeviceActor("test-device", ReconcileTestSupport.logger(), new MutableClock(START));
+        DeviceProcedureRunner runner = new DeviceProcedureRunner(actor, DeviceProcedureRunnerTest::createProcedure);
+
+        runner.start(new ConnectProcedure(30_000), "first-connect");
+        long firstGeneration = actor.diagnostics().generation();
+        assertEffects(runner.drainEffects(), ConnectProcedure.EFFECT_REQUEST_CONNECT_LEASE);
+
+        runner.submit(new DeviceEvent.ConnectLeaseGranted(firstGeneration));
+        assertEffects(runner.drainEffects(), ConnectProcedure.EFFECT_CONNECT_LE);
+
+        runner.start(new ConnectProcedure(30_000), "retry-connect");
+
+        assertEquals(firstGeneration + 1, actor.diagnostics().generation());
+        assertEffects(runner.drainEffects(), ConnectProcedure.EFFECT_REQUEST_CONNECT_LEASE);
+    }
+
+    @Test
+    void wantedOfflineCleanupIsExposedInCurrentGeneration() {
+        DeviceActor actor = new DeviceActor("test-device", ReconcileTestSupport.logger(), new MutableClock(START));
+        DeviceProcedureRunner runner = new DeviceProcedureRunner(actor, DeviceProcedureRunnerTest::createProcedure);
+
+        runner.start(new ConnectProcedure(30_000), "wanted-online");
+        long onlineGeneration = actor.diagnostics().generation();
+        assertEffects(runner.drainEffects(), ConnectProcedure.EFFECT_REQUEST_CONNECT_LEASE);
+
+        runner.submit(new DeviceEvent.WantedOffline());
+
+        assertEquals(onlineGeneration + 1, actor.diagnostics().generation());
+        assertEquals(DeviceActorState.DISCONNECTING, actor.diagnostics().state());
+        assertEffects(runner.drainEffects(), ConnectProcedure.EFFECT_DISCONNECT_NATIVE);
+    }
+
     private static @Nullable DeviceProcedure createProcedure(DeviceProcedureName procedureName) {
         if (procedureName == DeviceProcedureName.SETTLE_LINK) {
             return new SettleLinkProcedure(5_000);

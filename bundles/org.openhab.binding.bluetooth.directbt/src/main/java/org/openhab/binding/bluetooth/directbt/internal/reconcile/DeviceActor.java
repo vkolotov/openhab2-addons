@@ -91,10 +91,11 @@ final class DeviceActor {
             if (procedure == null) {
                 transitionTo(DeviceActorState.IDLE_DISABLED, DeviceWaitingOn.NOTHING, event.kind());
             } else {
-                procedure.cancel(event.kind(), context());
                 activeProcedure = null;
                 generation++;
+                deadlineReported = false;
                 transitionTo(DeviceActorState.DISCONNECTING, DeviceWaitingOn.DISCONNECT, event.kind());
+                procedure.cancel(event.kind(), context());
             }
             return;
         }

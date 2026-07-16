@@ -63,10 +63,16 @@ final class DeviceProcedureRunner {
         while (!pending.isEmpty()) {
             for (DeviceEffect effect : pending) {
                 if (!handleInternalEffect(effect)) {
-                    externalEffects.add(effect);
+                    addExternalEffectIfCurrent(effect);
                 }
             }
             pending = actor.drainEffects();
+        }
+    }
+
+    private void addExternalEffectIfCurrent(DeviceEffect effect) {
+        if (effect.generation() == actor.diagnostics().generation()) {
+            externalEffects.add(effect);
         }
     }
 
