@@ -37,15 +37,13 @@ class ActorDeviceLifecycleFixture implements DeviceLifecycleFixture {
     private final DeviceActor actor = new DeviceActor("test-device", ReconcileTestSupport.logger(), clock);
     private boolean scanActive;
     private final DeviceActorRuntime runtime = new DeviceActorRuntime(actor, this::createProcedure, () -> !scanActive,
-            port, this::observeRuntimeEvent);
-    private final DeviceBackoffPolicy backoffPolicy = new DeviceBackoffPolicy(port);
+            port, this::observeRuntimeEvent, new DeviceBackoffPolicy(port), this::recordBackoff);
     private final AtomicInteger resets = new AtomicInteger();
 
     private boolean adapterHealthy = true;
     private boolean gattProcedureActive;
     private long settleDueAt = -1;
     private long backoffUntil = -1;
-    private long backoffGeneration = -1;
     private int connectRejections;
 
     @Override
@@ -106,7 +104,9 @@ class ActorDeviceLifecycleFixture implements DeviceLifecycleFixture {
         runtime.submit(new DeviceEvent.ConnectFailed(actor.diagnostics().generation(), "DISCONNECTED",
                 port.hasStalePairing()));
         drainRuntimeEffects();
-        markDisconnectedAndBackoff();
+        if (runtime.diagnostics().state() != DeviceActorState.BACKING_OFF) {
+            markDisconnectedAndBackoff();
+        }
     }
 
     @Override
@@ -175,7 +175,6 @@ class ActorDeviceLifecycleFixture implements DeviceLifecycleFixture {
         for (DeviceEffect effect : runtime.drainUnhandledEffects()) {
             executeUnhandled(effect);
         }
-        applyActorBackoffIfNeeded();
     }
 
     private void executeUnhandled(DeviceEffect effect) {
@@ -199,23 +198,14 @@ class ActorDeviceLifecycleFixture implements DeviceLifecycleFixture {
         }
     }
 
-    private void applyActorBackoffIfNeeded() {
-        DeviceActorDiagnostics diagnostics = runtime.diagnostics();
-        if (diagnostics.state() == DeviceActorState.BACKING_OFF && diagnostics.generation() != backoffGeneration) {
-            backoffPolicy.apply(diagnostics);
-            recordBackoff();
-        }
-    }
-
     private void markDisconnectedAndBackoff() {
         port.markDisconnected();
-        recordBackoff();
+        recordBackoff(actor.diagnostics());
     }
 
-    private void recordBackoff() {
+    private void recordBackoff(DeviceActorDiagnostics diagnostics) {
         gattProcedureActive = false;
         settleDueAt = -1;
         backoffUntil = clock.millis() + BACKOFF_MS;
-        backoffGeneration = actor.diagnostics().generation();
     }
 }

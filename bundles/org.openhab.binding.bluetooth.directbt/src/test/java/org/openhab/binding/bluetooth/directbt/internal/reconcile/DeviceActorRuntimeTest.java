@@ -78,6 +78,26 @@ class DeviceActorRuntimeTest {
     }
 
     @Test
+    void optionalBackoffPolicyIsAppliedAfterRuntimePump() {
+        MutableClock clock = new MutableClock(START);
+        DeviceActor actor = new DeviceActor("test-device", ReconcileTestSupport.logger(), clock);
+        FakeDevicePort port = new FakeDevicePort();
+        port.connectResult = HCIStatusCode.COMMAND_DISALLOWED;
+        port.prePaired = true;
+        List<DeviceActorDiagnostics> backoffs = new ArrayList<>();
+        DeviceActorRuntime runtime = new DeviceActorRuntime(actor, DeviceActorRuntimeTest::createProcedure,
+                () -> true, port, event -> {
+                }, new DeviceBackoffPolicy(port), backoffs::add);
+
+        runtime.start(new ConnectProcedure(30_000), "test-connect");
+
+        assertEquals(1, port.clearStalePairingCalls);
+        assertEquals(1, port.markDisconnectedCalls);
+        assertEquals(1, backoffs.size());
+        assertEquals(DeviceActorState.BACKING_OFF, backoffs.get(0).state());
+    }
+
+    @Test
     void gattResolveSuccessHandsOffToUnhandledSubscribeEffect() {
         MutableClock clock = new MutableClock(START);
         DeviceActor actor = new DeviceActor("test-device", ReconcileTestSupport.logger(), clock);

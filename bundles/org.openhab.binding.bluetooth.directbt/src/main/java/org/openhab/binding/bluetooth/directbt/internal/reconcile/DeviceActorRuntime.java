@@ -18,6 +18,7 @@ import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
 
 import org.eclipse.jdt.annotation.NonNullByDefault;
+import org.eclipse.jdt.annotation.Nullable;
 
 /**
  * Composes the actor, procedure runner, and first effect executors into one pumpable control-plane runtime. This
@@ -32,6 +33,8 @@ final class DeviceActorRuntime {
     private final ConnectLeaseEffectExecutor connectLeaseExecutor;
     private final DevicePortEffectExecutor portEffectExecutor;
     private final Consumer<DeviceEvent> eventObserver;
+    private final @Nullable DeviceBackoffPolicy backoffPolicy;
+    private final Consumer<DeviceActorDiagnostics> backoffObserver;
     private final List<DeviceEvent> pendingEvents = new ArrayList<>();
     private final List<DeviceEffect> unhandledEffects = new ArrayList<>();
 
@@ -43,27 +46,39 @@ final class DeviceActorRuntime {
 
     DeviceActorRuntime(DeviceActor actor, DeviceProcedureRunner.DeviceProcedureFactory procedureFactory,
             BooleanSupplier scanIsOff, DevicePort port, Consumer<DeviceEvent> eventObserver) {
+        this(actor, procedureFactory, scanIsOff, port, eventObserver, null, diagnostics -> {
+        });
+    }
+
+    DeviceActorRuntime(DeviceActor actor, DeviceProcedureRunner.DeviceProcedureFactory procedureFactory,
+            BooleanSupplier scanIsOff, DevicePort port, Consumer<DeviceEvent> eventObserver,
+            @Nullable DeviceBackoffPolicy backoffPolicy, Consumer<DeviceActorDiagnostics> backoffObserver) {
         this.actor = actor;
         this.runner = new DeviceProcedureRunner(actor, procedureFactory);
         this.connectLeaseExecutor = new ConnectLeaseEffectExecutor(scanIsOff, this::enqueue);
         this.portEffectExecutor = new DevicePortEffectExecutor(port, this::enqueue);
         this.eventObserver = eventObserver;
+        this.backoffPolicy = backoffPolicy;
+        this.backoffObserver = backoffObserver;
     }
 
     void start(DeviceProcedure procedure, String cause) {
         runner.start(procedure, cause);
         pump();
+        applyBackoffPolicy();
     }
 
     void submit(DeviceEvent event) {
         runner.submit(event);
         pump();
+        applyBackoffPolicy();
     }
 
     void tick() {
         connectLeaseExecutor.tick(actor.diagnostics().generation());
         runner.tick();
         pump();
+        applyBackoffPolicy();
     }
 
     List<DeviceEffect> drainUnhandledEffects() {
@@ -120,5 +135,16 @@ final class DeviceActorRuntime {
             return;
         }
         unhandledEffects.add(effect);
+    }
+
+    private void applyBackoffPolicy() {
+        DeviceBackoffPolicy policy = backoffPolicy;
+        if (policy == null) {
+            return;
+        }
+        DeviceActorDiagnostics diagnostics = actor.diagnostics();
+        if (policy.apply(diagnostics)) {
+            backoffObserver.accept(diagnostics);
+        }
     }
 }
