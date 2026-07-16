@@ -28,6 +28,7 @@ class ActorDeviceLifecycleFixture implements DeviceLifecycleFixture {
     private static final long CONNECT_DEADLINE_MS = 15_000;
     private static final long SETTLE_DEADLINE_MS = 5_000;
     private static final long GATT_DEADLINE_MS = 120_000;
+    private static final long SUBSCRIBE_DEADLINE_MS = 5_000;
     private static final long SETTLE_DELAY_MS = 2_000;
     private static final long BACKOFF_MS = 2_000;
     private static final int RESET_AFTER_REJECTIONS = 3;
@@ -147,6 +148,12 @@ class ActorDeviceLifecycleFixture implements DeviceLifecycleFixture {
         if (procedureName == DeviceProcedureName.RESOLVE_GATT) {
             return new ResolveGattProcedure(GATT_DEADLINE_MS);
         }
+        if (procedureName == DeviceProcedureName.SUBSCRIBE_NOTIFICATIONS) {
+            return new SubscribeNotificationsProcedure(SUBSCRIBE_DEADLINE_MS);
+        }
+        if (procedureName == DeviceProcedureName.ONLINE_MONITOR) {
+            return new OnlineMonitorProcedure();
+        }
         return null;
     }
 
@@ -169,15 +176,7 @@ class ActorDeviceLifecycleFixture implements DeviceLifecycleFixture {
 
     private void drainRuntimeEffects() {
         for (DeviceEffect effect : runtime.drainUnhandledEffects()) {
-            executeUnhandled(effect);
-        }
-    }
-
-    private void executeUnhandled(DeviceEffect effect) {
-        String operation = effect.operation();
-        if (ResolveGattProcedure.EFFECT_START_SUBSCRIBE_PROCEDURE.equals(operation)) {
-            gattProcedureActive = false;
-            port.markConnected();
+            throw new AssertionError("Unhandled actor effect: " + effect.operation());
         }
     }
 
@@ -186,6 +185,12 @@ class ActorDeviceLifecycleFixture implements DeviceLifecycleFixture {
             connectRejections++;
             if (connectRejections >= RESET_AFTER_REJECTIONS && resets.get() == 0) {
                 resets.incrementAndGet();
+            }
+        }
+        if (event instanceof DeviceEvent.NativeEffectCompleted) {
+            DeviceEvent.NativeEffectCompleted completed = (DeviceEvent.NativeEffectCompleted) event;
+            if (SubscribeNotificationsProcedure.EFFECT_MARK_CONNECTED.equals(completed.operation())) {
+                gattProcedureActive = false;
             }
         }
     }

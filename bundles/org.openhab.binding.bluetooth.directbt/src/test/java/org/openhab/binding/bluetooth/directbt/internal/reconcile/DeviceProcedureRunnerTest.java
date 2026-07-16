@@ -91,12 +91,40 @@ class DeviceProcedureRunnerTest {
         assertEffects(runner.drainEffects(), ConnectProcedure.EFFECT_DISCONNECT_NATIVE);
     }
 
+    @Test
+    void subscribeCompletionHandoffsToOnlineMonitor() {
+        MutableClock clock = new MutableClock(START);
+        DeviceActor actor = new DeviceActor("test-device", ReconcileTestSupport.logger(), clock);
+        DeviceProcedureRunner runner = new DeviceProcedureRunner(actor, DeviceProcedureRunnerTest::createProcedure);
+
+        runner.start(new SubscribeNotificationsProcedure(5_000), "gatt-resolved");
+        long generation = actor.diagnostics().generation();
+        assertEffects(runner.drainEffects(), SubscribeNotificationsProcedure.EFFECT_MARK_CONNECTED);
+
+        runner.submit(new DeviceEvent.NativeEffectCompleted(generation,
+                SubscribeNotificationsProcedure.EFFECT_MARK_CONNECTED, "SUCCESS"));
+
+        assertEquals(generation, actor.diagnostics().generation());
+        assertEquals(DeviceActorState.ONLINE, actor.diagnostics().state());
+        assertEquals(DeviceWaitingOn.NOTHING, actor.diagnostics().waitingOn());
+        assertEffects(runner.drainEffects());
+
+        clock.advance(60_000);
+        runner.tick();
+
+        assertEquals(DeviceActorState.ONLINE, actor.diagnostics().state());
+        assertEffects(runner.drainEffects());
+    }
+
     private static @Nullable DeviceProcedure createProcedure(DeviceProcedureName procedureName) {
         if (procedureName == DeviceProcedureName.SETTLE_LINK) {
             return new SettleLinkProcedure(5_000);
         }
         if (procedureName == DeviceProcedureName.RESOLVE_GATT) {
             return new ResolveGattProcedure(120_000);
+        }
+        if (procedureName == DeviceProcedureName.ONLINE_MONITOR) {
+            return new OnlineMonitorProcedure();
         }
         return null;
     }

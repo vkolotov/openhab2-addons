@@ -122,7 +122,7 @@ final class DeviceActor {
 
     void tick() {
         DeviceProcedure procedure = activeProcedure;
-        if (procedure == null || deadlineReported) {
+        if (procedure == null || deadlineReported || procedure.maxResidencyMs() <= 0) {
             return;
         }
         long elapsed = clock.millis() - stateStartedAt;

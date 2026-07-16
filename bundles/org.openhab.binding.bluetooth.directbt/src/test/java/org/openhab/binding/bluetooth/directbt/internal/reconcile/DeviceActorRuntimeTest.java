@@ -98,7 +98,7 @@ class DeviceActorRuntimeTest {
     }
 
     @Test
-    void gattResolveSuccessHandsOffToUnhandledSubscribeEffect() {
+    void gattResolveSuccessRunsSubscribeProcedureAndGoesOnline() {
         MutableClock clock = new MutableClock(START);
         DeviceActor actor = new DeviceActor("test-device", ReconcileTestSupport.logger(), clock);
         FakeDevicePort port = new FakeDevicePort();
@@ -108,8 +108,9 @@ class DeviceActorRuntimeTest {
         runtime.start(new ResolveGattProcedure(120_000), "test-gatt");
 
         assertEquals(1, port.resolveGattCalls);
-        assertEquals(DeviceActorState.SUBSCRIBING, runtime.diagnostics().state());
-        assertEffects(runtime.drainUnhandledEffects(), ResolveGattProcedure.EFFECT_START_SUBSCRIBE_PROCEDURE);
+        assertEquals(1, port.markConnectedCalls);
+        assertEquals(DeviceActorState.ONLINE, runtime.diagnostics().state());
+        assertTrue(runtime.drainUnhandledEffects().isEmpty());
     }
 
     @Test
@@ -144,8 +145,9 @@ class DeviceActorRuntimeTest {
         runtime.tick();
 
         assertEquals(1, port.resolveGattCalls);
-        assertEquals(DeviceActorState.SUBSCRIBING, runtime.diagnostics().state());
-        assertEffects(runtime.drainUnhandledEffects(), ResolveGattProcedure.EFFECT_START_SUBSCRIBE_PROCEDURE);
+        assertEquals(1, port.markConnectedCalls);
+        assertEquals(DeviceActorState.ONLINE, runtime.diagnostics().state());
+        assertTrue(runtime.drainUnhandledEffects().isEmpty());
     }
 
     private static @Nullable DeviceProcedure createProcedure(DeviceProcedureName procedureName) {
@@ -154,6 +156,12 @@ class DeviceActorRuntimeTest {
         }
         if (procedureName == DeviceProcedureName.RESOLVE_GATT) {
             return new ResolveGattProcedure(120_000);
+        }
+        if (procedureName == DeviceProcedureName.SUBSCRIBE_NOTIFICATIONS) {
+            return new SubscribeNotificationsProcedure(5_000);
+        }
+        if (procedureName == DeviceProcedureName.ONLINE_MONITOR) {
+            return new OnlineMonitorProcedure();
         }
         return null;
     }

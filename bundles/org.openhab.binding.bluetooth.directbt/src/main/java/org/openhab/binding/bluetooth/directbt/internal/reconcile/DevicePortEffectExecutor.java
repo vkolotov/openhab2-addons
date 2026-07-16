@@ -52,6 +52,11 @@ final class DevicePortEffectExecutor implements DeviceEffectExecutor {
             executeResolveGatt(effect);
             return true;
         }
+        if (SubscribeNotificationsProcedure.EFFECT_MARK_CONNECTED.equals(operation)) {
+            port.markConnected();
+            eventSink.accept(new DeviceEvent.NativeEffectCompleted(effect.generation(), operation, "SUCCESS"));
+            return true;
+        }
         return false;
     }
 

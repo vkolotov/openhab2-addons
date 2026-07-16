@@ -96,6 +96,23 @@ class DevicePortEffectExecutorTest {
     }
 
     @Test
+    void markConnectedEffectUpdatesPortAndReportsCompletion() {
+        FakeDevicePort port = new FakeDevicePort();
+        List<DeviceEvent> events = new ArrayList<>();
+        DevicePortEffectExecutor executor = new DevicePortEffectExecutor(port, events::add);
+
+        assertTrue(executor.execute(new DeviceEffect(GENERATION, SubscribeNotificationsProcedure.EFFECT_MARK_CONNECTED)));
+
+        assertEquals(1, port.markConnectedCalls);
+        assertEquals(1, events.size());
+        DeviceEvent event = events.get(0);
+        assertTrue(event instanceof DeviceEvent.NativeEffectCompleted);
+        assertEquals(GENERATION, event.generation());
+        assertEquals(SubscribeNotificationsProcedure.EFFECT_MARK_CONNECTED,
+                ((DeviceEvent.NativeEffectCompleted) event).operation());
+    }
+
+    @Test
     void unresolvedGattEffectDoesNotInventAFailureVerdict() {
         FakeDevicePort port = new FakeDevicePort();
         port.resolveSucceeds = false;
