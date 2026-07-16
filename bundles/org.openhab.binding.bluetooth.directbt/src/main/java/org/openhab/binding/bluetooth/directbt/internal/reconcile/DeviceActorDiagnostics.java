@@ -13,6 +13,7 @@
 package org.openhab.binding.bluetooth.directbt.internal.reconcile;
 
 import org.eclipse.jdt.annotation.NonNullByDefault;
+import org.eclipse.jdt.annotation.Nullable;
 
 /**
  * Snapshot of actor progress for logs, Thing diagnostics, and tests.
@@ -28,9 +29,11 @@ public final class DeviceActorDiagnostics {
     private final long stateStartedAt;
     private final long timeInStateMs;
     private final String lastCause;
+    private final @Nullable DeviceProcedureName activeProcedureName;
 
     DeviceActorDiagnostics(String deviceId, long generation, DeviceActorState state, DeviceWaitingOn waitingOn,
-            long stateStartedAt, long timeInStateMs, String lastCause) {
+            long stateStartedAt, long timeInStateMs, String lastCause,
+            @Nullable DeviceProcedureName activeProcedureName) {
         this.deviceId = deviceId;
         this.generation = generation;
         this.state = state;
@@ -38,6 +41,7 @@ public final class DeviceActorDiagnostics {
         this.stateStartedAt = stateStartedAt;
         this.timeInStateMs = timeInStateMs;
         this.lastCause = lastCause;
+        this.activeProcedureName = activeProcedureName;
     }
 
     String deviceId() {
@@ -76,8 +80,13 @@ public final class DeviceActorDiagnostics {
         return lastCause;
     }
 
+    @Nullable
+    DeviceProcedureName activeProcedureName() {
+        return activeProcedureName;
+    }
+
     public String summary() {
         return "state=" + state + " waitingOn=" + waitingOn + " generation=" + generation + " timeInStateMs="
-                + timeInStateMs + " cause=" + lastCause;
+                + timeInStateMs + " cause=" + lastCause + " activeProcedure=" + activeProcedureName;
     }
 }

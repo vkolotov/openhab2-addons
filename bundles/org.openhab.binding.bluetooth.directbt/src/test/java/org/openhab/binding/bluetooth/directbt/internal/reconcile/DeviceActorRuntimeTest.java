@@ -78,6 +78,32 @@ class DeviceActorRuntimeTest {
     }
 
     @Test
+    void deadlinePausedTickDoesNotExpireActiveConnectProcedure() {
+        MutableClock clock = new MutableClock(START);
+        DeviceActor actor = new DeviceActor("test-device", ReconcileTestSupport.logger(), clock);
+        FakeDevicePort port = new FakeDevicePort();
+        DeviceActorRuntime runtime = new DeviceActorRuntime(actor, DeviceActorRuntimeTest::createProcedure,
+                () -> false, port);
+
+        runtime.start(new ConnectProcedure(1_000), "test-connect");
+        assertTrue(runtime.isActive(DeviceProcedureName.CONNECT));
+        long generation = runtime.generation();
+
+        clock.advance(1_000);
+        runtime.tick(true);
+
+        assertEquals(generation, runtime.generation());
+        assertEquals(DeviceActorState.CONNECTING, runtime.diagnostics().state());
+        assertEquals(DeviceWaitingOn.CONNECT_LEASE, runtime.diagnostics().waitingOn());
+        assertEquals(0, port.disconnectNativeCalls);
+
+        runtime.tick(false);
+
+        assertEquals(DeviceActorState.BACKING_OFF, runtime.diagnostics().state());
+        assertEquals(1, port.disconnectNativeCalls);
+    }
+
+    @Test
     void optionalBackoffPolicyIsAppliedAfterRuntimePump() {
         MutableClock clock = new MutableClock(START);
         DeviceActor actor = new DeviceActor("test-device", ReconcileTestSupport.logger(), clock);

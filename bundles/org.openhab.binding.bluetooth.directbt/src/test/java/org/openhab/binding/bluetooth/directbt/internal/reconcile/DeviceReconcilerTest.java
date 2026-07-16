@@ -150,6 +150,39 @@ class DeviceReconcilerTest {
     }
 
     @Test
+    void productionRuntimeScaffoldIsDormantWhileLegacyConnectStillOwnsCommand() {
+        FakeDevicePort port = new FakeDevicePort();
+        port.wanted = true;
+        port.hasNative = true;
+        port.nativeConnected = false;
+
+        DeviceReconciler r = reconciler(port, scanOff(), new MutableClock(START));
+        r.reconcile();
+
+        assertEquals(1, port.connectNativeCalls);
+        assertEquals(DeviceActorState.IDLE_DISABLED, r.productionActorDiagnostics().state());
+        assertNull(r.productionActorDiagnostics().activeProcedureName());
+    }
+
+    @Test
+    void productionRuntimeScaffoldRecordsCommandDisallowedStreak() {
+        FakeDevicePort port = new FakeDevicePort();
+        port.connectResult = HCIStatusCode.COMMAND_DISALLOWED;
+        MutableClock clock = new MutableClock(START);
+        AtomicInteger resets = new AtomicInteger();
+        DeviceReconciler r = new DeviceReconciler(logger(), port, scanOff(), budget(clock), resets::incrementAndGet,
+                clock);
+
+        for (int i = 0; i < 3; i++) {
+            r.productionRuntimeForTest().start(new ConnectProcedure(CONNECT_DEADLINE_MS), "test-connect");
+        }
+
+        assertEquals(3, port.connectNativeCalls);
+        assertEquals(1, resets.get());
+        assertEquals(0, r.commandDisallowedStreakForTest());
+    }
+
+    @Test
     void shadowRuntimeConnectProbeIsOverriddenByLaterOnlineObservation() {
         FakeDevicePort port = new FakeDevicePort();
         port.wanted = true;

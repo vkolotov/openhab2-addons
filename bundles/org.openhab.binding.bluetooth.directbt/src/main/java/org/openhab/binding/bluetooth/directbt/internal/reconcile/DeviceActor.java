@@ -150,8 +150,9 @@ final class DeviceActor {
 
     DeviceActorDiagnostics diagnostics() {
         long now = clock.millis();
+        DeviceProcedure procedure = activeProcedure;
         return new DeviceActorDiagnostics(deviceId, generation, state, waitingOn, stateStartedAt,
-                now - stateStartedAt, lastCause);
+                now - stateStartedAt, lastCause, procedure == null ? null : procedure.name());
     }
 
     private void invalidateForAdapterReset(String cause) {

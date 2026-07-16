@@ -78,6 +78,6 @@ class DeviceBackoffPolicyTest {
 
     private static DeviceActorDiagnostics diagnostics(long generation, DeviceActorState state) {
         return new DeviceActorDiagnostics("test-device", generation, state, DeviceWaitingOn.BACKOFF_TIMER, 0, 0,
-                "test");
+                "test", null);
     }
 }

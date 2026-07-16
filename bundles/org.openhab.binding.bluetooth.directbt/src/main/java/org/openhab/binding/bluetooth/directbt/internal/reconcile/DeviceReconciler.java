@@ -78,6 +78,7 @@ public class DeviceReconciler extends Reconciler<Boolean, DeviceReconciler.Obser
     private final BooleanSupplier scanIsOff;
     private final ResetBudget resetBudget;
     private final Runnable requestAdapterReset;
+    private final DeviceActorRuntime productionRuntime;
     private final DeviceActorRuntime shadowRuntime;
 
     // Timestamps (epoch millis). connectingSince drives the stuck deadline; lastConnectAttemptAt spaces retries.
@@ -135,6 +136,10 @@ public class DeviceReconciler extends Reconciler<Boolean, DeviceReconciler.Obser
         this.scanIsOff = scanIsOff;
         this.resetBudget = resetBudget;
         this.requestAdapterReset = requestAdapterReset;
+        this.productionRuntime = new DeviceActorRuntime(new DeviceActor(port.id(), logger, clock),
+                DeviceReconciler::createProductionProcedure, scanIsOff, port, this::observeProductionRuntimeEvent,
+                new DeviceBackoffPolicy(port), diagnostics -> {
+                });
         this.shadowRuntime = new DeviceActorRuntime(new DeviceActor(port.id(), logger, clock),
                 DeviceReconciler::createShadowProcedure, () -> false, new ShadowDevicePort(port.id()));
     }
@@ -502,6 +507,43 @@ public class DeviceReconciler extends Reconciler<Boolean, DeviceReconciler.Obser
 
     public DeviceActorDiagnostics actorDiagnostics() {
         return shadowRuntime.diagnostics();
+    }
+
+    DeviceActorDiagnostics productionActorDiagnostics() {
+        return productionRuntime.diagnostics();
+    }
+
+    DeviceActorRuntime productionRuntimeForTest() {
+        return productionRuntime;
+    }
+
+    int commandDisallowedStreakForTest() {
+        return commandDisallowedStreak;
+    }
+
+    private void observeProductionRuntimeEvent(DeviceEvent event) {
+        if (event instanceof DeviceEvent.NativeConnected) {
+            commandDisallowedStreak = 0;
+            return;
+        }
+        if (event instanceof DeviceEvent.ConnectFailed) {
+            DeviceEvent.ConnectFailed failed = (DeviceEvent.ConnectFailed) event;
+            if (HCIStatusCode.COMMAND_DISALLOWED.name().equals(failed.reason())) {
+                if (++commandDisallowedStreak >= COMMAND_DISALLOWED_RESET_STREAK && resetBudget.tryReset(name)) {
+                    logger.warn("[reconcile:{}] connect COMMAND_DISALLOWED x{}; requesting adapter reset", name,
+                            commandDisallowedStreak);
+                    commandDisallowedStreak = 0;
+                    requestAdapterReset.run();
+                } else {
+                    logger.debug("[reconcile:{}] connect COMMAND_DISALLOWED (streak {}/{}); retrying", name,
+                            commandDisallowedStreak, COMMAND_DISALLOWED_RESET_STREAK);
+                }
+            }
+        }
+    }
+
+    private static @Nullable DeviceProcedure createProductionProcedure(DeviceProcedureName procedureName) {
+        return createShadowProcedure(procedureName);
     }
 
     private static @Nullable DeviceProcedure createShadowProcedure(DeviceProcedureName procedureName) {

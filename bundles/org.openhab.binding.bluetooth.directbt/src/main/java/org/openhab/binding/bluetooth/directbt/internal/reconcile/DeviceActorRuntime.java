@@ -84,9 +84,15 @@ final class DeviceActorRuntime {
     }
 
     void tick() {
+        tick(false);
+    }
+
+    void tick(boolean procedureDeadlinePaused) {
         tickSettleTimer();
         connectLeaseExecutor.tick(actor.diagnostics().generation());
-        runner.tick();
+        if (!procedureDeadlinePaused) {
+            runner.tick();
+        }
         pump();
         applyBackoffPolicy();
     }
@@ -99,6 +105,14 @@ final class DeviceActorRuntime {
 
     DeviceActorDiagnostics diagnostics() {
         return actor.diagnostics();
+    }
+
+    boolean isActive(DeviceProcedureName procedureName) {
+        return procedureName == diagnostics().activeProcedureName();
+    }
+
+    long generation() {
+        return diagnostics().generation();
     }
 
     void shadowObserve(DeviceActorState state, DeviceWaitingOn waitingOn, String cause) {
