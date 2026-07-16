@@ -103,6 +103,18 @@ public abstract class Reconciler<D, O> {
     // --- driver entry point ----------------------------------------------------------------------
 
     /**
+     * Fresh native evidence arrived (a transport event): allow the next act immediately instead of waiting out
+     * the exponential backoff. The backoff throttles repeated corrective actions against an unchanged picture;
+     * an event changes the picture, and refusing to LOOK at it for up to the backoff cap is not throttling
+     * (measured as an ~8 s blind spot between an established connection and the reconciler observing it).
+     * Acting stays naturally rate-limited: one requeued tick per event, and the command paths keep their own
+     * retry spacing (e.g. the connect retry interval).
+     */
+    public final void expediteNextAct() {
+        nextActNotBefore = 0;
+    }
+
+    /**
      * Run one reconcile tick. Returns true if the entity is currently in-sync (so dependents may run).
      * No-op (and returns the last known in-sync verdict as false) while paused.
      */

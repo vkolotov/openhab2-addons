@@ -165,14 +165,18 @@ public class DirectBTBridgeHandler extends AbstractBluetoothBridgeHandler<Direct
 
         // The connection-state callbacks are HINTS ONLY. We do not drive openHAB state from them (they may be
         // dropped -- the silent controller-side drop delivers no deviceDisconnected). The reconciler polls
-        // dev.getConnected() each tick and is the single source of truth; an event just makes it react sooner.
+        // dev.getConnected() each tick and is the single source of truth; an event just makes it react sooner —
+        // including through the device reconciler's act-backoff, which would otherwise sit on fresh evidence
+        // for up to its 8 s cap (the requeued tick ran but returned at "backing off").
         @Override
         public void deviceConnected(BTDevice device, boolean discovered, long timestamp) {
+            getDevice(toAddress(device)).getReconciler().expediteNextAct();
             requeueReconcile();
         }
 
         @Override
         public void deviceReady(BTDevice device, long timestamp) {
+            getDevice(toAddress(device)).getReconciler().expediteNextAct();
             requeueReconcile();
         }
 
@@ -184,6 +188,7 @@ public class DirectBTBridgeHandler extends AbstractBluetoothBridgeHandler<Direct
             DirectBTBluetoothDevice ohDevice = getDevice(toAddress(device));
             ohDevice.setDisconnectReason(String.valueOf(reason));
             ohDevice.noteNativeDisconnectEvent();
+            ohDevice.getReconciler().expediteNextAct(); // act on the failure now, not after the act-backoff
             requeueReconcile();
         }
 

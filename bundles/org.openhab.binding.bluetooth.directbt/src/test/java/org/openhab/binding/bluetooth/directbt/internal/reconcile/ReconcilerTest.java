@@ -191,4 +191,29 @@ class ReconcilerTest {
         r.unpause();
         assertFalse(r.isPaused());
     }
+
+    // ---------------------------------------------------------------------------------------------
+    // Fresh-event expedite: backoff throttles repeated actions against an unchanged picture, but a
+    // transport event is fresh evidence — expediteNextAct() must let the very next tick act instead of
+    // sitting on the evidence for up to the backoff cap (the measured 8 s connected-but-unobserved gap).
+    // ---------------------------------------------------------------------------------------------
+    @Test
+    void expediteNextActBypassesTheBackoff() {
+        MutableClock clock = new MutableClock(START);
+        TestReconciler r = new TestReconciler(clock);
+        r.observedValue = false;
+
+        for (int i = 0; i < 6; i++) {
+            r.reconcile(); // repeated acts drive the backoff toward its cap
+            clock.advance(200);
+        }
+        int actsBefore = r.actCalls;
+
+        r.reconcile(); // deep inside the backoff window: must not act
+        assertEquals(actsBefore, r.actCalls, "without an event the backoff window holds");
+
+        r.expediteNextAct(); // a transport event delivered fresh evidence
+        r.reconcile();
+        assertEquals(actsBefore + 1, r.actCalls, "an expedited tick must act immediately on fresh evidence");
+    }
 }
