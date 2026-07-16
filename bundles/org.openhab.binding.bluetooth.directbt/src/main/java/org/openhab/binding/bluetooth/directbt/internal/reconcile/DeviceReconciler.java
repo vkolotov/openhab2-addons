@@ -226,9 +226,11 @@ public class DeviceReconciler extends Reconciler<Boolean, DeviceReconciler.Obser
         if (lastConnectAttemptAt != 0 && now - lastConnectAttemptAt < CONNECT_RETRY_MS) {
             shadowRuntime.shadowObserve(DeviceActorState.BACKING_OFF, DeviceWaitingOn.BACKOFF_TIMER,
                     "wanted:connectRetry");
+        } else if (!scanIsOff.getAsBoolean()) {
+            shadowRuntime.start(new ConnectProcedure(CONNECT_DEADLINE_MS), "wanted:connectLease");
         } else {
             shadowRuntime.shadowObserve(DeviceActorState.CONNECTING, DeviceWaitingOn.CONNECT_LEASE,
-                    scanIsOff.getAsBoolean() ? "wanted:connectReady" : "wanted:connectLease");
+                    "wanted:connectReady");
         }
     }
 

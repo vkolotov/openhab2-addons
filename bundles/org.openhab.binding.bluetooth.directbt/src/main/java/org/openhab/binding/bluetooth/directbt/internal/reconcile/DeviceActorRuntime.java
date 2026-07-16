@@ -102,7 +102,9 @@ final class DeviceActorRuntime {
     }
 
     void shadowObserve(DeviceActorState state, DeviceWaitingOn waitingOn, String cause) {
-        actor.shadowObserve(state, waitingOn, cause);
+        actor.shadowOverride(state, waitingOn, cause);
+        pendingEvents.clear();
+        unhandledEffects.clear();
     }
 
     private void enqueue(DeviceEvent event) {

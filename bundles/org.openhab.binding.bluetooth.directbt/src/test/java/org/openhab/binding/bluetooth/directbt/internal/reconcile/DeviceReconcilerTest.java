@@ -133,6 +133,31 @@ class DeviceReconcilerTest {
     }
 
     @Test
+    void shadowRuntimeConnectProbeIsOverriddenByLaterOnlineObservation() {
+        FakeDevicePort port = new FakeDevicePort();
+        port.wanted = true;
+        port.hasNative = true;
+        port.nativeConnected = false;
+
+        DeviceReconciler r = reconciler(port, scanOn(), new MutableClock(START));
+        r.reconcile();
+        assertEquals(DeviceActorState.CONNECTING, r.actorDiagnostics().state());
+        assertEquals(DeviceWaitingOn.CONNECT_LEASE, r.actorDiagnostics().waitingOn());
+        assertEquals(0, port.connectNativeCalls);
+        assertEquals(0, port.disconnectNativeCalls);
+
+        port.nativeConnected = true;
+        port.flagConnected = true;
+        port.gattResolved = true;
+
+        assertTrue(r.reconcile());
+        assertEquals(DeviceActorState.ONLINE, r.actorDiagnostics().state());
+        assertEquals(DeviceWaitingOn.NOTHING, r.actorDiagnostics().waitingOn());
+        assertEquals(0, port.connectNativeCalls);
+        assertEquals(0, port.disconnectNativeCalls);
+    }
+
+    @Test
     void shadowDiagnosticsReportOnlineEvenWhenNoActIsNeeded() {
         FakeDevicePort port = new FakeDevicePort();
         port.wanted = true;

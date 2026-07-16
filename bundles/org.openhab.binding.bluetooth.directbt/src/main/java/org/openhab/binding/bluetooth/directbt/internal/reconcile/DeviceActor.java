@@ -77,6 +77,13 @@ final class DeviceActor {
         }
     }
 
+    void shadowOverride(DeviceActorState state, DeviceWaitingOn waitingOn, String cause) {
+        activeProcedure = null;
+        deadlineReported = false;
+        effects.clear();
+        transitionTo(state, waitingOn, cause);
+    }
+
     void submit(DeviceEvent event) {
         if (event instanceof DeviceEvent.WantedOnline) {
             wantedOnline = true;
