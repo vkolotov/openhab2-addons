@@ -47,6 +47,133 @@ interface DeviceEvent {
         }
     }
 
+    final class ConnectLeaseGranted implements DeviceEvent {
+        private final long generation;
+
+        ConnectLeaseGranted(long generation) {
+            this.generation = generation;
+        }
+
+        @Override
+        public String kind() {
+            return "ConnectLeaseGranted";
+        }
+
+        @Override
+        public boolean generationScoped() {
+            return true;
+        }
+
+        @Override
+        public long generation() {
+            return generation;
+        }
+    }
+
+    final class NativeConnected implements DeviceEvent {
+        private final long generation;
+
+        NativeConnected(long generation) {
+            this.generation = generation;
+        }
+
+        @Override
+        public String kind() {
+            return "NativeConnected";
+        }
+
+        @Override
+        public boolean generationScoped() {
+            return true;
+        }
+
+        @Override
+        public long generation() {
+            return generation;
+        }
+    }
+
+    final class PairingStarted implements DeviceEvent {
+        private final long generation;
+
+        PairingStarted(long generation) {
+            this.generation = generation;
+        }
+
+        @Override
+        public String kind() {
+            return "PairingStarted";
+        }
+
+        @Override
+        public boolean generationScoped() {
+            return true;
+        }
+
+        @Override
+        public long generation() {
+            return generation;
+        }
+    }
+
+    final class PairingEnded implements DeviceEvent {
+        private final long generation;
+
+        PairingEnded(long generation) {
+            this.generation = generation;
+        }
+
+        @Override
+        public String kind() {
+            return "PairingEnded";
+        }
+
+        @Override
+        public boolean generationScoped() {
+            return true;
+        }
+
+        @Override
+        public long generation() {
+            return generation;
+        }
+    }
+
+    final class ConnectFailed implements DeviceEvent {
+        private final long generation;
+        private final String reason;
+        private final boolean staleBondSuspected;
+
+        ConnectFailed(long generation, String reason, boolean staleBondSuspected) {
+            this.generation = generation;
+            this.reason = reason;
+            this.staleBondSuspected = staleBondSuspected;
+        }
+
+        @Override
+        public String kind() {
+            return "ConnectFailed";
+        }
+
+        @Override
+        public boolean generationScoped() {
+            return true;
+        }
+
+        @Override
+        public long generation() {
+            return generation;
+        }
+
+        String reason() {
+            return reason;
+        }
+
+        boolean staleBondSuspected() {
+            return staleBondSuspected;
+        }
+    }
+
     final class ProcedureDeadlineExpired implements DeviceEvent {
         private final long generation;
         private final DeviceProcedureName procedure;
