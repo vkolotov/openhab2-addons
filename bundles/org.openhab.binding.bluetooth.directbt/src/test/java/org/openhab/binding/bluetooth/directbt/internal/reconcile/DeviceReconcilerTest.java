@@ -167,6 +167,24 @@ class DeviceReconcilerTest {
     }
 
     @Test
+    void productionRuntimeConnectSliceDoesNotRunGattAfterNativeConnected() {
+        FakeDevicePort port = new FakeDevicePort();
+        port.wanted = true;
+        port.hasNative = true;
+        port.nativeConnected = false;
+
+        DeviceReconciler r = reconciler(port, scanOff(), new MutableClock(START));
+        r.reconcile();
+
+        r.productionRuntimeForTest().submit(new DeviceEvent.NativeConnected(r.productionRuntimeForTest().generation()));
+
+        assertEquals(0, port.resolveGattCalls,
+                "the production actor slice owns connect only; legacy GATT timing still owns real discovery");
+        assertEquals(1, r.productionRuntimeForTest().drainUnhandledEffects().size(),
+                "post-connect procedure handoff must stay unhandled until that slice is migrated");
+    }
+
+    @Test
     void productionRuntimeScaffoldRecordsCommandDisallowedStreak() {
         FakeDevicePort port = new FakeDevicePort();
         port.connectResult = HCIStatusCode.COMMAND_DISALLOWED;

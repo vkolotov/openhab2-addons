@@ -528,7 +528,10 @@ public class DeviceReconciler extends Reconciler<Boolean, DeviceReconciler.Obser
     }
 
     private static @Nullable DeviceProcedure createProductionProcedure(DeviceProcedureName procedureName) {
-        return createShadowProcedure(procedureName);
+        if (procedureName == DeviceProcedureName.CONNECT) {
+            return new ConnectProcedure(CONNECT_DEADLINE_MS);
+        }
+        return null;
     }
 
     private static @Nullable DeviceProcedure createShadowProcedure(DeviceProcedureName procedureName) {
