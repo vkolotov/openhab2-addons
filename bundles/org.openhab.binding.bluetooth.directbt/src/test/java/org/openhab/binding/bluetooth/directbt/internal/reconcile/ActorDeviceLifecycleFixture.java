@@ -12,10 +12,8 @@
  */
 package org.openhab.binding.bluetooth.directbt.internal.reconcile;
 
-import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
 
-import org.direct_bt.HCIStatusCode;
 import org.eclipse.jdt.annotation.NonNullByDefault;
 import org.eclipse.jdt.annotation.Nullable;
 
@@ -37,15 +35,16 @@ class ActorDeviceLifecycleFixture implements DeviceLifecycleFixture {
     private final FakeDevicePort port = new FakeDevicePort();
     private final MutableClock clock = new MutableClock(ReconcileTestSupport.START);
     private final DeviceActor actor = new DeviceActor("test-device", ReconcileTestSupport.logger(), clock);
-    private final DeviceProcedureRunner runner = new DeviceProcedureRunner(actor, this::createProcedure);
+    private boolean scanActive;
+    private final DeviceActorRuntime runtime = new DeviceActorRuntime(actor, this::createProcedure, () -> !scanActive,
+            port, this::observeRuntimeEvent);
     private final AtomicInteger resets = new AtomicInteger();
 
-    private boolean scanActive;
     private boolean adapterHealthy = true;
-    private boolean pendingConnectLease;
     private boolean gattProcedureActive;
     private long settleDueAt = -1;
     private long backoffUntil = -1;
+    private long backoffGeneration = -1;
     private int connectRejections;
 
     @Override
@@ -71,34 +70,30 @@ class ActorDeviceLifecycleFixture implements DeviceLifecycleFixture {
             markDisconnectedAndBackoff();
             return;
         }
-        if (pendingConnectLease && !scanActive) {
-            pendingConnectLease = false;
-            runner.submit(new DeviceEvent.ConnectLeaseGranted(actor.diagnostics().generation()));
-            drainEffects();
-        }
         if (settleDueAt >= 0 && clock.millis() >= settleDueAt) {
             settleDueAt = -1;
-            runner.submit(new DeviceEvent.LinkSettleTimerExpired(actor.diagnostics().generation()));
-            drainEffects();
+            runtime.submit(new DeviceEvent.LinkSettleTimerExpired(actor.diagnostics().generation()));
+            drainRuntimeEffects();
         }
         if (shouldStartResolveGatt()) {
             gattProcedureActive = true;
-            runner.start(new ResolveGattProcedure(GATT_DEADLINE_MS), "contract-gatt");
-            drainEffects();
+            runtime.start(new ResolveGattProcedure(GATT_DEADLINE_MS), "contract-gatt");
+            drainRuntimeEffects();
         }
         if (shouldStartConnect()) {
-            runner.start(new ConnectProcedure(CONNECT_DEADLINE_MS), "contract-connect");
-            drainEffects();
+            runtime.start(new ConnectProcedure(CONNECT_DEADLINE_MS), "contract-connect");
+            drainRuntimeEffects();
         }
-        runner.tick();
-        drainEffects();
+        runtime.tick();
+        drainRuntimeEffects();
     }
 
     @Override
     public void fireConnectedEvent() {
+        connectRejections = 0;
         port.markConnected();
-        runner.submit(new DeviceEvent.NativeConnected(actor.diagnostics().generation()));
-        drainEffects();
+        runtime.submit(new DeviceEvent.NativeConnected(actor.diagnostics().generation()));
+        drainRuntimeEffects();
     }
 
     @Override
@@ -107,9 +102,9 @@ class ActorDeviceLifecycleFixture implements DeviceLifecycleFixture {
         if (port.isPairing()) {
             return;
         }
-        runner.submit(new DeviceEvent.ConnectFailed(actor.diagnostics().generation(), "DISCONNECTED",
+        runtime.submit(new DeviceEvent.ConnectFailed(actor.diagnostics().generation(), "DISCONNECTED",
                 port.hasStalePairing()));
-        drainEffects();
+        drainRuntimeEffects();
         markDisconnectedAndBackoff();
     }
 
@@ -175,65 +170,17 @@ class ActorDeviceLifecycleFixture implements DeviceLifecycleFixture {
         }
     }
 
-    private void drainEffects() {
-        List<DeviceEffect> effects = runner.drainEffects();
-        while (!effects.isEmpty()) {
-            for (DeviceEffect effect : effects) {
-                execute(effect);
-            }
-            effects = runner.drainEffects();
+    private void drainRuntimeEffects() {
+        for (DeviceEffect effect : runtime.drainUnhandledEffects()) {
+            executeUnhandled(effect);
         }
+        applyActorBackoffIfNeeded();
     }
 
-    private void execute(DeviceEffect effect) {
-        if (effect.generation() != actor.diagnostics().generation()) {
-            return;
-        }
+    private void executeUnhandled(DeviceEffect effect) {
         String operation = effect.operation();
-        if (ConnectProcedure.EFFECT_REQUEST_CONNECT_LEASE.equals(operation)) {
-            if (scanActive) {
-                pendingConnectLease = true;
-            } else {
-                runner.submit(new DeviceEvent.ConnectLeaseGranted(effect.generation()));
-            }
-            return;
-        }
-        if (ConnectProcedure.EFFECT_CONNECT_LE.equals(operation)) {
-            port.markConnecting();
-            HCIStatusCode result = port.connectNative();
-            if (result == HCIStatusCode.SUCCESS) {
-                connectRejections = 0;
-            } else {
-                connectRejections++;
-                if (connectRejections >= RESET_AFTER_REJECTIONS && resets.get() == 0) {
-                    resets.incrementAndGet();
-                }
-                runner.submit(new DeviceEvent.ConnectFailed(effect.generation(), result.name(), false));
-                markDisconnectedAndBackoff();
-            }
-            return;
-        }
-        if (ConnectProcedure.EFFECT_DISCONNECT_NATIVE.equals(operation)) {
-            port.disconnectNative();
-            if (port.hasStalePairing() && actor.diagnostics().state() == DeviceActorState.BACKING_OFF) {
-                port.clearStalePairing();
-            }
-            markDisconnectedAndBackoff();
-            return;
-        }
-        if (ConnectProcedure.EFFECT_CLEAR_STALE_PAIRING.equals(operation)) {
-            port.clearStalePairing();
-            return;
-        }
         if (SettleLinkProcedure.EFFECT_SCHEDULE_LINK_SETTLE_TIMER.equals(operation)) {
             settleDueAt = clock.millis() + SETTLE_DELAY_MS;
-            return;
-        }
-        if (ResolveGattProcedure.EFFECT_RESOLVE_GATT.equals(operation)) {
-            port.resolveGatt();
-            if (port.isGattResolved()) {
-                runner.submit(new DeviceEvent.GattResolveSucceeded(effect.generation()));
-            }
             return;
         }
         if (ResolveGattProcedure.EFFECT_START_SUBSCRIBE_PROCEDURE.equals(operation)) {
@@ -242,11 +189,30 @@ class ActorDeviceLifecycleFixture implements DeviceLifecycleFixture {
         }
     }
 
+    private void observeRuntimeEvent(DeviceEvent event) {
+        if (event instanceof DeviceEvent.ConnectFailed) {
+            connectRejections++;
+            if (connectRejections >= RESET_AFTER_REJECTIONS && resets.get() == 0) {
+                resets.incrementAndGet();
+            }
+        }
+    }
+
+    private void applyActorBackoffIfNeeded() {
+        DeviceActorDiagnostics diagnostics = runtime.diagnostics();
+        if (diagnostics.state() == DeviceActorState.BACKING_OFF && diagnostics.generation() != backoffGeneration) {
+            if (port.hasStalePairing()) {
+                port.clearStalePairing();
+            }
+            markDisconnectedAndBackoff();
+        }
+    }
+
     private void markDisconnectedAndBackoff() {
         port.markDisconnected();
-        pendingConnectLease = false;
         gattProcedureActive = false;
         settleDueAt = -1;
         backoffUntil = clock.millis() + BACKOFF_MS;
+        backoffGeneration = actor.diagnostics().generation();
     }
 }
