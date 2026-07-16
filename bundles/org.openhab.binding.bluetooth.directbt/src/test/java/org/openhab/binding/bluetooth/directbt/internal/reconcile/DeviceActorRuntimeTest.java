@@ -125,6 +125,29 @@ class DeviceActorRuntimeTest {
         assertEffects(runtime.drainUnhandledEffects(), SettleLinkProcedure.EFFECT_SCHEDULE_LINK_SETTLE_TIMER);
     }
 
+    @Test
+    void optionalSettleTimerExecutorDrivesResolveGattHandoff() {
+        MutableClock clock = new MutableClock(START);
+        DeviceActor actor = new DeviceActor("test-device", ReconcileTestSupport.logger(), clock);
+        FakeDevicePort port = new FakeDevicePort();
+        SettleTimerEffectExecutor settleTimerExecutor = new SettleTimerEffectExecutor(() -> clock.millis(), 2_000);
+        DeviceActorRuntime runtime = new DeviceActorRuntime(actor, DeviceActorRuntimeTest::createProcedure,
+                () -> true, port, event -> {
+                }, settleTimerExecutor, null, diagnostics -> {
+                });
+
+        runtime.start(new SettleLinkProcedure(5_000), "test-settle");
+        assertTrue(runtime.drainUnhandledEffects().isEmpty());
+        assertEquals(DeviceActorState.LINK_SETTLING, runtime.diagnostics().state());
+
+        clock.advance(2_000);
+        runtime.tick();
+
+        assertEquals(1, port.resolveGattCalls);
+        assertEquals(DeviceActorState.SUBSCRIBING, runtime.diagnostics().state());
+        assertEffects(runtime.drainUnhandledEffects(), ResolveGattProcedure.EFFECT_START_SUBSCRIBE_PROCEDURE);
+    }
+
     private static @Nullable DeviceProcedure createProcedure(DeviceProcedureName procedureName) {
         if (procedureName == DeviceProcedureName.SETTLE_LINK) {
             return new SettleLinkProcedure(5_000);

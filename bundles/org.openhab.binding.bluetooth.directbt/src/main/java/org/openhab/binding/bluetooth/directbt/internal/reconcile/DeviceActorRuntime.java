@@ -32,6 +32,7 @@ final class DeviceActorRuntime {
     private final DeviceProcedureRunner runner;
     private final ConnectLeaseEffectExecutor connectLeaseExecutor;
     private final DevicePortEffectExecutor portEffectExecutor;
+    private final @Nullable SettleTimerEffectExecutor settleTimerExecutor;
     private final Consumer<DeviceEvent> eventObserver;
     private final @Nullable DeviceBackoffPolicy backoffPolicy;
     private final Consumer<DeviceActorDiagnostics> backoffObserver;
@@ -53,10 +54,18 @@ final class DeviceActorRuntime {
     DeviceActorRuntime(DeviceActor actor, DeviceProcedureRunner.DeviceProcedureFactory procedureFactory,
             BooleanSupplier scanIsOff, DevicePort port, Consumer<DeviceEvent> eventObserver,
             @Nullable DeviceBackoffPolicy backoffPolicy, Consumer<DeviceActorDiagnostics> backoffObserver) {
+        this(actor, procedureFactory, scanIsOff, port, eventObserver, null, backoffPolicy, backoffObserver);
+    }
+
+    DeviceActorRuntime(DeviceActor actor, DeviceProcedureRunner.DeviceProcedureFactory procedureFactory,
+            BooleanSupplier scanIsOff, DevicePort port, Consumer<DeviceEvent> eventObserver,
+            @Nullable SettleTimerEffectExecutor settleTimerExecutor, @Nullable DeviceBackoffPolicy backoffPolicy,
+            Consumer<DeviceActorDiagnostics> backoffObserver) {
         this.actor = actor;
         this.runner = new DeviceProcedureRunner(actor, procedureFactory);
         this.connectLeaseExecutor = new ConnectLeaseEffectExecutor(scanIsOff, this::enqueue);
         this.portEffectExecutor = new DevicePortEffectExecutor(port, this::enqueue);
+        this.settleTimerExecutor = settleTimerExecutor;
         this.eventObserver = eventObserver;
         this.backoffPolicy = backoffPolicy;
         this.backoffObserver = backoffObserver;
@@ -75,6 +84,7 @@ final class DeviceActorRuntime {
     }
 
     void tick() {
+        tickSettleTimer();
         connectLeaseExecutor.tick(actor.diagnostics().generation());
         runner.tick();
         pump();
@@ -131,10 +141,25 @@ final class DeviceActorRuntime {
         if (connectLeaseExecutor.execute(effect)) {
             return;
         }
+        SettleTimerEffectExecutor settleTimer = settleTimerExecutor;
+        if (settleTimer != null && settleTimer.execute(effect)) {
+            return;
+        }
         if (portEffectExecutor.execute(effect)) {
             return;
         }
         unhandledEffects.add(effect);
+    }
+
+    private void tickSettleTimer() {
+        SettleTimerEffectExecutor settleTimer = settleTimerExecutor;
+        if (settleTimer == null) {
+            return;
+        }
+        DeviceEvent event = settleTimer.tick(actor.diagnostics().generation());
+        if (event != null) {
+            enqueue(event);
+        }
     }
 
     private void applyBackoffPolicy() {

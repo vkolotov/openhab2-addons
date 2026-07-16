@@ -36,13 +36,14 @@ class ActorDeviceLifecycleFixture implements DeviceLifecycleFixture {
     private final MutableClock clock = new MutableClock(ReconcileTestSupport.START);
     private final DeviceActor actor = new DeviceActor("test-device", ReconcileTestSupport.logger(), clock);
     private boolean scanActive;
+    private final SettleTimerEffectExecutor settleTimerExecutor = new SettleTimerEffectExecutor(() -> clock.millis(),
+            SETTLE_DELAY_MS);
     private final DeviceActorRuntime runtime = new DeviceActorRuntime(actor, this::createProcedure, () -> !scanActive,
-            port, this::observeRuntimeEvent, new DeviceBackoffPolicy(port), this::recordBackoff);
+            port, this::observeRuntimeEvent, settleTimerExecutor, new DeviceBackoffPolicy(port), this::recordBackoff);
     private final AtomicInteger resets = new AtomicInteger();
 
     private boolean adapterHealthy = true;
     private boolean gattProcedureActive;
-    private long settleDueAt = -1;
     private long backoffUntil = -1;
     private int connectRejections;
 
@@ -68,11 +69,6 @@ class ActorDeviceLifecycleFixture implements DeviceLifecycleFixture {
         if (port.isFlagConnected() && !port.isNativeConnected()) {
             markDisconnectedAndBackoff();
             return;
-        }
-        if (settleDueAt >= 0 && clock.millis() >= settleDueAt) {
-            settleDueAt = -1;
-            runtime.submit(new DeviceEvent.LinkSettleTimerExpired(actor.diagnostics().generation()));
-            drainRuntimeEffects();
         }
         if (shouldStartResolveGatt()) {
             gattProcedureActive = true;
@@ -179,10 +175,6 @@ class ActorDeviceLifecycleFixture implements DeviceLifecycleFixture {
 
     private void executeUnhandled(DeviceEffect effect) {
         String operation = effect.operation();
-        if (SettleLinkProcedure.EFFECT_SCHEDULE_LINK_SETTLE_TIMER.equals(operation)) {
-            settleDueAt = clock.millis() + SETTLE_DELAY_MS;
-            return;
-        }
         if (ResolveGattProcedure.EFFECT_START_SUBSCRIBE_PROCEDURE.equals(operation)) {
             gattProcedureActive = false;
             port.markConnected();
@@ -205,7 +197,6 @@ class ActorDeviceLifecycleFixture implements DeviceLifecycleFixture {
 
     private void recordBackoff(DeviceActorDiagnostics diagnostics) {
         gattProcedureActive = false;
-        settleDueAt = -1;
         backoffUntil = clock.millis() + BACKOFF_MS;
     }
 }
