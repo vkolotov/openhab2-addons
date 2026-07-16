@@ -76,6 +76,7 @@ public class DeviceReconciler extends Reconciler<Boolean, DeviceReconciler.Obser
     private final BooleanSupplier scanIsOff;
     private final ResetBudget resetBudget;
     private final Runnable requestAdapterReset;
+    private final DeviceActor shadowActor;
 
     // Timestamps (epoch millis). connectingSince drives the stuck deadline; lastConnectAttemptAt spaces retries.
     private long connectingSince;
@@ -132,6 +133,7 @@ public class DeviceReconciler extends Reconciler<Boolean, DeviceReconciler.Obser
         this.scanIsOff = scanIsOff;
         this.resetBudget = resetBudget;
         this.requestAdapterReset = requestAdapterReset;
+        this.shadowActor = new DeviceActor(port.id(), logger, clock);
     }
 
     /**
@@ -184,6 +186,46 @@ public class DeviceReconciler extends Reconciler<Boolean, DeviceReconciler.Obser
         }
         // Wanted: in sync iff natively connected, flag agrees, and GATT resolved.
         return o.hasNative && o.nativeConnected && o.flagConnected && o.gattResolved;
+    }
+
+    @Override
+    protected void afterObserve(Boolean unusedDesired, Observed o) {
+        boolean wanted = port.isWanted();
+        if (!wanted) {
+            if (o.nativeConnected || o.flagConnected || o.flagConnecting) {
+                shadowActor.shadowObserve(DeviceActorState.DISCONNECTING, DeviceWaitingOn.DISCONNECT, "unwanted");
+            } else {
+                shadowActor.shadowObserve(DeviceActorState.IDLE_DISABLED, DeviceWaitingOn.NOTHING, "unwanted");
+            }
+            return;
+        }
+        if (!o.hasNative) {
+            shadowActor.shadowObserve(DeviceActorState.DISCOVERING, DeviceWaitingOn.NATIVE_HANDLE, "wanted:noHandle");
+            return;
+        }
+        if (o.nativeConnected) {
+            if (!o.gattResolved) {
+                shadowActor.shadowObserve(DeviceActorState.RESOLVING_GATT, DeviceWaitingOn.GATT_RESOLVE,
+                        "wanted:gattUnresolved");
+            } else {
+                shadowActor.shadowObserve(DeviceActorState.ONLINE, DeviceWaitingOn.NOTHING, "wanted:online");
+            }
+            return;
+        }
+        if (o.flagConnecting) {
+            shadowActor.shadowObserve(DeviceActorState.CONNECTING,
+                    o.pairing ? DeviceWaitingOn.PAIRING : DeviceWaitingOn.NATIVE_CONNECT,
+                    o.pairing ? "wanted:pairing" : "wanted:connecting");
+            return;
+        }
+        long now = clock.millis();
+        if (lastConnectAttemptAt != 0 && now - lastConnectAttemptAt < CONNECT_RETRY_MS) {
+            shadowActor.shadowObserve(DeviceActorState.BACKING_OFF, DeviceWaitingOn.BACKOFF_TIMER,
+                    "wanted:connectRetry");
+        } else {
+            shadowActor.shadowObserve(DeviceActorState.CONNECTING, DeviceWaitingOn.CONNECT_LEASE,
+                    scanIsOff.getAsBoolean() ? "wanted:connectReady" : "wanted:connectLease");
+        }
     }
 
     @Override
@@ -452,5 +494,9 @@ public class DeviceReconciler extends Reconciler<Boolean, DeviceReconciler.Obser
 
     public @Nullable Observed lastObserved() {
         return observed;
+    }
+
+    public DeviceActorDiagnostics actorDiagnostics() {
+        return shadowActor.diagnostics();
     }
 }

@@ -63,6 +63,12 @@ final class DeviceActor {
         procedure.start(context());
     }
 
+    void shadowObserve(DeviceActorState state, DeviceWaitingOn waitingOn, String cause) {
+        if (activeProcedure == null) {
+            transitionTo(state, waitingOn, cause);
+        }
+    }
+
     void submit(DeviceEvent event) {
         if (event instanceof DeviceEvent.WantedOnline) {
             wantedOnline = true;

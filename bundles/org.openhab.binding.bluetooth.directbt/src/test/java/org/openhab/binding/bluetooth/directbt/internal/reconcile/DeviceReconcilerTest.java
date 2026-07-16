@@ -102,6 +102,53 @@ class DeviceReconcilerTest {
                 "a device with no handle needs DISCOVERY, not connection-establishment");
     }
 
+    @Test
+    void shadowDiagnosticsReportDiscoveryWait() {
+        FakeDevicePort port = new FakeDevicePort();
+        port.wanted = true;
+        port.hasNative = false;
+
+        DeviceReconciler r = reconciler(port, scanOff(), new MutableClock(START));
+        r.reconcile();
+
+        DeviceActorDiagnostics diagnostics = r.actorDiagnostics();
+        assertEquals(DeviceActorState.DISCOVERING, diagnostics.state());
+        assertEquals(DeviceWaitingOn.NATIVE_HANDLE, diagnostics.waitingOn());
+    }
+
+    @Test
+    void shadowDiagnosticsReportConnectLeaseWaitWithoutChangingBehavior() {
+        FakeDevicePort port = new FakeDevicePort();
+        port.wanted = true;
+        port.hasNative = true;
+        port.nativeConnected = false;
+
+        DeviceReconciler r = reconciler(port, scanOn(), new MutableClock(START));
+        r.reconcile();
+
+        DeviceActorDiagnostics diagnostics = r.actorDiagnostics();
+        assertEquals(DeviceActorState.CONNECTING, diagnostics.state());
+        assertEquals(DeviceWaitingOn.CONNECT_LEASE, diagnostics.waitingOn());
+        assertEquals(0, port.connectNativeCalls, "shadow diagnostics must not bypass the existing scan-off gate");
+    }
+
+    @Test
+    void shadowDiagnosticsReportOnlineEvenWhenNoActIsNeeded() {
+        FakeDevicePort port = new FakeDevicePort();
+        port.wanted = true;
+        port.hasNative = true;
+        port.nativeConnected = true;
+        port.flagConnected = true;
+        port.gattResolved = true;
+
+        DeviceReconciler r = reconciler(port, scanOff(), new MutableClock(START));
+        assertTrue(r.reconcile());
+
+        DeviceActorDiagnostics diagnostics = r.actorDiagnostics();
+        assertEquals(DeviceActorState.ONLINE, diagnostics.state());
+        assertEquals(DeviceWaitingOn.NOTHING, diagnostics.waitingOn());
+    }
+
     // ---------------------------------------------------------------------------------------------
     // Silent ACL drop (THE defining failure): native link gone but no deviceDisconnected event, so our
     // flag still says CONNECTED. The reconciler must observe native truth and mark disconnected, which is
