@@ -101,6 +101,10 @@ final class DeviceActorRuntime {
         return actor.diagnostics();
     }
 
+    void shadowObserve(DeviceActorState state, DeviceWaitingOn waitingOn, String cause) {
+        actor.shadowObserve(state, waitingOn, cause);
+    }
+
     private void enqueue(DeviceEvent event) {
         eventObserver.accept(event);
         pendingEvents.add(event);

@@ -71,12 +71,14 @@ public class DeviceReconciler extends Reconciler<Boolean, DeviceReconciler.Obser
     private static final long PENDING_RESET_AFTER_MS = 16000;
     // Minimum spacing between connectNative() attempts.
     private static final long CONNECT_RETRY_MS = 2000;
+    private static final long SHADOW_SETTLE_DEADLINE_MS = 5000;
+    private static final long SHADOW_SUBSCRIBE_DEADLINE_MS = 5000;
 
     private final DevicePort port;
     private final BooleanSupplier scanIsOff;
     private final ResetBudget resetBudget;
     private final Runnable requestAdapterReset;
-    private final DeviceActor shadowActor;
+    private final DeviceActorRuntime shadowRuntime;
 
     // Timestamps (epoch millis). connectingSince drives the stuck deadline; lastConnectAttemptAt spaces retries.
     private long connectingSince;
@@ -133,7 +135,8 @@ public class DeviceReconciler extends Reconciler<Boolean, DeviceReconciler.Obser
         this.scanIsOff = scanIsOff;
         this.resetBudget = resetBudget;
         this.requestAdapterReset = requestAdapterReset;
-        this.shadowActor = new DeviceActor(port.id(), logger, clock);
+        this.shadowRuntime = new DeviceActorRuntime(new DeviceActor(port.id(), logger, clock),
+                DeviceReconciler::createShadowProcedure, () -> false, new ShadowDevicePort(port.id()));
     }
 
     /**
@@ -193,37 +196,38 @@ public class DeviceReconciler extends Reconciler<Boolean, DeviceReconciler.Obser
         boolean wanted = port.isWanted();
         if (!wanted) {
             if (o.nativeConnected || o.flagConnected || o.flagConnecting) {
-                shadowActor.shadowObserve(DeviceActorState.DISCONNECTING, DeviceWaitingOn.DISCONNECT, "unwanted");
+                shadowRuntime.shadowObserve(DeviceActorState.DISCONNECTING, DeviceWaitingOn.DISCONNECT, "unwanted");
             } else {
-                shadowActor.shadowObserve(DeviceActorState.IDLE_DISABLED, DeviceWaitingOn.NOTHING, "unwanted");
+                shadowRuntime.shadowObserve(DeviceActorState.IDLE_DISABLED, DeviceWaitingOn.NOTHING, "unwanted");
             }
             return;
         }
         if (!o.hasNative) {
-            shadowActor.shadowObserve(DeviceActorState.DISCOVERING, DeviceWaitingOn.NATIVE_HANDLE, "wanted:noHandle");
+            shadowRuntime.shadowObserve(DeviceActorState.DISCOVERING, DeviceWaitingOn.NATIVE_HANDLE,
+                    "wanted:noHandle");
             return;
         }
         if (o.nativeConnected) {
             if (!o.gattResolved) {
-                shadowActor.shadowObserve(DeviceActorState.RESOLVING_GATT, DeviceWaitingOn.GATT_RESOLVE,
+                shadowRuntime.shadowObserve(DeviceActorState.RESOLVING_GATT, DeviceWaitingOn.GATT_RESOLVE,
                         "wanted:gattUnresolved");
             } else {
-                shadowActor.shadowObserve(DeviceActorState.ONLINE, DeviceWaitingOn.NOTHING, "wanted:online");
+                shadowRuntime.shadowObserve(DeviceActorState.ONLINE, DeviceWaitingOn.NOTHING, "wanted:online");
             }
             return;
         }
         if (o.flagConnecting) {
-            shadowActor.shadowObserve(DeviceActorState.CONNECTING,
+            shadowRuntime.shadowObserve(DeviceActorState.CONNECTING,
                     o.pairing ? DeviceWaitingOn.PAIRING : DeviceWaitingOn.NATIVE_CONNECT,
                     o.pairing ? "wanted:pairing" : "wanted:connecting");
             return;
         }
         long now = clock.millis();
         if (lastConnectAttemptAt != 0 && now - lastConnectAttemptAt < CONNECT_RETRY_MS) {
-            shadowActor.shadowObserve(DeviceActorState.BACKING_OFF, DeviceWaitingOn.BACKOFF_TIMER,
+            shadowRuntime.shadowObserve(DeviceActorState.BACKING_OFF, DeviceWaitingOn.BACKOFF_TIMER,
                     "wanted:connectRetry");
         } else {
-            shadowActor.shadowObserve(DeviceActorState.CONNECTING, DeviceWaitingOn.CONNECT_LEASE,
+            shadowRuntime.shadowObserve(DeviceActorState.CONNECTING, DeviceWaitingOn.CONNECT_LEASE,
                     scanIsOff.getAsBoolean() ? "wanted:connectReady" : "wanted:connectLease");
         }
     }
@@ -497,6 +501,122 @@ public class DeviceReconciler extends Reconciler<Boolean, DeviceReconciler.Obser
     }
 
     public DeviceActorDiagnostics actorDiagnostics() {
-        return shadowActor.diagnostics();
+        return shadowRuntime.diagnostics();
+    }
+
+    private static @Nullable DeviceProcedure createShadowProcedure(DeviceProcedureName procedureName) {
+        if (procedureName == DeviceProcedureName.CONNECT) {
+            return new ConnectProcedure(CONNECT_DEADLINE_MS);
+        }
+        if (procedureName == DeviceProcedureName.SETTLE_LINK) {
+            return new SettleLinkProcedure(SHADOW_SETTLE_DEADLINE_MS);
+        }
+        if (procedureName == DeviceProcedureName.RESOLVE_GATT) {
+            return new ResolveGattProcedure(RESOLVE_IN_FLIGHT_MAX_MS);
+        }
+        if (procedureName == DeviceProcedureName.SUBSCRIBE_NOTIFICATIONS) {
+            return new SubscribeNotificationsProcedure(SHADOW_SUBSCRIBE_DEADLINE_MS);
+        }
+        if (procedureName == DeviceProcedureName.ONLINE_MONITOR) {
+            return new OnlineMonitorProcedure();
+        }
+        return null;
+    }
+
+    private static final class ShadowDevicePort implements DevicePort {
+        private final String id;
+
+        ShadowDevicePort(String id) {
+            this.id = id;
+        }
+
+        @Override
+        public boolean isWanted() {
+            return false;
+        }
+
+        @Override
+        public boolean hasNativeDevice() {
+            return false;
+        }
+
+        @Override
+        public boolean isNativeConnected() {
+            return false;
+        }
+
+        @Override
+        public boolean isGattResolved() {
+            return false;
+        }
+
+        @Override
+        public boolean isGattResolving() {
+            return false;
+        }
+
+        @Override
+        public boolean isFlagConnected() {
+            return false;
+        }
+
+        @Override
+        public boolean isFlagConnecting() {
+            return false;
+        }
+
+        @Override
+        public boolean isPairing() {
+            return false;
+        }
+
+        @Override
+        public boolean consumeConnectAttemptFailedEvent() {
+            return false;
+        }
+
+        @Override
+        public void markConnected() {
+        }
+
+        @Override
+        public void markDisconnected() {
+        }
+
+        @Override
+        public void markConnecting() {
+        }
+
+        @Override
+        public HCIStatusCode connectNative() {
+            return HCIStatusCode.SUCCESS;
+        }
+
+        @Override
+        public void disconnectNative() {
+        }
+
+        @Override
+        public boolean hasStalePairing() {
+            return false;
+        }
+
+        @Override
+        public void clearStalePairing() {
+        }
+
+        @Override
+        public boolean securityRequirementUnmet() {
+            return false;
+        }
+
+        @Override
+        public void resolveGatt() {
+        }
+
+        @Override
+        public String id() {
+            return id;
+        }
     }
 }
