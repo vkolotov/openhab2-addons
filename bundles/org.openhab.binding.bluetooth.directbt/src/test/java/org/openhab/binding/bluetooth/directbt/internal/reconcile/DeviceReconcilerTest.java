@@ -150,7 +150,7 @@ class DeviceReconcilerTest {
     }
 
     @Test
-    void productionRuntimeScaffoldIsDormantWhileLegacyConnectStillOwnsCommand() {
+    void productionRuntimeOwnsConnectCommandWhenScanIsOff() {
         FakeDevicePort port = new FakeDevicePort();
         port.wanted = true;
         port.hasNative = true;
@@ -160,8 +160,10 @@ class DeviceReconcilerTest {
         r.reconcile();
 
         assertEquals(1, port.connectNativeCalls);
-        assertEquals(DeviceActorState.IDLE_DISABLED, r.productionActorDiagnostics().state());
-        assertNull(r.productionActorDiagnostics().activeProcedureName());
+        assertEquals(1, port.markConnectingCalls);
+        assertEquals(DeviceActorState.CONNECTING, r.productionActorDiagnostics().state());
+        assertEquals(DeviceWaitingOn.NATIVE_CONNECT, r.productionActorDiagnostics().waitingOn());
+        assertEquals(DeviceProcedureName.CONNECT, r.productionActorDiagnostics().activeProcedureName());
     }
 
     @Test

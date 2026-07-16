@@ -138,8 +138,7 @@ public class DeviceReconciler extends Reconciler<Boolean, DeviceReconciler.Obser
         this.requestAdapterReset = requestAdapterReset;
         this.productionRuntime = new DeviceActorRuntime(new DeviceActor(port.id(), logger, clock),
                 DeviceReconciler::createProductionProcedure, scanIsOff, port, this::observeProductionRuntimeEvent,
-                new DeviceBackoffPolicy(port), diagnostics -> {
-                });
+                new DeviceBackoffPolicy(port), diagnostics -> clearConnectWindow());
         this.shadowRuntime = new DeviceActorRuntime(new DeviceActor(port.id(), logger, clock),
                 DeviceReconciler::createShadowProcedure, () -> false, new ShadowDevicePort(port.id()));
     }
@@ -463,42 +462,28 @@ public class DeviceReconciler extends Reconciler<Boolean, DeviceReconciler.Obser
             logger.debug("[reconcile:{}] scan stopped after {}ms; connect gate open", name, now - waitingScanOffSince);
             waitingScanOffSince = 0;
         }
-        lastConnectAttemptAt = now;
-        port.markConnecting();
-        connectingSince = now;
-        long connectStarted = clock.millis();
-        HCIStatusCode rc = port.connectNative();
-        logger.debug("[reconcile:{}] connectNative -> {} in {}ms", name, rc, clock.millis() - connectStarted);
-        if (rc != HCIStatusCode.SUCCESS) {
-            // Command rejected outright (e.g. COMMAND_DISALLOWED): not connecting after all. Reset flag so the
-            // next tick re-evaluates from DISCONNECTED rather than sitting in a phantom CONNECTING.
-            clearConnectWindow();
-            port.markDisconnected();
-            if (rc == HCIStatusCode.COMMAND_DISALLOWED) {
-                // A single COMMAND_DISALLOWED is usually the connect/scan race (the controller refuses
-                // create-connection while a scan is starting/running) — retry via the normal path, which
-                // re-gates on the scan being observed OFF. Only a PERSISTENT streak is the wedged-controller
-                // (CSR quirk) case that justifies the adapter reset — a native call that has been observed to
-                // hang, so it must be a last resort.
-                if (++commandDisallowedStreak >= COMMAND_DISALLOWED_RESET_STREAK && resetBudget.tryReset(name)) {
-                    logger.warn("[reconcile:{}] connect COMMAND_DISALLOWED x{}; requesting adapter reset", name,
-                            commandDisallowedStreak);
-                    commandDisallowedStreak = 0;
-                    requestAdapterReset.run();
-                } else {
-                    logger.debug("[reconcile:{}] connect COMMAND_DISALLOWED (streak {}/{}); retrying", name,
-                            commandDisallowedStreak, COMMAND_DISALLOWED_RESET_STREAK);
-                }
-            }
-        } else {
-            commandDisallowedStreak = 0;
-        }
+        startProductionConnect(now);
     }
 
     /** Close the current CONNECTING window: clears both the connect deadline and any in-flight pairing freeze. */
     private void clearConnectWindow() {
         connectingSince = 0;
         pairingSince = 0;
+    }
+
+    private void startProductionConnect(long now) {
+        lastConnectAttemptAt = now;
+        connectingSince = now;
+        logger.debug("[reconcile:{}] starting actor-owned connect attempt", name);
+        productionRuntime.start(new ConnectProcedure(CONNECT_DEADLINE_MS), "wanted:connectReady");
+
+        DeviceActorDiagnostics diagnostics = productionRuntime.diagnostics();
+        if (diagnostics.state() == DeviceActorState.CONNECTING && diagnostics.waitingOn() == DeviceWaitingOn.NATIVE_CONNECT
+                && port.isFlagConnecting()) {
+            commandDisallowedStreak = 0;
+        } else if (diagnostics.state() == DeviceActorState.BACKING_OFF) {
+            clearConnectWindow();
+        }
     }
 
     public @Nullable Observed lastObserved() {
