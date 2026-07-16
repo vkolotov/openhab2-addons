@@ -87,10 +87,14 @@ class ConnectProcedureTest {
     void nativeConnectedHandsOffToLinkSettling() {
         DeviceActor actor = newActor();
         actor.startProcedure(new ConnectProcedure(30_000), "test-start");
+        actor.drainEffects();
         long generation = actor.diagnostics().generation();
 
         actor.submit(new DeviceEvent.NativeConnected(generation));
 
+        List<DeviceEffect> effects = actor.drainEffects();
+        assertEquals(1, effects.size());
+        assertEquals(ConnectProcedure.EFFECT_START_SETTLE_LINK_PROCEDURE, effects.get(0).operation());
         assertEquals(DeviceActorState.LINK_SETTLING, actor.diagnostics().state());
         assertEquals(DeviceWaitingOn.SETTLE_TIMER, actor.diagnostics().waitingOn());
     }

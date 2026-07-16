@@ -24,6 +24,7 @@ import org.eclipse.jdt.annotation.NonNullByDefault;
 final class ConnectProcedure implements DeviceProcedure {
     static final String EFFECT_REQUEST_CONNECT_LEASE = "requestConnectLease";
     static final String EFFECT_CONNECT_LE = "connectLE";
+    static final String EFFECT_START_SETTLE_LINK_PROCEDURE = "startProcedure:SETTLE_LINK";
     static final String EFFECT_DISCONNECT_NATIVE = "disconnectNative";
     static final String EFFECT_CLEAR_STALE_PAIRING = "clearStalePairing";
 
@@ -66,6 +67,7 @@ final class ConnectProcedure implements DeviceProcedure {
             return;
         }
         if (event instanceof DeviceEvent.NativeConnected) {
+            ctx.emit(new DeviceEffect(ctx.generation(), EFFECT_START_SETTLE_LINK_PROCEDURE));
             ctx.transitionTo(DeviceActorState.LINK_SETTLING, DeviceWaitingOn.SETTLE_TIMER, event.kind());
             return;
         }

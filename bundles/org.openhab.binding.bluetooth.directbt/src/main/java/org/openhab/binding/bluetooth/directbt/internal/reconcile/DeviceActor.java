@@ -63,6 +63,14 @@ final class DeviceActor {
         procedure.start(context());
     }
 
+    void handoffProcedure(DeviceProcedure procedure, String cause) {
+        ensureDeadline(procedure);
+        activeProcedure = procedure;
+        deadlineReported = false;
+        transitionTo(procedure.actorState(), procedure.waitingOn(), cause);
+        procedure.start(context());
+    }
+
     void shadowObserve(DeviceActorState state, DeviceWaitingOn waitingOn, String cause) {
         if (activeProcedure == null) {
             transitionTo(state, waitingOn, cause);
