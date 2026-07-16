@@ -152,12 +152,15 @@ public class AdapterLeaseCoordinator {
         if (now < nextRungDue) {
             return;
         }
-        ladderRung++;
-        if (ladderRung == 1) {
+        if (ladderRung == 0) {
+            ladderRung = 1;
             logger.warn("[coordinator] wanted device undiscovered for {}ms; recovery sweep "
                     + "(clears stuck pending create-connections)", now - huntingSince);
             recoverySweep.run();
-        } else if (resetBudget.tryReset("coordinator")) {
+            return;
+        }
+        if (resetBudget.tryReset("coordinator")) {
+            ladderRung = 2;
             logger.warn("[coordinator] wanted device still undiscovered after {}ms and a sweep; adapter reset "
                     + "(the only cure for a controller-held zombie connection)", now - huntingSince);
             requestAdapterReset.run();

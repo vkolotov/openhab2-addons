@@ -115,6 +115,39 @@ class AdapterLeaseCoordinatorTest {
     }
 
     @Test
+    void deniedResetBudgetDoesNotConsumeTheResetRung() {
+        ResetBudget budget = new ResetBudget(BUDGET_COOLDOWN_MS, clock);
+        AtomicInteger localSweeps = new AtomicInteger();
+        AtomicInteger localResets = new AtomicInteger();
+        AdapterLeaseCoordinator coordinator = new AdapterLeaseCoordinator(logger(), budget, localSweeps::incrementAndGet,
+                localResets::incrementAndGet, clock);
+
+        for (long t = 0; t < 2 * LADDER_RUNG_MS - STEP_MS; t += STEP_MS) {
+            coordinator.decide(true, false, false, false, false);
+            clock.advance(STEP_MS);
+        }
+        assertEquals(1, localSweeps.get(), "sweep rung still fires");
+        assertTrue(budget.tryReset("other"), "another requester consumes the shared reset budget just before rung 2");
+
+        for (long t = 0; t < 2 * STEP_MS; t += STEP_MS) {
+            coordinator.decide(true, false, false, false, false);
+            clock.advance(STEP_MS);
+        }
+        assertEquals(1, localSweeps.get(), "sweep rung still fires");
+        assertEquals(0, localResets.get(), "reset rung must not fire while the shared budget denies it");
+
+        clock.advance(BUDGET_COOLDOWN_MS);
+        coordinator.decide(true, false, false, false, false);
+        assertEquals(1, localResets.get(), "the reset rung must retry after the budget becomes available");
+
+        for (long t = 0; t < 2 * LADDER_RUNG_MS; t += STEP_MS) {
+            coordinator.decide(true, false, false, false, false);
+            clock.advance(STEP_MS);
+        }
+        assertEquals(1, localResets.get(), "after one successful reset, the episode is exhausted");
+    }
+
+    @Test
     void findingTheDeviceEndsTheEpisodeAndArmsAFreshLadder() {
         for (long t = 0; t < LADDER_RUNG_MS / 2; t += STEP_MS) {
             c.decide(true, false, false, false, false);
