@@ -16,6 +16,8 @@ import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
 import static org.openhab.binding.bluetooth.directbt.internal.reconcile.ReconcileTestSupport.*;
 
+import java.util.concurrent.atomic.AtomicBoolean;
+
 import org.direct_bt.BTAdapter;
 import org.direct_bt.BTMode;
 import org.direct_bt.HCIStatusCode;
@@ -186,6 +188,49 @@ class AdapterReconcilerTest {
         r.reconcileScan(false);
 
         verify(a).stopDiscovery();
+    }
+
+    // ---------------------------------------------------------------------------------------------
+    // isScanOff() gates connectLE in the DEVICE phase, which runs BEFORE the next scan-phase observation.
+    // The cached scan state must therefore be refreshed in the SAME call that changes the scan, or the next
+    // tick's devices act on a one-tick-stale answer and fire connectLE into an active scan (the ~300 ms
+    // COMMAND_DISALLOWED race seen on prod 2026-07-16 at 16:30:00 and 19:00:22).
+    // ---------------------------------------------------------------------------------------------
+    @Test
+    void scanStartRefreshesTheConnectGateCacheImmediately() {
+        BTAdapter a = mock(BTAdapter.class);
+        AtomicBoolean scanning = new AtomicBoolean(false);
+        when(a.isDiscovering()).thenAnswer(inv -> scanning.get());
+        when(a.getCurrentScanType()).thenAnswer(inv -> scanning.get() ? ScanType.LE : ScanType.NONE);
+        when(a.startDiscovery(any(), any(), anyBoolean(), anyShort(), anyShort(), anyByte(), anyBoolean()))
+                .thenAnswer(inv -> {
+                    scanning.set(true);
+                    return HCIStatusCode.SUCCESS;
+                });
+
+        AdapterReconciler r = reconciler(a, new MutableClock(START), budget(new MutableClock(START)));
+        assertTrue(r.isScanOff());
+
+        r.reconcileScan(true); // starts the scan
+
+        assertFalse(r.isScanOff(), "the gate must see the scan in the same tick it starts");
+    }
+
+    @Test
+    void scanStopRefreshesTheConnectGateCacheImmediately() {
+        BTAdapter a = mock(BTAdapter.class);
+        AtomicBoolean scanning = new AtomicBoolean(true);
+        when(a.isDiscovering()).thenAnswer(inv -> scanning.get());
+        when(a.getCurrentScanType()).thenAnswer(inv -> scanning.get() ? ScanType.LE : ScanType.NONE);
+        doAnswer(inv -> {
+            scanning.set(false);
+            return HCIStatusCode.SUCCESS;
+        }).when(a).stopDiscovery();
+
+        AdapterReconciler r = reconciler(a, new MutableClock(START), budget(new MutableClock(START)));
+        r.reconcileScan(false); // stops the scan
+
+        assertTrue(r.isScanOff(), "a stop must open the connect gate the same tick, not one tick later");
     }
 
     // ---------------------------------------------------------------------------------------------

@@ -252,8 +252,13 @@ public class AdapterReconciler extends Reconciler<Boolean, AdapterReconciler.Obs
             if (!scanWanted) {
                 if (discovering || type != ScanType.NONE) {
                     a.stopDiscovery();
-                    logger.debug("[reconcile:adapter:scan] stop -> discovering={} scanType={}", a.isDiscovering(),
-                            a.getCurrentScanType());
+                    // Refresh the cached fields NOW: isScanOff() gates connectLE in the device phase, which runs
+                    // BEFORE the next scan-phase observation. A cache left stale across this action gives the
+                    // next tick's devices a wrong answer for one whole tick (the ~300ms COMMAND_DISALLOWED race).
+                    scanDiscovering = a.isDiscovering();
+                    scanType = a.getCurrentScanType();
+                    logger.debug("[reconcile:adapter:scan] stop -> discovering={} scanType={}", scanDiscovering,
+                            scanType);
                 }
                 return;
             }
@@ -275,8 +280,12 @@ public class AdapterReconciler extends Reconciler<Boolean, AdapterReconciler.Obs
             }
             HCIStatusCode res = a.startDiscovery(null, DiscoveryPolicy.PAUSE_CONNECTED_UNTIL_READY, true,
                     leScanInterval, leScanWindow, FILTER_POLICY, filterDuplicates);
-            logger.debug("[reconcile:adapter:scan] start -> {} (discovering={} scanType={})", res, a.isDiscovering(),
-                    a.getCurrentScanType());
+            // Same cache refresh as the stop branch: without it, isScanOff() answers "off" for one more tick
+            // after the scan started, and a connect-ready device fires connectLE into the active scan.
+            scanDiscovering = a.isDiscovering();
+            scanType = a.getCurrentScanType();
+            logger.debug("[reconcile:adapter:scan] start -> {} (discovering={} scanType={})", res, scanDiscovering,
+                    scanType);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         }
