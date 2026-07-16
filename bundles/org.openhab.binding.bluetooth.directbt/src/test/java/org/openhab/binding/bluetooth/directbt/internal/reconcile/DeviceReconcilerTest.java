@@ -158,6 +158,25 @@ class DeviceReconcilerTest {
     }
 
     @Test
+    void shadowRuntimeGattResolveProbeDoesNotDuplicateLiveResolve() {
+        FakeDevicePort port = new FakeDevicePort();
+        port.wanted = true;
+        port.hasNative = true;
+        port.nativeConnected = true;
+        port.flagConnected = true;
+        port.gattResolved = false;
+        port.resolveSucceeds = false;
+
+        DeviceReconciler r = reconciler(port, scanOff(), new MutableClock(START));
+        r.reconcile();
+
+        assertEquals(DeviceActorState.RESOLVING_GATT, r.actorDiagnostics().state());
+        assertEquals(DeviceWaitingOn.GATT_RESOLVE, r.actorDiagnostics().waitingOn());
+        assertEquals(1, port.resolveGattCalls, "shadow diagnostics must not issue a second real GATT resolve");
+        assertEquals(0, port.disconnectNativeCalls);
+    }
+
+    @Test
     void shadowDiagnosticsReportOnlineEvenWhenNoActIsNeeded() {
         FakeDevicePort port = new FakeDevicePort();
         port.wanted = true;

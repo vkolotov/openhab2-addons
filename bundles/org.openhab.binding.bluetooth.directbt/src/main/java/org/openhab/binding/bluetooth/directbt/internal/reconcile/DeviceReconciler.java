@@ -209,8 +209,7 @@ public class DeviceReconciler extends Reconciler<Boolean, DeviceReconciler.Obser
         }
         if (o.nativeConnected) {
             if (!o.gattResolved) {
-                shadowRuntime.shadowObserve(DeviceActorState.RESOLVING_GATT, DeviceWaitingOn.GATT_RESOLVE,
-                        "wanted:gattUnresolved");
+                shadowRuntime.start(new ResolveGattProcedure(RESOLVE_IN_FLIGHT_MAX_MS), "wanted:gattUnresolved");
             } else {
                 shadowRuntime.shadowObserve(DeviceActorState.ONLINE, DeviceWaitingOn.NOTHING, "wanted:online");
             }
