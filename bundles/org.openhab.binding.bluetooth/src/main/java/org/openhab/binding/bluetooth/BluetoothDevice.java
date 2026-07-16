@@ -120,6 +120,30 @@ public abstract class BluetoothDevice {
     public abstract @Nullable Integer getTxPower();
 
     /**
+     * Indicates whether this device advertises as connectable, derived from the advertising PDU type
+     * (e.g. ADV_IND is connectable; ADV_NONCONN_IND is not). Non-connectable devices are pure beacons and
+     * must never be connect-probed during discovery.
+     *
+     * @return {@link Boolean#TRUE}/{@link Boolean#FALSE} if the advertising connectability is known, or
+     *         {@code null} if the transport does not report it (in which case connectability is unknown and
+     *         callers should fall back to their previous behavior).
+     */
+    public @Nullable Boolean getConnectable() {
+        return null;
+    }
+
+    /**
+     * The reason the last connection to this device was dropped, if the transport reports one (e.g. the HCI
+     * disconnect status). Used to enrich an OFFLINE/COMMUNICATION_ERROR Thing status with a human-readable
+     * cause instead of a bare error.
+     *
+     * @return the last disconnect reason, or {@code null} if none is known / the transport does not report it
+     */
+    public @Nullable String getDisconnectReason() {
+        return null;
+    }
+
+    /**
      * Returns the last Receive Signal Strength Indicator (RSSI) value or null if no RSSI has been received
      *
      * @return the last RSSI value in dBm
@@ -193,6 +217,23 @@ public abstract class BluetoothDevice {
      * @return true if the disconnection process is started successfully
      */
     public abstract boolean disconnect();
+
+    /**
+     * Re-establishes the link to a device <em>without</em> changing the caller's intent to stay connected. This
+     * is the recovery path for a connection that is up at the link level but has not produced usable GATT
+     * services (the handler wants to bounce the link and try service discovery again, not give the device up).
+     * <p>
+     * It is distinct from {@link #disconnect()}, which signals "no longer want this device connected". A
+     * transport that tracks connection intent (e.g. to keep an {@code alwaysConnected} device connected) must
+     * NOT treat a {@code reconnect()} as a request to stop connecting. The default implementation falls back to
+     * {@link #disconnect()} so transports that do not track intent keep their existing disconnect-then-reconnect
+     * recovery behaviour unchanged.
+     *
+     * @return true if the reconnect (or fallback disconnect) process is started successfully
+     */
+    public boolean reconnect() {
+        return disconnect();
+    }
 
     /**
      * Starts a discovery on a device. This will iterate through all services and characteristics to build up a view of

@@ -46,6 +46,32 @@ public class BluetoothBindingConstants {
     public static final String CONFIGURATION_ALWAYS_CONNECTED = "alwaysConnected";
     public static final String CONFIGURATION_IDLE_DISCONNECT_DELAY = "idleDisconnectDelay";
 
+    /**
+     * Device configuration selecting the LE connection security for a single device, honoured by transports
+     * that support requesting security from the central side. One of {@link #CONNECTION_SECURITY_NONE},
+     * {@link #CONNECTION_SECURITY_ENCRYPTED} or {@link #CONNECTION_SECURITY_PIN}.
+     */
+    public static final String CONFIGURATION_CONNECTION_SECURITY = "connectionSecurity";
+
+    /** Unbonded, unencrypted connection (the default). */
+    public static final String CONNECTION_SECURITY_NONE = "none";
+
+    /**
+     * Encrypted link via Just-Works pairing (no PIN). Strict: the transport must keep retrying encryption
+     * rather than fall back to an unencrypted connection.
+     */
+    public static final String CONNECTION_SECURITY_ENCRYPTED = "encrypted";
+
+    /**
+     * Encrypted and MITM-authenticated link via Passkey Entry, using the {@link #CONFIGURATION_PASSKEY}
+     * configured on the device. Strict: the connection must be refused rather than downgraded when the peer
+     * cannot pair authenticated.
+     */
+    public static final String CONNECTION_SECURITY_PIN = "pin";
+
+    /** Device configuration holding the static passkey/PIN (0..999999) for {@link #CONNECTION_SECURITY_PIN}. */
+    public static final String CONFIGURATION_PASSKEY = "passkey";
+
     public static final long BLUETOOTH_BASE_UUID = 0x800000805f9b34fbL;
 
     public static UUID createBluetoothUUID(long uuid16) {

@@ -6,6 +6,24 @@
 		https://openhab.org/schemas/config-description-1.0.0.xsd">
 
 	<config-description uri="binding:bluetooth:generic">
+		<parameter name="pollOnlyLinkedCharacteristics" type="boolean">
+			<label>Poll Only Linked Characteristics</label>
+			<description>When enabled (default), the generic handler only reads and enables notifications for characteristics
+				whose channel has a linked item, instead of polling every readable characteristic. This avoids unnecessary GATT
+				traffic on the device. Disable to restore the legacy behaviour of polling all readable characteristics regardless of
+				item links.</description>
+			<advanced>true</advanced>
+			<default>true</default>
+		</parameter>
+		<parameter name="reconnectOnUnresolvedServices" type="boolean">
+			<label>Reconnect On Unresolved Services</label>
+			<description>When enabled (default), a connection that is up at the link level but has not resolved its GATT services
+				is recovered with a reconnect that preserves the connection intent, instead of a plain disconnect. This prevents a
+				connect/disconnect flap on transports that track connection intent (e.g. Direct-BT keeping an always-connected
+				device connected). Disable to restore the legacy behaviour of disconnecting on unresolved services.</description>
+			<advanced>true</advanced>
+			<default>true</default>
+		</parameter>
 		<parameter name="gattExtensionsFolder" type="text">
 			<label>Custom GATT Extensions Folder</label>
 			<description>Folder containing custom GATT specification XML files for non-standard services and characteristics,

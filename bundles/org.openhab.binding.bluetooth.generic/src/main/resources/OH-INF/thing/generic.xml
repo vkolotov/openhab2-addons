@@ -9,6 +9,7 @@
 			<bridge-type-ref id="roaming"/>
 			<bridge-type-ref id="bluegiga"/>
 			<bridge-type-ref id="bluez"/>
+			<bridge-type-ref id="directbt"/>
 		</supported-bridge-type-refs>
 
 		<label>Generic Bluetooth Device</label>
@@ -29,6 +30,45 @@
 				<label>Connect Automatically</label>
 				<description>If enabled, will automatically connect to the device and reconnect if connection is lost.</description>
 				<default>true</default>
+			</parameter>
+			<parameter name="connectionSecurity" type="text">
+				<label>Connection Security</label>
+				<description><![CDATA[LE connection security for this device (honoured by transports that support it,
+					e.g. the Direct-BT adapter).<br/>
+					<b>None</b>: unencrypted connection (default).<br/>
+					<b>Encrypted</b>: request an encrypted link (Just-Works pairing, no PIN). Strict: never falls back
+					to an unencrypted connection.<br/>
+					<b>PIN</b>: encrypted and authenticated link (Passkey Entry) using the configured Passkey. Strict:
+					the connection is refused rather than downgraded if the device cannot pair authenticated.]]></description>
+				<options>
+					<option value="none">None</option>
+					<option value="encrypted">Encrypted</option>
+					<option value="pin">PIN</option>
+				</options>
+				<default>none</default>
+			</parameter>
+			<parameter name="phy" type="text">
+				<label>LE PHY</label>
+				<description>Preferred LE PHY for the established connection. "coded" (long range) trades bandwidth for
+					roughly 12 dB
+					of extra link budget and suits weak/far devices; "2m" doubles bandwidth at slightly less
+					range. The preference is
+					requested after each connect and silently falls back to 1M when either side
+					does not support it. Only effective on
+					transports that expose PHY control (e.g. Direct-BT).</description>
+				<options>
+					<option value="auto">Auto (controller default)</option>
+					<option value="1m">LE 1M</option>
+					<option value="2m">LE 2M</option>
+					<option value="coded">LE Coded (long range)</option>
+				</options>
+				<default>auto</default>
+				<advanced>true</advanced>
+			</parameter>
+			<parameter name="passkey" type="integer" min="0" max="999999">
+				<advanced>true</advanced>
+				<label>Passkey</label>
+				<description>The device's fixed 6-digit pairing PIN (0..999999), used when Connection Security is PIN.</description>
 			</parameter>
 		</config-description>
 

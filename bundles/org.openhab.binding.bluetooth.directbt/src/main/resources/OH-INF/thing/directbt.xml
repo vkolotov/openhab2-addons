@@ -1,0 +1,89 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<thing:thing-descriptions bindingId="bluetooth"
+	xmlns:thing="https://openhab.org/schemas/thing-description/v1.0.0"
+	xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+	xsi:schemaLocation="https://openhab.org/schemas/thing-description/v1.0.0 https://openhab.org/schemas/thing-description-1.0.0.xsd">
+
+	<bridge-type id="directbt">
+		<label>Direct-BT Bluetooth Adapter</label>
+		<description>A Bluetooth adapter driven directly via the Direct-BT userspace stack (no BlueZ daemon).
+			Takes exclusive
+			control of the adapter; bluetoothd must be disabled for that adapter.</description>
+
+		<representation-property>address</representation-property>
+
+		<config-description>
+			<parameter name="address" type="text" required="true">
+				<label>Address</label>
+				<description>The Bluetooth address of the adapter in format XX:XX:XX:XX:XX:XX</description>
+			</parameter>
+			<parameter name="backgroundDiscovery" type="boolean">
+				<label>Background Discovery</label>
+				<description>Whether this adapter performs background discovery of Bluetooth devices</description>
+				<advanced>true</advanced>
+				<default>false</default>
+			</parameter>
+			<parameter name="inactiveDeviceCleanupInterval" type="integer" min="1" unit="s">
+				<label>Device Cleanup Interval</label>
+				<description>How often device cleanup is performed</description>
+				<advanced>true</advanced>
+				<default>60</default>
+			</parameter>
+			<parameter name="inactiveDeviceCleanupThreshold" type="integer" min="1" unit="s">
+				<label>Device Cleanup Threshold</label>
+				<description>Timespan a device can remain radio silent before it is eligible for cleanup</description>
+				<advanced>true</advanced>
+				<default>300</default>
+			</parameter>
+			<parameter name="scanIntervalSlots" type="integer" min="4" max="16384">
+				<label>LE Scan Interval (slots)</label>
+				<description>LE scan interval in 0.625 ms slots. Together with the scan window this sets the scan duty
+					cycle
+					(window/interval): the radio listens for the window out of every interval. Default 144 (90 ms).</description>
+				<advanced>true</advanced>
+				<default>144</default>
+			</parameter>
+			<parameter name="scanWindowSlots" type="integer" min="4" max="16384">
+				<label>LE Scan Window (slots)</label>
+				<description>LE scan window in 0.625 ms slots. Default 24 (15 ms) = ~17% duty with the default interval.
+					Raise toward
+					the interval to discover weak/far advertisers faster, but beware: a near-100% duty scan
+					starves connected devices'
+					ACL slots and can drop their connections. Values above
+					the interval are clamped to it.</description>
+				<advanced>true</advanced>
+				<default>24</default>
+			</parameter>
+			<parameter name="scanDuplicateFilter" type="boolean">
+				<label>Scan Duplicate Filter</label>
+				<description>Controller-side duplicate advert filtering. Off (default): every advertisement is reported, so
+					devices
+					stay fresh and can be connected whenever their Thing becomes ready. On: each static-address device
+					is reported only
+					ONCE per scan session — a Thing that was not ready at that single moment never sees the
+					device again until the scan
+					restarts.</description>
+				<advanced>true</advanced>
+				<default>false</default>
+			</parameter>
+			<parameter name="connectionIntervalSlots" type="integer" min="6" max="3200">
+				<label>LE Connection Interval (slots)</label>
+				<description>LE connection interval in 1.25 ms slots. Direct-BT pins minimum and maximum to this same
+					value for
+					predictable controller scheduling. Default 24 (30 ms).</description>
+				<advanced>true</advanced>
+				<default>24</default>
+			</parameter>
+			<parameter name="connectionSupervisionTimeoutSlots" type="integer" min="10" max="3200">
+				<label>LE Supervision Timeout (slots)</label>
+				<description>LE supervision timeout in 10 ms slots. A longer timeout tolerates short RF fades on
+					long-range links,
+					but detects a truly lost peer more slowly. Default 600 (6 s).</description>
+				<advanced>true</advanced>
+				<default>600</default>
+			</parameter>
+		</config-description>
+
+	</bridge-type>
+
+</thing:thing-descriptions>

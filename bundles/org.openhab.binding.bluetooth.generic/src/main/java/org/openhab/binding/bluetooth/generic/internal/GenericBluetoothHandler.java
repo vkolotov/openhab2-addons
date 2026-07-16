@@ -46,6 +46,7 @@ import org.openhab.core.thing.ThingStatus;
 import org.openhab.core.thing.ThingStatusDetail;
 import org.openhab.core.thing.binding.builder.ChannelBuilder;
 import org.openhab.core.thing.binding.builder.ThingBuilder;
+import org.openhab.core.thing.link.ItemChannelLinkRegistry;
 import org.openhab.core.thing.type.ChannelTypeUID;
 import org.openhab.core.types.Command;
 import org.openhab.core.types.RefreshType;
@@ -70,13 +71,23 @@ public class GenericBluetoothHandler extends ConnectedBluetoothHandler {
     private final Map<ChannelUID, CharacteristicHandler> channelHandlers = new ConcurrentHashMap<>();
     private final BluetoothGattParser gattParser = BluetoothGattParserFactory.getDefault();
     private final CharacteristicChannelTypeProvider channelTypeProvider;
+    private final ItemChannelLinkRegistry itemChannelLinkRegistry;
+    // Binding-level behaviour switches (binding.bluetooth.generic config, both default ON = the fixed behaviour;
+    // turn OFF to fall back to the legacy behaviour if the fix misbehaves on some device/transport).
+    private final boolean pollOnlyLinkedCharacteristics;
+    private final boolean reconnectOnUnresolvedServices;
     private final Map<CharacteristicHandler, List<ChannelUID>> handlerToChannels = new ConcurrentHashMap<>();
 
     private @Nullable ScheduledFuture<?> readCharacteristicJob = null;
 
-    public GenericBluetoothHandler(Thing thing, CharacteristicChannelTypeProvider channelTypeProvider) {
+    public GenericBluetoothHandler(Thing thing, CharacteristicChannelTypeProvider channelTypeProvider,
+            ItemChannelLinkRegistry itemChannelLinkRegistry, boolean pollOnlyLinkedCharacteristics,
+            boolean reconnectOnUnresolvedServices) {
         super(thing);
         this.channelTypeProvider = channelTypeProvider;
+        this.itemChannelLinkRegistry = itemChannelLinkRegistry;
+        this.pollOnlyLinkedCharacteristics = pollOnlyLinkedCharacteristics;
+        this.reconnectOnUnresolvedServices = reconnectOnUnresolvedServices;
     }
 
     @Override
@@ -84,45 +95,71 @@ public class GenericBluetoothHandler extends ConnectedBluetoothHandler {
         super.initialize();
 
         GenericBindingConfiguration config = getConfigAs(GenericBindingConfiguration.class);
-        readCharacteristicJob = scheduler.scheduleWithFixedDelay(() -> {
-            if (device.getConnectionState() == ConnectionState.CONNECTED) {
-                if (device.isServicesDiscovered()) {
-                    handlerToChannels.forEach((charHandler, channelUids) -> {
-                        // Only read the value manually if notification is not on.
-                        // Also read it the first time before we activate notifications below.
-                        if (!device.isNotifying(charHandler.characteristic) && charHandler.canRead()) {
-                            device.readCharacteristic(charHandler.characteristic);
-                            try {
-                                // TODO the ideal solution would be to use locks/conditions and timeouts
-                                // Kbetween this code and `onCharacteristicReadComplete` but
-                                // that would overcomplicate the code a bit and I plan
-                                // on implementing a better more generalized solution later
-                                Thread.sleep(50);
-                            } catch (InterruptedException e) {
-                                return;
+        readCharacteristicJob = scheduler.scheduleWithFixedDelay(this::guardedPollTick, 15, config.pollingInterval,
+                TimeUnit.SECONDS);
+    }
+
+    private void guardedPollTick() {
+        // An uncaught exception would silently cancel the repeating job (polling then stops forever with no
+        // log and the Thing sticks in its last status). Transport calls below can throw at any time (native
+        // errors, disconnect races), so guard the whole tick; the next tick simply retries.
+        try {
+            pollTick();
+        } catch (RuntimeException e) {
+            logger.warn("Characteristic poll tick failed for {}; will retry next tick", address, e);
+        }
+    }
+
+    private void pollTick() {
+        if (device.getConnectionState() == ConnectionState.CONNECTED) {
+            if (device.isServicesDiscovered()) {
+                handlerToChannels.forEach((charHandler, channelUids) -> {
+                    // When pollOnlyLinkedCharacteristics is OFF (legacy), treat every channel as "linked" so we
+                    // poll/notify all readable characteristics regardless of item links.
+                    boolean linked = !pollOnlyLinkedCharacteristics || channelUids.stream().anyMatch(this::hasItemLink);
+                    // Only read the value manually if notification is not on.
+                    // Also read it the first time before we activate notifications below.
+                    if (linked && !device.isNotifying(charHandler.characteristic) && charHandler.canRead()) {
+                        device.readCharacteristic(charHandler.characteristic);
+                        try {
+                            // TODO the ideal solution would be to use locks/conditions and timeouts
+                            // Kbetween this code and `onCharacteristicReadComplete` but
+                            // that would overcomplicate the code a bit and I plan
+                            // on implementing a better more generalized solution later
+                            Thread.sleep(50);
+                        } catch (InterruptedException e) {
+                            return;
+                        }
+                    }
+                    if (charHandler.characteristic.canNotify()) {
+                        // Enabled/Disable notifications dependent on if the channel is linked.
+                        if (linked) {
+                            if (!device.isNotifying(charHandler.characteristic)) {
+                                device.enableNotifications(charHandler.characteristic);
+                            }
+                        } else {
+                            if (device.isNotifying(charHandler.characteristic)) {
+                                device.disableNotifications(charHandler.characteristic);
                             }
                         }
-                        if (charHandler.characteristic.canNotify()) {
-                            // Enabled/Disable notifications dependent on if the channel is linked.
-                            // TODO check why isLinked() is true for not linked channels
-                            if (channelUids.stream().anyMatch(this::isLinked)) {
-                                if (!device.isNotifying(charHandler.characteristic)) {
-                                    device.enableNotifications(charHandler.characteristic);
-                                }
-                            } else {
-                                if (device.isNotifying(charHandler.characteristic)) {
-                                    device.disableNotifications(charHandler.characteristic);
-                                }
-                            }
-                        }
-                    });
+                    }
+                });
+            } else {
+                // Connected at the link level but services still unresolved: bounce the link and retry service
+                // discovery. reconnect() keeps the caller's connection intent (so an intent-tracking transport
+                // like Direct-BT does not read this recovery as "stop wanting the device" -> connect/disconnect
+                // flap). When reconnectOnUnresolvedServices is OFF (legacy), fall back to plain disconnect().
+                if (reconnectOnUnresolvedServices) {
+                    device.reconnect();
                 } else {
-                    // if we are connected and still haven't been able to resolve the services, try disconnecting and
-                    // then connecting again
                     device.disconnect();
                 }
             }
-        }, 15, config.pollingInterval, TimeUnit.SECONDS);
+        }
+    }
+
+    private boolean hasItemLink(ChannelUID channelUID) {
+        return !itemChannelLinkRegistry.getLinkedItemNames(channelUID).isEmpty();
     }
 
     @Override
@@ -143,6 +180,12 @@ public class GenericBluetoothHandler extends ConnectedBluetoothHandler {
         super.onServicesDiscovered();
         logger.trace("Service discovery completed for '{}'", address);
         updateThingChannels();
+        // Subscribe/read NOW rather than letting the freshly resolved device sit idle until the next scheduled
+        // poll tick (up to a full pollingInterval of dead air after every reconnect; measured 18.5 s on prod).
+        // updateThingChannels() populated handlerToChannels synchronously above, and pollTick() is idempotent.
+        // Off this callback thread: the tick does blocking reads and the callback may arrive on a transport
+        // notification thread.
+        scheduler.execute(this::guardedPollTick);
     }
 
     @Override

@@ -53,6 +53,7 @@
 			<bridge-type-ref id="roaming"/>
 			<bridge-type-ref id="bluegiga"/>
 			<bridge-type-ref id="bluez"/>
+			<bridge-type-ref id="directbt"/>
 		</supported-bridge-type-refs>
 
 		<label>Grundfos Alpha Reader MI401</label>
@@ -87,6 +88,7 @@
 			<bridge-type-ref id="roaming"/>
 			<bridge-type-ref id="bluegiga"/>
 			<bridge-type-ref id="bluez"/>
+			<bridge-type-ref id="directbt"/>
 		</supported-bridge-type-refs>
 
 		<label>Grundfos Alpha3</label>
