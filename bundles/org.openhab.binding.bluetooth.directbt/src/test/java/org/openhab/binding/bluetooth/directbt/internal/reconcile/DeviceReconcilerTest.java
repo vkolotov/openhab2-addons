@@ -220,6 +220,41 @@ class DeviceReconcilerTest {
         assertEquals(1, port.disconnectNativeCalls, "the failed pending attempt gets a best-effort native disconnect");
     }
 
+    // ---------------------------------------------------------------------------------------------
+    // GATT warm-up grace: with event-expedited ticks, the first resolve runs ~300 ms after the
+    // connection event — before native GATT is servable. Instant empty resolves inside the grace must
+    // not burn the silent-drop streak; after the grace they count again.
+    // ---------------------------------------------------------------------------------------------
+    @Test
+    void instantEmptyResolvesRightAfterConnectDoNotBurnTheStreak() {
+        FakeDevicePort port = new FakeDevicePort();
+        port.wanted = true;
+        port.hasNative = true;
+        port.nativeConnected = true;
+        port.flagConnected = false; // first tick marks connected, stamping the warm-up clock
+        port.gattResolved = false;
+        port.resolveSucceeds = false; // native GATT never becomes servable in this scenario
+
+        MutableClock clock = new MutableClock(START);
+        DeviceReconciler r = reconciler(port, scanOff(), clock);
+
+        for (int i = 0; i < 5; i++) { // 0 .. 3.6 s after connect: all inside the warm-up grace
+            r.expediteNextAct(); // events would do this in production
+            r.reconcile();
+            clock.advance(900);
+        }
+        assertEquals(5, port.resolveGattCalls, "warm-up resolves keep retrying");
+        assertEquals(0, port.markDisconnectedCalls, "instant empty resolves during warm-up are not failures");
+
+        clock.advance(2_000); // past the 5 s grace: unresolved-and-instant now counts as evidence again
+        for (int i = 0; i < 3; i++) {
+            r.expediteNextAct();
+            r.reconcile();
+            clock.advance(900);
+        }
+        assertEquals(1, port.markDisconnectedCalls, "past the grace the silent-drop streak must still fire");
+    }
+
     @Test
     void pairingChurnDiscardsFailureEventsInsteadOfFastFailing() {
         FakeDevicePort port = new FakeDevicePort();

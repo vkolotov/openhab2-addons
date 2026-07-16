@@ -53,6 +53,8 @@ class FakeDevicePort implements DevicePort {
     boolean pairing;
     // Whether a native deviceDisconnected event arrived since the current connect attempt started.
     boolean connectAttemptFailed;
+    // Whether resolveGatt() succeeds (false models the instant-empty "GATT not servable yet" resolve).
+    boolean resolveSucceeds = true;
     // Whether the device holds stored SMP keys a reconnect would reuse (BTDevice.isPrePaired()).
     boolean prePaired;
     // Whether the configured security requirement (e.g. authenticated "pin") is unmet on the current link.
@@ -175,7 +177,7 @@ class FakeDevicePort implements DevicePort {
     @Override
     public void resolveGatt() {
         resolveGattCalls++;
-        if (!gattResolving) {
+        if (!gattResolving && resolveSucceeds) {
             gattResolved = true;
         }
     }

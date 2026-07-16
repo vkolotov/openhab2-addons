@@ -87,9 +87,16 @@ public class DeviceReconciler extends Reconciler<Boolean, DeviceReconciler.Obser
     // under a minute), so an in-flight state older than this means the discovery thread hung and recovery
     // must proceed without it.
     private static final long RESOLVE_IN_FLIGHT_MAX_MS = 120_000;
+
+    // How long after observing a fresh connection an INSTANT empty GATT resolve is treated as "native GATT
+    // not servable yet" (warm-up) instead of a silent-drop symptom. Genuinely dead links fail via ATT
+    // timeouts (10+ s per attempt), never instantly.
+    private static final long GATT_WARMUP_GRACE_MS = 5000;
     private int resolveFailStreak;
     // Epoch millis of the tick at which we first observed the current in-flight GATT discovery (0 = none).
     private long resolveInFlightSince;
+    // Epoch millis of the tick at which we last transitioned flag to CONNECTED (0 = never observed).
+    private long connectedObservedAt;
     private long lastConnectAttemptAt;
     // Epoch millis of the tick at which we first observed pairing in progress during the current CONNECTING window,
     // or 0 if not currently pairing. Used to freeze the connect deadline across an SMP negotiation (see act()).
@@ -176,6 +183,7 @@ public class DeviceReconciler extends Reconciler<Boolean, DeviceReconciler.Obser
         // (5) STATE-FLAG SYNC — always reconcile our flag to native truth first.
         if (o.hasNative && o.nativeConnected && !o.flagConnected) {
             logger.debug("[reconcile:{}] native connected but flag not; marking connected", name);
+            connectedObservedAt = now;
             clearConnectWindow();
             port.markConnected();
         } else if ((!o.hasNative || !o.nativeConnected) && o.flagConnected) {
@@ -254,6 +262,15 @@ public class DeviceReconciler extends Reconciler<Boolean, DeviceReconciler.Obser
                         }
                         logger.debug("[reconcile:{}] GATT resolve still in flight after {}ms; waiting", name,
                                 resolveElapsed);
+                    } else if (connectedObservedAt != 0 && now - connectedObservedAt < GATT_WARMUP_GRACE_MS
+                            && resolveElapsed < 500) {
+                        // Not a failure verdict: an INSTANT empty resolve right after connect means native GATT
+                        // is not servable yet (the event-expedited tick gets here ~300 ms after the connection
+                        // event, before the ATT channel is up). A genuinely dead link fails SLOWLY (ATT
+                        // timeouts, 10+ s), so "returned immediately, connection young" is warm-up, not
+                        // evidence — retry next tick without burning the silent-drop streak.
+                        logger.debug("[reconcile:{}] GATT not servable yet {}ms after connect; retrying", name,
+                                now - connectedObservedAt);
                     } else if (++resolveFailStreak >= RESOLVE_FAIL_STREAK_LIMIT) {
                         logger.warn(
                                 "[reconcile:{}] GATT resolve failed {} times on a supposedly-connected link; treating as silently dropped",
