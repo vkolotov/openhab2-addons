@@ -39,6 +39,7 @@ import org.eclipse.jdt.annotation.Nullable;
 import org.openhab.binding.bluetooth.AbstractBluetoothBridgeHandler;
 import org.openhab.binding.bluetooth.BluetoothAddress;
 import org.openhab.binding.bluetooth.BluetoothBindingConstants;
+import org.openhab.binding.bluetooth.directbt.internal.reconcile.AdapterLeaseCoordinator;
 import org.openhab.binding.bluetooth.directbt.internal.reconcile.AdapterReconciler;
 import org.openhab.binding.bluetooth.directbt.internal.reconcile.DeviceReconciler;
 import org.openhab.binding.bluetooth.directbt.internal.reconcile.ResetBudget;
@@ -120,6 +121,10 @@ public class DirectBTBridgeHandler extends AbstractBluetoothBridgeHandler<Direct
     // When the last reconcile tick (periodic or event-driven) last ran, for the MIN_OBSERVE_INTERVAL_MS floor.
     private volatile long lastTickAt;
     private final ResetBudget resetBudget = new ResetBudget();
+
+    // Radio arbitration: time-slices the scan/connect contention and escalates hunted-but-invisible devices
+    // (sweep, then budgeted adapter reset). Only touched on the reconcile tick thread.
+    private final AdapterLeaseCoordinator leaseCoordinator;
     private @Nullable AdapterReconciler adapterReconciler;
     private boolean managerReady;
     private volatile boolean disposed;
@@ -269,6 +274,8 @@ public class DirectBTBridgeHandler extends AbstractBluetoothBridgeHandler<Direct
         super(bridge);
         this.managerFactory = managerFactory;
         this.clock = clock;
+        this.leaseCoordinator = new AdapterLeaseCoordinator(logger, resetBudget, this::recoverySweep,
+                this::requestAdapterReset, clock);
     }
 
     @Override
@@ -599,25 +606,40 @@ public class DirectBTBridgeHandler extends AbstractBluetoothBridgeHandler<Direct
                 establishing[0] = true;
             }
         });
-        return scanWanted(needsDiscovery[0], backgroundDiscovery, activeScanEnabled, connecting[0], establishing[0]);
+        // The needsDiscovery-vs-establishing conflict is arbitrated by the lease coordinator (time-sliced both
+        // ways). The old static rollup let discovery win indefinitely, which starved every connect for as long
+        // as a hunted device stayed invisible (the 2026-07-16 2h17m outage). The coordinator also runs the
+        // hunted-device starvation ladder (sweep -> budgeted adapter reset) from the same demand rollup.
+        return leaseCoordinator.decide(needsDiscovery[0], backgroundDiscovery, activeScanEnabled, connecting[0],
+                establishing[0]);
     }
 
     /**
-     * Pure decision for whether the adapter should be scanning, given the rolled-up device/config inputs.
-     * <p>
-     * Scan when a configured device needs (re)discovery to get a handle ({@code needsDiscovery}), OR discovery is
-     * wanted for the inbox ({@code backgroundDiscovery} config or an in-progress manual scan). But BOTH of the
-     * inbox cases yield to a configured device that is trying to establish its connection: the controller rejects
-     * create-connection while scanning, and a background scan that keeps restarting between a device's connect
-     * attempts starves it forever. So background/active discovery is suppressed while {@code establishing}, and any
-     * scan is suppressed the instant a device is {@code connecting}. A device needing DISCOVERY still scans (that is
-     * how it gets a handle in the first place) — {@code needsDiscovery} is not gated by {@code establishing}.
+     * Best-effort recovery sweep on the lease coordinator's behalf: disconnect every wanted-but-unestablished
+     * device to clear stuck pending create-connections at the controller (the stuck-initiator variant of the
+     * hunted-device failure; a controller-held zombie needs the adapter reset rung instead). Runs the blocking
+     * native disconnects on the blocking-ops pool, and collects targets first so no native call ever runs while
+     * holding the device-map iteration lock (the 2026-07-16 16:30 wedge lesson).
      */
-    static boolean scanWanted(boolean needsDiscovery, boolean backgroundDiscovery, boolean activeScan,
-            boolean connecting, boolean establishing) {
-        boolean inboxDiscovery = (backgroundDiscovery || activeScan) && !establishing;
-        boolean discoveryWanted = needsDiscovery || inboxDiscovery;
-        return discoveryWanted && !connecting;
+    private void recoverySweep() {
+        List<DirectBTBluetoothDevice> targets = new ArrayList<>();
+        forEachDevice(d -> {
+            DeviceReconciler rec = d.getReconciler();
+            if (rec.wantsDiscovery() || rec.needsConnection()) {
+                targets.add(d);
+            }
+        });
+        if (targets.isEmpty()) {
+            return;
+        }
+        logger.warn("Direct-BT recovery sweep: best-effort disconnect of {} wanted-but-unestablished device(s)",
+                targets.size());
+        executor.execute(() -> {
+            for (DirectBTBluetoothDevice d : targets) {
+                d.disconnectNative();
+            }
+            requeueReconcile();
+        });
     }
 
     /**
