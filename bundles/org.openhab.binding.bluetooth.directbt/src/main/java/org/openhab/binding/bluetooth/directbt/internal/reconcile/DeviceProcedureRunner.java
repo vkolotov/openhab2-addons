@@ -81,7 +81,8 @@ final class DeviceProcedureRunner {
         if (!operation.startsWith(START_PROCEDURE_PREFIX)) {
             return false;
         }
-        DeviceProcedureName procedureName = DeviceProcedureName.valueOf(operation.substring(START_PROCEDURE_PREFIX.length()));
+        DeviceProcedureName procedureName = DeviceProcedureName
+                .valueOf(operation.substring(START_PROCEDURE_PREFIX.length()));
         DeviceProcedure procedure = procedureFactory.create(procedureName);
         if (procedure == null) {
             return false;

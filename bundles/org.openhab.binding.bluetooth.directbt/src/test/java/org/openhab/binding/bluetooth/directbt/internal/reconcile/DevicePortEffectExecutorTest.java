@@ -101,7 +101,8 @@ class DevicePortEffectExecutorTest {
         List<DeviceEvent> events = new ArrayList<>();
         DevicePortEffectExecutor executor = new DevicePortEffectExecutor(port, events::add);
 
-        assertTrue(executor.execute(new DeviceEffect(GENERATION, SubscribeNotificationsProcedure.EFFECT_MARK_CONNECTED)));
+        assertTrue(
+                executor.execute(new DeviceEffect(GENERATION, SubscribeNotificationsProcedure.EFFECT_MARK_CONNECTED)));
 
         assertEquals(1, port.markConnectedCalls);
         assertEquals(1, events.size());

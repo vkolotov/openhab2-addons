@@ -155,8 +155,8 @@ abstract class DeviceLifecycleContract {
                 attemptTimes.add(fx.nowMillis());
             }
         }
-        assertTrue(attemptTimes.size() >= 3, "an unreachable device must keep being retried, got "
-                + attemptTimes.size());
+        assertTrue(attemptTimes.size() >= 3,
+                "an unreachable device must keep being retried, got " + attemptTimes.size());
         assertTrue(attemptTimes.size() <= 60, "retries must be paced, not hammered every tick");
         for (int i = 1; i < attemptTimes.size(); i++) {
             assertTrue(attemptTimes.get(i) - attemptTimes.get(i - 1) >= 1000,

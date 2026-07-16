@@ -53,8 +53,7 @@ class SubscribeNotificationsProcedureTest {
 
         List<DeviceEffect> effects = actor.drainEffects();
         assertEquals(1, effects.size());
-        assertEquals(SubscribeNotificationsProcedure.EFFECT_START_ONLINE_MONITOR_PROCEDURE,
-                effects.get(0).operation());
+        assertEquals(SubscribeNotificationsProcedure.EFFECT_START_ONLINE_MONITOR_PROCEDURE, effects.get(0).operation());
         assertEquals(DeviceActorState.SUBSCRIBING, actor.diagnostics().state());
         assertEquals(DeviceWaitingOn.SUBSCRIPTION, actor.diagnostics().waitingOn());
     }

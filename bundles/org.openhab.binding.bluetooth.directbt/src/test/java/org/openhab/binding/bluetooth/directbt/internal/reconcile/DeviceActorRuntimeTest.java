@@ -62,8 +62,8 @@ class DeviceActorRuntimeTest {
         FakeDevicePort port = new FakeDevicePort();
         port.connectResult = HCIStatusCode.COMMAND_DISALLOWED;
         List<DeviceEvent> observedEvents = new ArrayList<>();
-        DeviceActorRuntime runtime = new DeviceActorRuntime(actor, DeviceActorRuntimeTest::createProcedure,
-                () -> true, port, observedEvents::add);
+        DeviceActorRuntime runtime = new DeviceActorRuntime(actor, DeviceActorRuntimeTest::createProcedure, () -> true,
+                port, observedEvents::add);
 
         runtime.start(new ConnectProcedure(30_000), "test-connect");
 
@@ -82,8 +82,8 @@ class DeviceActorRuntimeTest {
         MutableClock clock = new MutableClock(START);
         DeviceActor actor = new DeviceActor("test-device", ReconcileTestSupport.logger(), clock);
         FakeDevicePort port = new FakeDevicePort();
-        DeviceActorRuntime runtime = new DeviceActorRuntime(actor, DeviceActorRuntimeTest::createProcedure,
-                () -> false, port);
+        DeviceActorRuntime runtime = new DeviceActorRuntime(actor, DeviceActorRuntimeTest::createProcedure, () -> false,
+                port);
 
         runtime.start(new ConnectProcedure(1_000), "test-connect");
         assertTrue(runtime.isActive(DeviceProcedureName.CONNECT));
@@ -111,8 +111,8 @@ class DeviceActorRuntimeTest {
         port.connectResult = HCIStatusCode.COMMAND_DISALLOWED;
         port.prePaired = true;
         List<DeviceActorDiagnostics> backoffs = new ArrayList<>();
-        DeviceActorRuntime runtime = new DeviceActorRuntime(actor, DeviceActorRuntimeTest::createProcedure,
-                () -> true, port, event -> {
+        DeviceActorRuntime runtime = new DeviceActorRuntime(actor, DeviceActorRuntimeTest::createProcedure, () -> true,
+                port, event -> {
                 }, new DeviceBackoffPolicy(port), backoffs::add);
 
         runtime.start(new ConnectProcedure(30_000), "test-connect");
@@ -128,8 +128,8 @@ class DeviceActorRuntimeTest {
         MutableClock clock = new MutableClock(START);
         DeviceActor actor = new DeviceActor("test-device", ReconcileTestSupport.logger(), clock);
         FakeDevicePort port = new FakeDevicePort();
-        DeviceActorRuntime runtime = new DeviceActorRuntime(actor, DeviceActorRuntimeTest::createProcedure,
-                () -> true, port);
+        DeviceActorRuntime runtime = new DeviceActorRuntime(actor, DeviceActorRuntimeTest::createProcedure, () -> true,
+                port);
 
         runtime.start(new ResolveGattProcedure(120_000), "test-gatt");
 
@@ -144,8 +144,8 @@ class DeviceActorRuntimeTest {
         MutableClock clock = new MutableClock(START);
         DeviceActor actor = new DeviceActor("test-device", ReconcileTestSupport.logger(), clock);
         FakeDevicePort port = new FakeDevicePort();
-        DeviceActorRuntime runtime = new DeviceActorRuntime(actor, DeviceActorRuntimeTest::createProcedure,
-                () -> true, port);
+        DeviceActorRuntime runtime = new DeviceActorRuntime(actor, DeviceActorRuntimeTest::createProcedure, () -> true,
+                port);
 
         runtime.start(new SettleLinkProcedure(5_000), "test-settle");
 
@@ -158,8 +158,8 @@ class DeviceActorRuntimeTest {
         DeviceActor actor = new DeviceActor("test-device", ReconcileTestSupport.logger(), clock);
         FakeDevicePort port = new FakeDevicePort();
         SettleTimerEffectExecutor settleTimerExecutor = new SettleTimerEffectExecutor(() -> clock.millis(), 2_000);
-        DeviceActorRuntime runtime = new DeviceActorRuntime(actor, DeviceActorRuntimeTest::createProcedure,
-                () -> true, port, event -> {
+        DeviceActorRuntime runtime = new DeviceActorRuntime(actor, DeviceActorRuntimeTest::createProcedure, () -> true,
+                port, event -> {
                 }, settleTimerExecutor, null, diagnostics -> {
                 });
 

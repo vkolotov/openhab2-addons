@@ -28,6 +28,7 @@ import org.direct_bt.BDAddressType;
 import org.direct_bt.BTAdapter;
 import org.direct_bt.BTDevice;
 import org.direct_bt.BTMode;
+import org.direct_bt.GattCacheMode;
 import org.direct_bt.HCIStatusCode;
 import org.eclipse.jdt.annotation.NonNullByDefault;
 import org.eclipse.jdt.annotation.Nullable;
@@ -113,6 +114,30 @@ class DirectBTBridgeHandlerTest {
         childThings(childThing("11:22:33:44:55:66", Map.of("connectionSecurity", "pin")));
         assertEquals(BluetoothBindingConstants.CONNECTION_SECURITY_NONE, handler().getDeviceConnectionSecurity(ADDRESS),
                 "an unknown device (no child Thing with this address) must default to none");
+    }
+
+    @Test
+    void gattCacheModeIsReadFromTheMatchingChildThing() {
+        childThings(childThing(DEVICE_ADDR, Map.of("gattCache", "off")));
+        assertEquals(GattCacheMode.OFF, handler().getDeviceGattCacheMode(ADDRESS));
+
+        childThings(childThing(DEVICE_ADDR, Map.of("gattCache", "trust")));
+        assertEquals(GattCacheMode.TRUST, handler().getDeviceGattCacheMode(ADDRESS));
+
+        childThings(childThing(DEVICE_ADDR, Map.of("gattCache", "auto")));
+        assertEquals(GattCacheMode.AUTO, handler().getDeviceGattCacheMode(ADDRESS));
+    }
+
+    @Test
+    void gattCacheModeDefaultsToAutoWhenUnsetUnknownOrNoChildThing() {
+        childThings(childThing(DEVICE_ADDR, Map.of()));
+        assertEquals(GattCacheMode.AUTO, handler().getDeviceGattCacheMode(ADDRESS));
+
+        childThings(childThing(DEVICE_ADDR, Map.of("gattCache", "future-mode")));
+        assertEquals(GattCacheMode.AUTO, handler().getDeviceGattCacheMode(ADDRESS));
+
+        childThings(childThing("11:22:33:44:55:66", Map.of("gattCache", "off")));
+        assertEquals(GattCacheMode.AUTO, handler().getDeviceGattCacheMode(ADDRESS));
     }
 
     @Test

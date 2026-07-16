@@ -33,6 +33,7 @@ import org.direct_bt.BTManager.ChangedAdapterSetListener;
 import org.direct_bt.BTMode;
 import org.direct_bt.DiscoveryPolicy;
 import org.direct_bt.EIRDataTypeSet;
+import org.direct_bt.GattCacheMode;
 import org.direct_bt.HCIStatusCode;
 import org.direct_bt.PairingMode;
 import org.direct_bt.SMPPairingState;
@@ -865,6 +866,29 @@ public class DirectBTBridgeHandler extends AbstractBluetoothBridgeHandler<Direct
             }
         }
         return "auto";
+    }
+
+    /**
+     * The per-device GATT seed-cache policy ("Fast Reconnect" in the UI), read from the device Thing's
+     * {@code gattCache} config: {@code auto} (validated reuse, default), {@code trust} (unvalidated reuse)
+     * or {@code off} (full rediscovery every connection). Unknown values fall back to {@code auto}.
+     */
+    GattCacheMode getDeviceGattCacheMode(BluetoothAddress address) {
+        Thing childThing = findChildThing(address);
+        if (childThing != null) {
+            Object mode = childThing.getConfiguration().get("gattCache");
+            if (mode instanceof String s) {
+                switch (s.trim().toLowerCase(Locale.ROOT)) {
+                    case "off":
+                        return GattCacheMode.OFF;
+                    case "trust":
+                        return GattCacheMode.TRUST;
+                    default:
+                        break;
+                }
+            }
+        }
+        return GattCacheMode.AUTO;
     }
 
     /**

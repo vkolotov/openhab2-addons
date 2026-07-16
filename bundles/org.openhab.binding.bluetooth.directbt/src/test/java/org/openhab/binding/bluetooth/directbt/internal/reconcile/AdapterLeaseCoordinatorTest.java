@@ -119,8 +119,8 @@ class AdapterLeaseCoordinatorTest {
         ResetBudget budget = new ResetBudget(BUDGET_COOLDOWN_MS, clock);
         AtomicInteger localSweeps = new AtomicInteger();
         AtomicInteger localResets = new AtomicInteger();
-        AdapterLeaseCoordinator coordinator = new AdapterLeaseCoordinator(logger(), budget, localSweeps::incrementAndGet,
-                localResets::incrementAndGet, clock);
+        AdapterLeaseCoordinator coordinator = new AdapterLeaseCoordinator(logger(), budget,
+                localSweeps::incrementAndGet, localResets::incrementAndGet, clock);
 
         for (long t = 0; t < 2 * LADDER_RUNG_MS - STEP_MS; t += STEP_MS) {
             coordinator.decide(true, false, false, false, false);

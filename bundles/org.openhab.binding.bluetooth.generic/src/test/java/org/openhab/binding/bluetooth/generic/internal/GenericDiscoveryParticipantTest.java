@@ -85,8 +85,7 @@ class GenericDiscoveryParticipantTest {
         BluetoothDiscoveryDevice device = deviceWithConnectable(null);
         assertTrue(participant.requiresConnection(device),
                 "unknown connectability must keep the legacy connect-to-fingerprint behavior");
-        assertNotNull(participant.createResult(device),
-                "unknown connectability still claims the device (as before)");
+        assertNotNull(participant.createResult(device), "unknown connectability still claims the device (as before)");
     }
 
     @Test

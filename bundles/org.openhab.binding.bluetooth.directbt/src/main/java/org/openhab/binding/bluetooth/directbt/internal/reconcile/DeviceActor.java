@@ -151,8 +151,8 @@ final class DeviceActor {
     DeviceActorDiagnostics diagnostics() {
         long now = clock.millis();
         DeviceProcedure procedure = activeProcedure;
-        return new DeviceActorDiagnostics(deviceId, generation, state, waitingOn, stateStartedAt,
-                now - stateStartedAt, lastCause, procedure == null ? null : procedure.name());
+        return new DeviceActorDiagnostics(deviceId, generation, state, waitingOn, stateStartedAt, now - stateStartedAt,
+                lastCause, procedure == null ? null : procedure.name());
     }
 
     private void invalidateForAdapterReset(String cause) {
@@ -168,8 +168,8 @@ final class DeviceActor {
 
     private void transitionTo(DeviceActorState next, DeviceWaitingOn nextWaitingOn, String cause) {
         if (state != next || waitingOn != nextWaitingOn) {
-            logger.debug("[actor:{}] gen={} {} -> {} cause={} waitingOn={}", deviceId, generation, state, next,
-                    cause, nextWaitingOn);
+            logger.debug("[actor:{}] gen={} {} -> {} cause={} waitingOn={}", deviceId, generation, state, next, cause,
+                    nextWaitingOn);
         }
         state = next;
         waitingOn = nextWaitingOn;

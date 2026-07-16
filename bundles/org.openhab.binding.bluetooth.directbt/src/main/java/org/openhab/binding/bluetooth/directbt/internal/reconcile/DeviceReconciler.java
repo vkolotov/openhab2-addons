@@ -210,8 +210,7 @@ public class DeviceReconciler extends Reconciler<Boolean, DeviceReconciler.Obser
             return;
         }
         if (!o.hasNative) {
-            shadowRuntime.shadowObserve(DeviceActorState.DISCOVERING, DeviceWaitingOn.NATIVE_HANDLE,
-                    "wanted:noHandle");
+            shadowRuntime.shadowObserve(DeviceActorState.DISCOVERING, DeviceWaitingOn.NATIVE_HANDLE, "wanted:noHandle");
             return;
         }
         if (o.nativeConnected) {
@@ -394,7 +393,8 @@ public class DeviceReconciler extends Reconciler<Boolean, DeviceReconciler.Obser
             // add ~10 s per retry for nothing — clear pending now; normal retry pacing reconnects. The deadline
             // below remains the fallback for the silent case where no event is delivered.
             if (port.consumeConnectAttemptFailedEvent()) {
-                logger.debug("[reconcile:{}] connect attempt reported failed by native event after {}ms; clearing pending",
+                logger.debug(
+                        "[reconcile:{}] connect attempt reported failed by native event after {}ms; clearing pending",
                         name, now - connectingSince);
                 // The actor owns the failure handling: ConnectProcedure emits the best-effort native disconnect,
                 // enters BACKING_OFF, the backoff policy marks disconnected (+ stale-bond self-heal when the
@@ -462,8 +462,8 @@ public class DeviceReconciler extends Reconciler<Boolean, DeviceReconciler.Obser
         drainUnhandledProductionEffects();
 
         DeviceActorDiagnostics diagnostics = productionRuntime.diagnostics();
-        if (diagnostics.state() == DeviceActorState.CONNECTING && diagnostics.waitingOn() == DeviceWaitingOn.NATIVE_CONNECT
-                && port.isFlagConnecting()) {
+        if (diagnostics.state() == DeviceActorState.CONNECTING
+                && diagnostics.waitingOn() == DeviceWaitingOn.NATIVE_CONNECT && port.isFlagConnecting()) {
             commandDisallowedStreak = 0;
         }
         // A synchronous rejection already went through onProductionBackoff() (the runtime applies the backoff
@@ -495,8 +495,7 @@ public class DeviceReconciler extends Reconciler<Boolean, DeviceReconciler.Obser
             // ticks are paused while pairing so a long SMP ladder cannot expire the deadline mid-negotiation.
             if (o.pairing != pairingMirroredToActor) {
                 pairingMirroredToActor = o.pairing;
-                productionRuntime.submit(o.pairing
-                        ? new DeviceEvent.PairingStarted(productionRuntime.generation())
+                productionRuntime.submit(o.pairing ? new DeviceEvent.PairingStarted(productionRuntime.generation())
                         : new DeviceEvent.PairingEnded(productionRuntime.generation()));
             }
             productionRuntime.tick(o.pairing);

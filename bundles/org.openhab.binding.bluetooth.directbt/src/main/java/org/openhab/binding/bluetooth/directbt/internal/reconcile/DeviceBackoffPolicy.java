@@ -29,8 +29,7 @@ final class DeviceBackoffPolicy {
     }
 
     boolean apply(DeviceActorDiagnostics diagnostics) {
-        if (diagnostics.state() != DeviceActorState.BACKING_OFF
-                || diagnostics.generation() == appliedGeneration) {
+        if (diagnostics.state() != DeviceActorState.BACKING_OFF || diagnostics.generation() == appliedGeneration) {
             return false;
         }
         if (port.hasStalePairing()) {

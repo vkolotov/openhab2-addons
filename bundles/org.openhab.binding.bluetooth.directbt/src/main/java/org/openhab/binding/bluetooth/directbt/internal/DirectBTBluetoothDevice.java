@@ -29,6 +29,7 @@ import org.direct_bt.BTGattCharListener;
 import org.direct_bt.BTGattService;
 import org.direct_bt.BTSecurityLevel;
 import org.direct_bt.EInfoReport;
+import org.direct_bt.GattCacheMode;
 import org.direct_bt.GattCharPropertySet;
 import org.direct_bt.HCIStatusCode;
 import org.direct_bt.LE_PHYs;
@@ -544,9 +545,14 @@ public class DirectBTBluetoothDevice extends BaseBluetoothDevice implements Devi
             // - "none" (default): NONE.
             String securityMode = bridge.getDeviceConnectionSecurity(address);
             boolean secured = !BluetoothBindingConstants.CONNECTION_SECURITY_NONE.equalsIgnoreCase(securityMode);
+            // The GATT seed-cache policy ("Fast Reconnect") is likewise per device, from the Thing's gattCache
+            // config. Applied on every attempt so a config change takes effect on the next reconnect; the native
+            // policy map is keyed by address, so it survives device-object churn.
+            GattCacheMode gattCacheMode = bridge.getDeviceGattCacheMode(address);
+            dev.setGattCacheMode(gattCacheMode);
             logger.debug(
-                    "Direct-BT connect procedure for {} begin: securityMode={}, secured={}, bondApplied={}, scanWindow/interval={}/{}, connInterval={}, supervision={}, native={}",
-                    address, securityMode, secured, bondApplied, LE_SCAN_WINDOW, LE_SCAN_INTERVAL,
+                    "Direct-BT connect procedure for {} begin: securityMode={}, secured={}, bondApplied={}, gattCache={}, scanWindow/interval={}/{}, connInterval={}, supervision={}, native={}",
+                    address, securityMode, secured, bondApplied, gattCacheMode, LE_SCAN_WINDOW, LE_SCAN_INTERVAL,
                     bridge.getConnectionIntervalSlots(), bridge.getConnectionSupervisionTimeoutSlots(), dev);
             long securityStarted = System.nanoTime();
             if (BluetoothBindingConstants.CONNECTION_SECURITY_PIN.equalsIgnoreCase(securityMode)) {

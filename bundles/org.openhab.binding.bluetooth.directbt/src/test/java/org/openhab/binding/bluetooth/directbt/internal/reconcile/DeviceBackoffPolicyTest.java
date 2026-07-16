@@ -12,9 +12,9 @@
  */
 package org.openhab.binding.bluetooth.directbt.internal.reconcile;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assertions.assertEquals;
 
 import org.eclipse.jdt.annotation.NonNullByDefault;
 import org.junit.jupiter.api.Test;
@@ -77,7 +77,7 @@ class DeviceBackoffPolicyTest {
     }
 
     private static DeviceActorDiagnostics diagnostics(long generation, DeviceActorState state) {
-        return new DeviceActorDiagnostics("test-device", generation, state, DeviceWaitingOn.BACKOFF_TIMER, 0, 0,
-                "test", null);
+        return new DeviceActorDiagnostics("test-device", generation, state, DeviceWaitingOn.BACKOFF_TIMER, 0, 0, "test",
+                null);
     }
 }

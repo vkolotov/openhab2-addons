@@ -85,8 +85,8 @@ public class AdapterLeaseCoordinator {
      * starvation ladder. Called once per reconcile tick, on the tick thread only; the escalation runnables it
      * fires must themselves be asynchronous (no native work on this thread).
      */
-    public boolean decide(boolean needsDiscovery, boolean backgroundDiscovery, boolean activeScan,
-            boolean connecting, boolean establishing) {
+    public boolean decide(boolean needsDiscovery, boolean backgroundDiscovery, boolean activeScan, boolean connecting,
+            boolean establishing) {
         long now = clock.millis();
         updateLadder(needsDiscovery, now);
         if (!connecting && needsDiscovery && establishing) {
