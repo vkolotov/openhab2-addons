@@ -174,6 +174,81 @@ interface DeviceEvent {
         }
     }
 
+    final class LinkSettleTimerExpired implements DeviceEvent {
+        private final long generation;
+
+        LinkSettleTimerExpired(long generation) {
+            this.generation = generation;
+        }
+
+        @Override
+        public String kind() {
+            return "LinkSettleTimerExpired";
+        }
+
+        @Override
+        public boolean generationScoped() {
+            return true;
+        }
+
+        @Override
+        public long generation() {
+            return generation;
+        }
+    }
+
+    final class GattResolveSucceeded implements DeviceEvent {
+        private final long generation;
+
+        GattResolveSucceeded(long generation) {
+            this.generation = generation;
+        }
+
+        @Override
+        public String kind() {
+            return "GattResolveSucceeded";
+        }
+
+        @Override
+        public boolean generationScoped() {
+            return true;
+        }
+
+        @Override
+        public long generation() {
+            return generation;
+        }
+    }
+
+    final class GattResolveFailed implements DeviceEvent {
+        private final long generation;
+        private final String reason;
+
+        GattResolveFailed(long generation, String reason) {
+            this.generation = generation;
+            this.reason = reason;
+        }
+
+        @Override
+        public String kind() {
+            return "GattResolveFailed";
+        }
+
+        @Override
+        public boolean generationScoped() {
+            return true;
+        }
+
+        @Override
+        public long generation() {
+            return generation;
+        }
+
+        String reason() {
+            return reason;
+        }
+    }
+
     final class ProcedureDeadlineExpired implements DeviceEvent {
         private final long generation;
         private final DeviceProcedureName procedure;
