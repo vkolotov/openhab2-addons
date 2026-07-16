@@ -256,6 +256,22 @@ class DirectBTBridgeHandlerTest {
         assertTrue(discoveryCompleted.await(1, TimeUnit.SECONDS));
     }
 
+    @Test
+    void bridgeExposesDeviceActorDiagnosticSnapshot() {
+        BTDevice nativeDevice = nativeDevice(DEVICE_ADDR);
+        DirectBTBluetoothDevice device = handler().handleDeviceFound(nativeDevice);
+        assertNotNull(device);
+
+        Map<String, String> diagnostics = handler().getDeviceActorDiagnosticSummaries();
+        String summary = diagnostics.get(DEVICE_ADDR);
+
+        assertSame(device, handler().getDevice(ADDRESS));
+        assertEquals(1, diagnostics.size());
+        assertTrue(diagnostics.containsKey(DEVICE_ADDR));
+        assertNotNull(summary);
+        assertTrue(summary.contains("state=IDLE_DISABLED"));
+    }
+
     // --- adapter power-up ladder (powerUpAdapter) ---------------------------------------------------
     // The edge-triggered bring-up copy of the power ladder. These tests lock down the decisions that were
     // tuned against live CSR/Realtek controllers, mirroring AdapterReconcilerTest's coverage of the

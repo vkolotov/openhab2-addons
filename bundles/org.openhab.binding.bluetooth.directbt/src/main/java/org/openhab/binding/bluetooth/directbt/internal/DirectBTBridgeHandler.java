@@ -15,8 +15,11 @@ package org.openhab.binding.bluetooth.directbt.internal;
 import java.nio.file.Path;
 import java.time.Clock;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
@@ -816,6 +819,12 @@ public class DirectBTBridgeHandler extends AbstractBluetoothBridgeHandler<Direct
         device.updateBTDevice(btDevice);
         executor.execute(() -> deviceDiscovered(device));
         return device;
+    }
+
+    Map<String, String> getDeviceActorDiagnosticSummaries() {
+        Map<String, String> result = new LinkedHashMap<>();
+        forEachDevice(d -> result.put(d.getAddress().toString(), d.getActorDiagnostics().summary()));
+        return Collections.unmodifiableMap(result);
     }
 
     boolean isDeviceEnabled(BluetoothAddress address) {
