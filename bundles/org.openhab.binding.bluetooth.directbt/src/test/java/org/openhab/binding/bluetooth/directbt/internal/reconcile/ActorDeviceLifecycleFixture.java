@@ -38,6 +38,7 @@ class ActorDeviceLifecycleFixture implements DeviceLifecycleFixture {
     private boolean scanActive;
     private final DeviceActorRuntime runtime = new DeviceActorRuntime(actor, this::createProcedure, () -> !scanActive,
             port, this::observeRuntimeEvent);
+    private final DeviceBackoffPolicy backoffPolicy = new DeviceBackoffPolicy(port);
     private final AtomicInteger resets = new AtomicInteger();
 
     private boolean adapterHealthy = true;
@@ -201,15 +202,17 @@ class ActorDeviceLifecycleFixture implements DeviceLifecycleFixture {
     private void applyActorBackoffIfNeeded() {
         DeviceActorDiagnostics diagnostics = runtime.diagnostics();
         if (diagnostics.state() == DeviceActorState.BACKING_OFF && diagnostics.generation() != backoffGeneration) {
-            if (port.hasStalePairing()) {
-                port.clearStalePairing();
-            }
-            markDisconnectedAndBackoff();
+            backoffPolicy.apply(diagnostics);
+            recordBackoff();
         }
     }
 
     private void markDisconnectedAndBackoff() {
         port.markDisconnected();
+        recordBackoff();
+    }
+
+    private void recordBackoff() {
         gattProcedureActive = false;
         settleDueAt = -1;
         backoffUntil = clock.millis() + BACKOFF_MS;
