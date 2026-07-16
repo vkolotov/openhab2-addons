@@ -575,6 +575,35 @@ class DeviceReconcilerTest {
     }
 
     @Test
+    void successfulConnectIsNotTornDownByTheParkedActorDeadline() {
+        // After NativeConnected the production actor parks in LINK_SETTLING (the settle procedure is outside
+        // the connect-only slice) with the CONNECT deadline still armed. Ticking must be phase-gated: a parked
+        // post-success actor firing its stale deadline would disconnect a healthy link 8s after every connect.
+        FakeDevicePort port = new FakeDevicePort();
+        port.wanted = true;
+        port.hasNative = true;
+        port.connectResult = HCIStatusCode.SUCCESS;
+
+        MutableClock clock = new MutableClock(START);
+        DeviceReconciler r = reconciler(port, scanOff(), clock);
+
+        r.reconcile(); // -> CONNECTING (actor CONNECT procedure in flight)
+        assertEquals(1, port.connectNativeCalls);
+        port.settleNativeConnected();
+        port.gattResolving = true; // keep the device out-of-sync so act() keeps running with the parked actor
+        clock.advance(1000);
+        r.reconcile(); // observes connected: actor gets NativeConnected and parks
+        assertTrue(port.flagConnected, "the connection must be marked");
+
+        for (int i = 0; i < 30; i++) { // 30s of ticks, far past the 8s CONNECT deadline
+            clock.advance(1000);
+            r.reconcile();
+        }
+        assertEquals(0, port.disconnectNativeCalls, "a parked post-success actor must never touch the link");
+        assertEquals(0, port.markDisconnectedCalls, "the healthy connection must survive the dormant deadline");
+    }
+
+    @Test
     void stuckConnectingEscalatesToOneAdapterResetPastHardDeadline() {
         FakeDevicePort port = new FakeDevicePort();
         port.wanted = true;

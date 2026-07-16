@@ -115,6 +115,9 @@ public class DeviceReconciler extends Reconciler<Boolean, DeviceReconciler.Obser
     // Epoch millis of the tick at which we first observed pairing in progress during the current CONNECTING window,
     // or 0 if not currently pairing. Used to freeze the connect deadline across an SMP negotiation (see act()).
     private long pairingSince;
+    // Last pairing state mirrored into the production actor (rising/falling edges become Pairing* events, whose
+    // transitions reset the actor's state clock — the actor-side equivalent of the connect-deadline freeze).
+    private boolean pairingMirroredToActor;
     // Gate timing diagnostics. These do not drive behavior; they explain where connection setup time is spent.
     private long waitingNativeHandleSince;
     private long waitingScanOffSince;
@@ -138,7 +141,7 @@ public class DeviceReconciler extends Reconciler<Boolean, DeviceReconciler.Obser
         this.requestAdapterReset = requestAdapterReset;
         this.productionRuntime = new DeviceActorRuntime(new DeviceActor(port.id(), logger, clock),
                 DeviceReconciler::createProductionProcedure, scanIsOff, port, this::observeProductionRuntimeEvent,
-                new DeviceBackoffPolicy(port), diagnostics -> clearConnectWindow());
+                new DeviceBackoffPolicy(port), this::onProductionBackoff);
         this.shadowRuntime = new DeviceActorRuntime(new DeviceActor(port.id(), logger, clock),
                 DeviceReconciler::createShadowProcedure, () -> false, new ShadowDevicePort(port.id()));
     }
@@ -239,6 +242,7 @@ public class DeviceReconciler extends Reconciler<Boolean, DeviceReconciler.Obser
     @Override
     protected void act(Boolean unusedDesired, Observed o) {
         long now = clock.millis();
+        syncProductionRuntime(o);
 
         // (5) STATE-FLAG SYNC — always reconcile our flag to native truth first.
         if (o.hasNative && o.nativeConnected && !o.flagConnected) {
@@ -392,39 +396,17 @@ public class DeviceReconciler extends Reconciler<Boolean, DeviceReconciler.Obser
             if (port.consumeConnectAttemptFailedEvent()) {
                 logger.debug("[reconcile:{}] connect attempt reported failed by native event after {}ms; clearing pending",
                         name, now - connectingSince);
-                port.disconnectNative();
-                if (port.hasStalePairing()) {
-                    logger.debug("[reconcile:{}] failed while pre-paired; clearing stale bond to re-pair fresh", name);
-                    port.clearStalePairing();
-                }
-                clearConnectWindow();
-                port.markDisconnected();
+                // The actor owns the failure handling: ConnectProcedure emits the best-effort native disconnect,
+                // enters BACKING_OFF, the backoff policy marks disconnected (+ stale-bond self-heal when the
+                // device is pre-paired), and onProductionBackoff() closes the connect window.
+                productionRuntime.submit(new DeviceEvent.ConnectFailed(productionRuntime.generation(),
+                        "NATIVE_DISCONNECT_EVENT", false));
                 return;
             }
-            long connectingFor = now - connectingSince;
-            if (connectingFor > CONNECT_DEADLINE_MS) {
-                logger.debug("[reconcile:{}] CONNECTING for {}ms with no native link; clearing pending", name,
-                        connectingFor);
-                port.disconnectNative();
-                // STALE-BOND SELF-HEAL: a create-connection that never establishes while the device holds
-                // pre-paired keys is the "dead bond" case — an encrypted reconnect that reuses a stored LTK the
-                // peer no longer honours (e.g. a peripheral that forgot the bond / re-advertises fresh) silently
-                // never completes. Clear the stale keys so the next attempt does a FRESH pairing instead of
-                // reusing the dead LTK. Same "trust the fresh frame, not a cached object" discipline as clearing a
-                // stale native handle on a silent drop. Cheap and safe for the non-pre-paired case (no-op there).
-                if (port.hasStalePairing()) {
-                    logger.debug("[reconcile:{}] stuck while pre-paired; clearing stale bond to re-pair fresh", name);
-                    port.clearStalePairing();
-                }
-                if (connectingFor > PENDING_RESET_AFTER_MS && resetBudget.tryReset(name)) {
-                    logger.warn("[reconcile:{}] create-connection wedged {}ms; requesting adapter reset", name,
-                            connectingFor);
-                    requestAdapterReset.run();
-                }
-                // Drop back to DISCONNECTED so the next tick can re-attempt a clean connect.
-                clearConnectWindow();
-                port.markDisconnected();
-            }
+            // The 8 s "CONNECTING with no native link" deadline is actor-owned now: syncProductionRuntime()
+            // ticks the CONNECT procedure, whose max-residency expiry produces the same disconnect/backoff/
+            // clear sequence as the evented failure above (frozen-design constraint 5). The 16 s wedge
+            // escalation lives in onProductionBackoff(), which sees the pending window's age before it closes.
             return; // give the current attempt its deadline before issuing another connect
         }
 
@@ -474,16 +456,77 @@ public class DeviceReconciler extends Reconciler<Boolean, DeviceReconciler.Obser
     private void startProductionConnect(long now) {
         lastConnectAttemptAt = now;
         connectingSince = now;
+        pairingMirroredToActor = false;
         logger.debug("[reconcile:{}] starting actor-owned connect attempt", name);
         productionRuntime.start(new ConnectProcedure(CONNECT_DEADLINE_MS), "wanted:connectReady");
+        drainUnhandledProductionEffects();
 
         DeviceActorDiagnostics diagnostics = productionRuntime.diagnostics();
         if (diagnostics.state() == DeviceActorState.CONNECTING && diagnostics.waitingOn() == DeviceWaitingOn.NATIVE_CONNECT
                 && port.isFlagConnecting()) {
             commandDisallowedStreak = 0;
-        } else if (diagnostics.state() == DeviceActorState.BACKING_OFF) {
-            clearConnectWindow();
         }
+        // A synchronous rejection already went through onProductionBackoff() (the runtime applies the backoff
+        // policy inside start()), which closed the connect window — no diagnostics sniffing needed here.
+    }
+
+    /**
+     * Mirror the async connect-attempt outcomes into the production actor and drive its deadline. Runs at the
+     * top of every act(). The production slice is connect-only, so the actor is only fed and ticked while its
+     * CONNECT procedure is in flight; after a successful establishment it parks (LINK_SETTLING) until the next
+     * attempt replaces it — the reconciler still owns settle/resolve/subscribe.
+     */
+    private void syncProductionRuntime(Observed o) {
+        DeviceActorDiagnostics diagnostics = productionRuntime.diagnostics();
+        boolean connectInFlight = diagnostics.activeProcedureName() == DeviceProcedureName.CONNECT
+                && diagnostics.state() == DeviceActorState.CONNECTING;
+        if (!connectInFlight) {
+            drainUnhandledProductionEffects();
+            return;
+        }
+        if (o.hasNative && o.nativeConnected) {
+            // The attempt succeeded: the procedure records it and hands off (the settle handoff effect is
+            // outside the production slice and gets drained below); the rejection streak is over.
+            commandDisallowedStreak = 0;
+            productionRuntime.submit(new DeviceEvent.NativeConnected(productionRuntime.generation()));
+        } else {
+            // Mirror pairing edges so the actor's state clock freezes/resets exactly like the reconciler's
+            // connect-deadline freeze: PairingStarted/Ended transitions restart the residency window, and
+            // ticks are paused while pairing so a long SMP ladder cannot expire the deadline mid-negotiation.
+            if (o.pairing != pairingMirroredToActor) {
+                pairingMirroredToActor = o.pairing;
+                productionRuntime.submit(o.pairing
+                        ? new DeviceEvent.PairingStarted(productionRuntime.generation())
+                        : new DeviceEvent.PairingEnded(productionRuntime.generation()));
+            }
+            productionRuntime.tick(o.pairing);
+        }
+        drainUnhandledProductionEffects();
+    }
+
+    /** Effects the connect-only production slice deliberately does not execute (e.g. the settle handoff). */
+    private void drainUnhandledProductionEffects() {
+        for (DeviceEffect effect : productionRuntime.drainUnhandledEffects()) {
+            logger.debug("[reconcile:{}] actor effect outside the production slice: {}", name, effect.operation());
+        }
+    }
+
+    /**
+     * The production CONNECT procedure entered BACKING_OFF (evented failure, sync rejection, or its deadline).
+     * The backoff policy has already marked the port disconnected (+ stale-bond self-heal); here the reconciler
+     * closes its connect window and applies the wedge escalation the old inline deadline path carried: a pending
+     * window that survived past the hard deadline means the create-connection is wedged at the controller.
+     */
+    private void onProductionBackoff(DeviceActorDiagnostics diagnostics) {
+        if (connectingSince != 0) {
+            long connectingFor = clock.millis() - connectingSince;
+            if (connectingFor > PENDING_RESET_AFTER_MS && resetBudget.tryReset(name)) {
+                logger.warn("[reconcile:{}] create-connection wedged {}ms; requesting adapter reset", name,
+                        connectingFor);
+                requestAdapterReset.run();
+            }
+        }
+        clearConnectWindow();
     }
 
     public @Nullable Observed lastObserved() {
