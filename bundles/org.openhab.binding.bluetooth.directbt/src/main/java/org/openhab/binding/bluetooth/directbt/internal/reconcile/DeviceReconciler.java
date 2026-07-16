@@ -93,6 +93,11 @@ public class DeviceReconciler extends Reconciler<Boolean, DeviceReconciler.Obser
     // timeouts (10+ s per attempt), never instantly.
     private static final long GATT_WARMUP_GRACE_MS = 5000;
 
+    // Minimum age of a freshly observed connection before the first GATT discovery is attempted. The controller can
+    // report the ACL as connected before the ATT/L2CAP path is usable; probing native GATT during that gap returns an
+    // instant empty model and was observed to coincide with fast 0x3e disconnects on the HP link.
+    private static final long GATT_FIRST_RESOLVE_DELAY_MS = 500;
+
     // Consecutive COMMAND_DISALLOWED connect rejections before the adapter reset is requested. One or two are
     // the benign connect/scan race; a persistent streak is the wedged-controller case.
     private static final int COMMAND_DISALLOWED_RESET_STREAK = 3;
@@ -229,6 +234,11 @@ public class DeviceReconciler extends Reconciler<Boolean, DeviceReconciler.Obser
                 return;
             }
             if (!o.gattResolved) {
+                if (connectedObservedAt != 0 && now - connectedObservedAt < GATT_FIRST_RESOLVE_DELAY_MS) {
+                    logger.debug("[reconcile:{}] connected but GATT unresolved; waiting {}ms before first resolve",
+                            name, GATT_FIRST_RESOLVE_DELAY_MS - (now - connectedObservedAt));
+                    return;
+                }
                 logger.debug("[reconcile:{}] connected but GATT unresolved; resolving", name);
                 if (port.isGattResolving()) {
                     resolveFailStreak = 0;

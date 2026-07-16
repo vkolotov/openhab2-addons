@@ -243,7 +243,7 @@ class DeviceReconcilerTest {
             r.reconcile();
             clock.advance(900);
         }
-        assertEquals(5, port.resolveGattCalls, "warm-up resolves keep retrying");
+        assertEquals(4, port.resolveGattCalls, "warm-up resolves retry after the first-resolve delay");
         assertEquals(0, port.markDisconnectedCalls, "instant empty resolves during warm-up are not failures");
 
         clock.advance(2_000); // past the 5 s grace: unresolved-and-instant now counts as evidence again
@@ -253,6 +253,33 @@ class DeviceReconcilerTest {
             clock.advance(900);
         }
         assertEquals(1, port.markDisconnectedCalls, "past the grace the silent-drop streak must still fire");
+    }
+
+    @Test
+    void firstGattResolveWaitsForFreshConnectionToSettle() {
+        FakeDevicePort port = new FakeDevicePort();
+        port.wanted = true;
+        port.hasNative = true;
+        port.nativeConnected = true;
+        port.flagConnected = false; // first tick marks connected and stamps connectedObservedAt
+        port.gattResolved = false;
+
+        MutableClock clock = new MutableClock(START);
+        DeviceReconciler r = reconciler(port, scanOff(), clock);
+
+        r.reconcile();
+        assertEquals(1, port.markConnectedCalls);
+        assertEquals(0, port.resolveGattCalls, "must not probe native GATT in the same tick as connect observation");
+
+        clock.advance(499);
+        r.expediteNextAct();
+        r.reconcile();
+        assertEquals(0, port.resolveGattCalls, "must wait the full first-resolve delay");
+
+        clock.advance(1);
+        r.expediteNextAct();
+        r.reconcile();
+        assertEquals(1, port.resolveGattCalls, "after the settle delay, GATT discovery may start");
     }
 
     @Test
