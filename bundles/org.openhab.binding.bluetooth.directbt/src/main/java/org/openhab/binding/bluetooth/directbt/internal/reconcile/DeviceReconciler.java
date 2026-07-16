@@ -294,11 +294,30 @@ public class DeviceReconciler extends Reconciler<Boolean, DeviceReconciler.Obser
                     pairingSince = now;
                     logger.debug("[reconcile:{}] pairing in progress; freezing connect deadline", name);
                 }
+                // The SMP ladder's own connect/disconnect churn fires deviceDisconnected events; discard them so
+                // they cannot leak past the freeze and fast-fail the attempt once pairing ends.
+                port.consumeConnectAttemptFailedEvent();
                 return; // negotiating: make no progress judgement, let SMP run
             } else if (pairingSince != 0) {
                 connectingSince += now - pairingSince; // shift deadline forward by the paused (pairing) duration
                 pairingSince = 0;
                 logger.debug("[reconcile:{}] pairing ended; resuming connect deadline", name);
+            }
+            // EVENT-DRIVEN FAST RETRY: native already told us this attempt is over (deviceDisconnected while
+            // CONNECTING, e.g. a 0x3e establishment failure known within ~2 s). Waiting out the deadline would
+            // add ~10 s per retry for nothing — clear pending now; normal retry pacing reconnects. The deadline
+            // below remains the fallback for the silent case where no event is delivered.
+            if (port.consumeConnectAttemptFailedEvent()) {
+                logger.debug("[reconcile:{}] connect attempt reported failed by native event after {}ms; clearing pending",
+                        name, now - connectingSince);
+                port.disconnectNative();
+                if (port.hasStalePairing()) {
+                    logger.debug("[reconcile:{}] failed while pre-paired; clearing stale bond to re-pair fresh", name);
+                    port.clearStalePairing();
+                }
+                clearConnectWindow();
+                port.markDisconnected();
+                return;
             }
             long connectingFor = now - connectingSince;
             if (connectingFor > CONNECT_DEADLINE_MS) {

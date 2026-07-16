@@ -181,7 +181,9 @@ public class DirectBTBridgeHandler extends AbstractBluetoothBridgeHandler<Direct
             // Record and log why the link dropped so it is not lost; the core status otherwise shows only a bare
             // "communication error". The reconciler still drives the actual reconnect via requeueReconcile().
             logger.debug("Direct-BT deviceDisconnected: {} reason={}", device.getAddressAndType(), reason);
-            getDevice(toAddress(device)).setDisconnectReason(String.valueOf(reason));
+            DirectBTBluetoothDevice ohDevice = getDevice(toAddress(device));
+            ohDevice.setDisconnectReason(String.valueOf(reason));
+            ohDevice.noteNativeDisconnectEvent();
             requeueReconcile();
         }
 

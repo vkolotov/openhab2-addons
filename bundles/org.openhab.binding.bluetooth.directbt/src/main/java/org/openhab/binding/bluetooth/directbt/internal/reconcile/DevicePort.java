@@ -56,6 +56,15 @@ public interface DevicePort {
      */
     boolean isPairing();
 
+    /**
+     * Read-and-clear: whether a native {@code deviceDisconnected} event arrived since the current connect attempt
+     * started. The reconciler uses this to clear a pending connect as soon as the attempt is known dead (e.g. a
+     * {@code 0x3e} establishment failure) instead of waiting out the full pending deadline; the deadline remains
+     * the fallback for silent drops where no event is delivered. {@link #connectNative()} resets it, so an event
+     * from a previous attempt can never cancel a new one.
+     */
+    boolean consumeConnectAttemptFailedEvent();
+
     /** Drive the openHAB CONNECTED transition + cleanup-free notify (state-flag sync up to native truth). */
     void markConnected();
 

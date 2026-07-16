@@ -51,6 +51,8 @@ class FakeDevicePort implements DevicePort {
     boolean flagConnecting;
     // Whether an SMP negotiation is currently in progress (true while setConnSecurityAuto iterates the ladder).
     boolean pairing;
+    // Whether a native deviceDisconnected event arrived since the current connect attempt started.
+    boolean connectAttemptFailed;
     // Whether the device holds stored SMP keys a reconnect would reuse (BTDevice.isPrePaired()).
     boolean prePaired;
     // Whether the configured security requirement (e.g. authenticated "pin") is unmet on the current link.
@@ -135,8 +137,16 @@ class FakeDevicePort implements DevicePort {
     }
 
     @Override
+    public boolean consumeConnectAttemptFailedEvent() {
+        boolean was = connectAttemptFailed;
+        connectAttemptFailed = false;
+        return was;
+    }
+
+    @Override
     public HCIStatusCode connectNative() {
         connectNativeCalls++;
+        connectAttemptFailed = false; // mirrors the real port: a stale event cannot cancel a new attempt
         return connectResult;
     }
 

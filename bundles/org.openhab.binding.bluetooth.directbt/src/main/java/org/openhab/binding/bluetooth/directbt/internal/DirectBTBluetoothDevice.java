@@ -119,6 +119,10 @@ public class DirectBTBluetoothDevice extends BaseBluetoothDevice implements Devi
     // from two openHAB threads for the same native device races the native Java-object references and has been
     // observed live as DBTGattChar/DBTGattService null-reference failures.
     private final AtomicBoolean gattDiscoveryInFlight = new AtomicBoolean();
+
+    // Set by the bridge when a native deviceDisconnected event arrives; consumed by the reconciler to clear a
+    // pending connect the moment its failure is known instead of waiting out the pending deadline.
+    private final AtomicBoolean connectAttemptFailedEvent = new AtomicBoolean();
     // When the in-flight guard was taken (clock.millis(); 0 = not held). Used to detect a hung discovery.
     private volatile long gattDiscoveryStartedMs;
 
@@ -488,8 +492,19 @@ public class DirectBTBluetoothDevice extends BaseBluetoothDevice implements Devi
         return clock.millis() >= suppressAdoptionUntilMillis;
     }
 
+    /** Bridge callback: a native deviceDisconnected event arrived for this device. */
+    void noteNativeDisconnectEvent() {
+        connectAttemptFailedEvent.set(true);
+    }
+
+    @Override
+    public boolean consumeConnectAttemptFailedEvent() {
+        return connectAttemptFailedEvent.getAndSet(false);
+    }
+
     @Override
     public HCIStatusCode connectNative() {
+        connectAttemptFailedEvent.set(false); // an event from a previous attempt must not cancel this one
         long started = System.nanoTime();
         BTDevice dev = device;
         if (dev == null) {

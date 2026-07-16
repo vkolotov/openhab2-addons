@@ -196,6 +196,57 @@ class DeviceReconcilerTest {
     }
 
     // ---------------------------------------------------------------------------------------------
+    // Event-driven fast retry: a deviceDisconnected event during CONNECTING clears the pending attempt
+    // immediately instead of waiting out the connect deadline; pairing-ladder churn events are discarded.
+    // ---------------------------------------------------------------------------------------------
+    @Test
+    void connectAttemptFailureEventClearsPendingBeforeDeadline() {
+        FakeDevicePort port = new FakeDevicePort();
+        port.wanted = true;
+        port.hasNative = true;
+        port.connectResult = HCIStatusCode.SUCCESS;
+
+        MutableClock clock = new MutableClock(START);
+        DeviceReconciler r = reconciler(port, scanOff(), clock);
+
+        r.reconcile(); // attempt #1 -> CONNECTING
+        assertEquals(1, port.connectNativeCalls);
+        port.flagConnecting = true;
+
+        port.connectAttemptFailed = true; // 0x3e-style deviceDisconnected arrived shortly after the attempt
+        clock.advance(5_000); // past the tick backoff but well under CONNECT_DEADLINE_MS
+        r.reconcile();
+        assertEquals(1, port.markDisconnectedCalls, "a failed attempt must be cleared as soon as its event arrives");
+        assertEquals(1, port.disconnectNativeCalls, "the failed pending attempt gets a best-effort native disconnect");
+    }
+
+    @Test
+    void pairingChurnDiscardsFailureEventsInsteadOfFastFailing() {
+        FakeDevicePort port = new FakeDevicePort();
+        port.wanted = true;
+        port.hasNative = true;
+        port.connectResult = HCIStatusCode.SUCCESS;
+
+        MutableClock clock = new MutableClock(START);
+        DeviceReconciler r = reconciler(port, scanOff(), clock);
+
+        r.reconcile(); // -> CONNECTING
+        port.flagConnecting = true;
+        port.pairing = true;
+        port.connectAttemptFailed = true; // SMP ladder connect/disconnect churn
+
+        clock.advance(5_000);
+        r.reconcile(); // freeze: discard the event, make no progress judgement
+        assertEquals(0, port.markDisconnectedCalls, "pairing churn must not tear the negotiation down");
+        assertFalse(port.connectAttemptFailed, "the churn event must be consumed by the freeze");
+
+        port.pairing = false;
+        clock.advance(1_000);
+        r.reconcile(); // resume: the frozen deadline continues, no stale event may fast-fail the attempt
+        assertEquals(0, port.markDisconnectedCalls, "no stale churn event may fast-fail the resumed attempt");
+    }
+
+    // ---------------------------------------------------------------------------------------------
     // Connect blocked while scanning: the controller rejects create-connection while a scan runs, so
     // connectNative() must NOT be issued until scan is observed OFF.
     // ---------------------------------------------------------------------------------------------
