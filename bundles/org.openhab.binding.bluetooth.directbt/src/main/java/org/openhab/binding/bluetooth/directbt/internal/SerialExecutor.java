@@ -17,7 +17,6 @@ import java.util.concurrent.Executor;
 import java.util.concurrent.RejectedExecutionException;
 
 import org.eclipse.jdt.annotation.NonNullByDefault;
-import org.eclipse.jdt.annotation.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -63,14 +62,13 @@ final class SerialExecutor implements Executor {
 
     private void drain() {
         while (true) {
-            @Nullable
             Runnable task;
             synchronized (queue) {
-                task = queue.poll();
-                if (task == null) {
+                if (queue.isEmpty()) {
                     draining = false;
                     return;
                 }
+                task = queue.remove();
             }
             try {
                 task.run();

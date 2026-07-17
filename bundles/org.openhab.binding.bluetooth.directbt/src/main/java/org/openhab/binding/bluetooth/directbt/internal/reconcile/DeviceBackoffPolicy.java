@@ -37,7 +37,11 @@ final class DeviceBackoffPolicy {
         if (diagnostics.state() != DeviceActorState.BACKING_OFF || diagnostics.generation() == appliedGeneration) {
             return false;
         }
-        port.markDisconnected();
+        if (diagnostics.waitingOn() == DeviceWaitingOn.ADAPTER_RESET) {
+            port.markDisconnectedByAdapterReset();
+        } else {
+            port.markDisconnected();
+        }
         appliedGeneration = diagnostics.generation();
         return true;
     }

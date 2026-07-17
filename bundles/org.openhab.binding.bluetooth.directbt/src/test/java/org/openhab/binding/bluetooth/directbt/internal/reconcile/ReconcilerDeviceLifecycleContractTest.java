@@ -16,9 +16,7 @@ import org.eclipse.jdt.annotation.NonNullByDefault;
 
 /**
  * Runs the implementation-neutral {@link DeviceLifecycleContract} against the current
- * {@link DeviceReconciler}. When the actor/procedure implementation lands (see
- * docs/directbt-device-fsm-actor-proposal-2026-07-16.md), a sibling {@code ActorDeviceLifecycleContractTest}
- * runs the SAME contract against it — the migration is behaviour-preserving iff both stay green.
+ * actor-backed {@link DeviceReconciler}.
  *
  * @author Vlad Kolotov - Initial contribution
  */

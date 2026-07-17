@@ -607,10 +607,6 @@ public class DeviceReconciler extends Reconciler<Boolean, DeviceReconciler.Obser
         return productionRuntime.diagnostics();
     }
 
-    DeviceActorDiagnostics productionActorDiagnostics() {
-        return productionRuntime.diagnostics();
-    }
-
     DeviceActorRuntime productionRuntimeForTest() {
         return productionRuntime;
     }

@@ -69,6 +69,7 @@ class FakeDevicePort implements DevicePort {
     int markConnectedCalls;
     int markConnectingCalls;
     int markDisconnectedCalls;
+    int markDisconnectedByAdapterResetCalls;
     int resolveGattCalls;
     int clearStalePairingCalls;
 
@@ -131,6 +132,16 @@ class FakeDevicePort implements DevicePort {
         markDisconnectedCalls++;
         // Real DirectBTBluetoothDevice.markDisconnected() clears the native handle so the device is re-found
         // from a fresh advert instead of reconnecting a stale handle; model that here.
+        dropModelHandle();
+    }
+
+    @Override
+    public void markDisconnectedByAdapterReset() {
+        markDisconnectedByAdapterResetCalls++;
+        dropModelHandle();
+    }
+
+    private void dropModelHandle() {
         hasNative = false;
         nativeConnected = false;
         gattResolved = false;

@@ -127,6 +127,7 @@ public class DirectBTBridgeHandler extends AbstractBluetoothBridgeHandler<Direct
     // Adapter reset fanout (constraint 12): monotonic generation stamped on every reset announcement, and the
     // completion handed from the async reset thread to the reconcile tick that announces it to the devices.
     private final AtomicLong adapterResetGeneration = new AtomicLong();
+    private final AtomicBoolean adapterResetInFlight = new AtomicBoolean();
     private final AtomicReference<@Nullable AdapterResetCompletion> pendingAdapterResetCompletion = new AtomicReference<>();
     // When the last reconcile tick (periodic or event-driven) last ran, for the MIN_OBSERVE_INTERVAL_MS floor.
     private volatile long lastTickAt;
@@ -656,13 +657,18 @@ public class DirectBTBridgeHandler extends AbstractBluetoothBridgeHandler<Direct
     }
 
     /**
-     * Reset the adapter on a device's behalf (wedged create-connection / COMMAND_DISALLOWED). The caller
-     * (DeviceReconciler) has already consumed the shared reset budget via its own {@code tryReset(name)} before
-     * invoking this, so do not gate on {@code tryReset} again here.
+     * Reset the adapter on a device/coordinator's behalf (wedged create-connection, COMMAND_DISALLOWED, or hunted
+     * device recovery). The caller has already consumed the shared reset budget via its own {@code tryReset(...)}
+     * before invoking this, so do not gate on {@code tryReset} again here. This method still owns the in-flight
+     * guard: a hung native reset must not allow more native reset calls to stack up behind it.
      */
     void requestAdapterReset() {
         BTAdapter a = adapter;
         if (a == null) {
+            return;
+        }
+        if (!adapterResetInFlight.compareAndSet(false, true)) {
+            logger.debug("Direct-BT adapter reset requested while reset is already in flight; ignoring duplicate");
             return;
         }
         // FANOUT (frozen constraint 12): an adapter reset is a generation boundary for EVERY device on it —
@@ -678,16 +684,23 @@ public class DirectBTBridgeHandler extends AbstractBluetoothBridgeHandler<Direct
         logger.warn("Direct-BT adapter reset requested (generation {}); running async", adapterGeneration);
         executor.execute(() -> {
             long started = System.nanoTime();
-            HCIStatusCode rc = a.reset();
-            logger.warn("Direct-BT adapter reset -> {} after {}ms (powered={})", rc,
-                    (System.nanoTime() - started) / 1_000_000, a.isPowered());
-            if (rc == HCIStatusCode.SUCCESS && !a.isPowered()) {
-                a.setPowered(true);
+            String result;
+            try {
+                HCIStatusCode rc = a.reset();
+                result = rc.name();
+                logger.warn("Direct-BT adapter reset -> {} after {}ms (powered={})", rc,
+                        (System.nanoTime() - started) / 1_000_000, a.isPowered());
+                if (rc == HCIStatusCode.SUCCESS && !a.isPowered()) {
+                    a.setPowered(true);
+                }
+            } catch (RuntimeException | LinkageError e) {
+                result = "THREW_" + e.getClass().getSimpleName();
+                logger.warn("Direct-BT adapter reset threw after {}ms", (System.nanoTime() - started) / 1_000_000, e);
             }
             // Completion fans out on the RECONCILE TICK, not this pool thread: the actor runtime is
             // caller-threaded, so the announcement must be serialized with every other actor input. Any
             // result re-parks the actors by intent (a failed reset leaves the adapter no less invalidated).
-            pendingAdapterResetCompletion.set(new AdapterResetCompletion(adapterGeneration, rc.name()));
+            pendingAdapterResetCompletion.set(new AdapterResetCompletion(adapterGeneration, result));
             requeueReconcile();
         });
     }
@@ -714,7 +727,11 @@ public class DirectBTBridgeHandler extends AbstractBluetoothBridgeHandler<Direct
         }
         logger.debug("Direct-BT adapter reset generation {} completed ({}); announcing to device actors",
                 completion.generation, completion.result);
-        forEachDevice(d -> d.getReconciler().onAdapterResetCompleted(completion.generation, completion.result));
+        try {
+            forEachDevice(d -> d.getReconciler().onAdapterResetCompleted(completion.generation, completion.result));
+        } finally {
+            adapterResetInFlight.set(false);
+        }
     }
 
     private void bringUpAdapter(BTAdapter added, BluetoothAddress wanted) {

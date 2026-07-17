@@ -76,8 +76,27 @@ class DeviceBackoffPolicyTest {
         assertEquals(2, port.markDisconnectedCalls);
     }
 
+    @Test
+    void adapterResetBackoffInvalidatesModelWithoutNativeCleanup() {
+        FakeDevicePort port = new FakeDevicePort();
+        port.hasNative = true;
+        port.nativeConnected = true;
+        DeviceBackoffPolicy policy = new DeviceBackoffPolicy(port);
+
+        assertTrue(policy.apply(diagnostics(41, DeviceActorState.BACKING_OFF, DeviceWaitingOn.ADAPTER_RESET)));
+
+        assertEquals(0, port.markDisconnectedCalls);
+        assertEquals(1, port.markDisconnectedByAdapterResetCalls);
+        assertFalse(port.hasNative);
+        assertFalse(port.nativeConnected);
+    }
+
     private static DeviceActorDiagnostics diagnostics(long generation, DeviceActorState state) {
-        return new DeviceActorDiagnostics("test-device", generation, state, DeviceWaitingOn.BACKOFF_TIMER, 0, 0, "test",
-                null);
+        return diagnostics(generation, state, DeviceWaitingOn.BACKOFF_TIMER);
+    }
+
+    private static DeviceActorDiagnostics diagnostics(long generation, DeviceActorState state,
+            DeviceWaitingOn waitingOn) {
+        return new DeviceActorDiagnostics("test-device", generation, state, waitingOn, 0, 0, "test", null);
     }
 }

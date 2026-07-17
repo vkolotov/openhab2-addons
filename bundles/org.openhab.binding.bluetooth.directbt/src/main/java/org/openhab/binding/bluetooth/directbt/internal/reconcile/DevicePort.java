@@ -71,6 +71,13 @@ public interface DevicePort {
     /** Drive the openHAB DISCONNECTED transition + release listeners/services (state-flag sync down). */
     void markDisconnected();
 
+    /**
+     * Adapter reset already invalidated the native world. Drop this wrapper's model/handle without issuing
+     * per-device native disconnect/remove calls; stacking those calls in front of a reset can block the reconcile
+     * thread on the same native layer the reset is trying to recover.
+     */
+    void markDisconnectedByAdapterReset();
+
     /** Set our flag to CONNECTING (we are about to / are establishing). */
     void markConnecting();
 

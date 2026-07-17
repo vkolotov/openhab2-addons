@@ -24,7 +24,7 @@ import org.eclipse.jdt.annotation.NonNullByDefault;
 import org.junit.jupiter.api.Test;
 
 /**
- * Contract tests for the shadow actor runtime, before production device procedures are migrated into it.
+ * Contract tests for the per-device actor runtime.
  *
  * @author Vlad Kolotov - Initial contribution
  */
@@ -92,7 +92,8 @@ class DeviceActorTest {
         long beforeReset = actor.diagnostics().generation();
 
         actor.submit(new DeviceEvent.AdapterResetStarted(41));
-        assertEquals(1, procedure.cancelReasons.size());
+        assertEquals(0, procedure.cancelReasons.size(),
+                "adapter reset must fence the procedure without running per-device cancellation effects");
         assertEquals(DeviceActorState.BACKING_OFF, actor.diagnostics().state());
         assertEquals(DeviceWaitingOn.ADAPTER_RESET, actor.diagnostics().waitingOn());
         assertTrue(actor.diagnostics().generation() > beforeReset);

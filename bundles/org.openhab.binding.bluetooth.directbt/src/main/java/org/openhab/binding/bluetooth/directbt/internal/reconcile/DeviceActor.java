@@ -148,11 +148,11 @@ final class DeviceActor {
     }
 
     private void invalidateForAdapterReset(String cause) {
-        DeviceProcedure procedure = activeProcedure;
-        if (procedure != null) {
-            procedure.cancel(cause, context());
-            activeProcedure = null;
-        }
+        // The adapter reset itself invalidates every native handle. Do not run procedure cancellation effects here:
+        // they are per-device native cleanup calls, and executing them on the reconcile thread before reset can block
+        // behind the same native layer the reset is meant to recover.
+        activeProcedure = null;
+        effects.clear();
         generation++;
         deadlineReported = false;
         transitionTo(DeviceActorState.BACKING_OFF, DeviceWaitingOn.ADAPTER_RESET, cause);

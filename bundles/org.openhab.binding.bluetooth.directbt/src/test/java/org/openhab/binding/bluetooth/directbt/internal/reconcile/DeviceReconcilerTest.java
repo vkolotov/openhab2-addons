@@ -161,9 +161,9 @@ class DeviceReconcilerTest {
 
         assertEquals(1, port.connectNativeCalls);
         assertEquals(1, port.markConnectingCalls);
-        assertEquals(DeviceActorState.CONNECTING, r.productionActorDiagnostics().state());
-        assertEquals(DeviceWaitingOn.NATIVE_CONNECT, r.productionActorDiagnostics().waitingOn());
-        assertEquals(DeviceProcedureName.CONNECT, r.productionActorDiagnostics().activeProcedureName());
+        assertEquals(DeviceActorState.CONNECTING, r.actorDiagnostics().state());
+        assertEquals(DeviceWaitingOn.NATIVE_CONNECT, r.actorDiagnostics().waitingOn());
+        assertEquals(DeviceProcedureName.CONNECT, r.actorDiagnostics().activeProcedureName());
     }
 
     @Test
@@ -182,8 +182,8 @@ class DeviceReconcilerTest {
                 "the settle window separates native-connected from first ATT use; no immediate discovery");
         assertEquals(0, r.productionRuntimeForTest().drainUnhandledEffects().size(),
                 "the settle handoff is inside the production slice now — every effect must have an executor");
-        assertEquals(DeviceActorState.LINK_SETTLING, r.productionActorDiagnostics().state());
-        assertEquals(DeviceProcedureName.SETTLE_LINK, r.productionActorDiagnostics().activeProcedureName());
+        assertEquals(DeviceActorState.LINK_SETTLING, r.actorDiagnostics().state());
+        assertEquals(DeviceProcedureName.SETTLE_LINK, r.actorDiagnostics().activeProcedureName());
     }
 
     @Test
@@ -929,14 +929,17 @@ class DeviceReconcilerTest {
         DeviceReconciler r = reconciler(port, scanOff(), new MutableClock(START));
         r.reconcile();
         long attemptGeneration = r.productionRuntimeForTest().generation();
-        assertEquals(DeviceActorState.CONNECTING, r.productionActorDiagnostics().state());
+        assertEquals(DeviceActorState.CONNECTING, r.actorDiagnostics().state());
 
         r.onAdapterResetStarted(7);
 
         assertNotEquals(attemptGeneration, r.productionRuntimeForTest().generation(),
                 "the device generation must bump so the pre-reset attempt's events and effects are stale");
-        assertEquals(DeviceWaitingOn.ADAPTER_RESET, r.productionActorDiagnostics().waitingOn());
-        assertEquals(1, port.markDisconnectedCalls, "the reset invalidated the native model; the port must follow");
+        assertEquals(DeviceWaitingOn.ADAPTER_RESET, r.actorDiagnostics().waitingOn());
+        assertEquals(0, port.disconnectNativeCalls, "reset fanout must not issue per-device native cleanup");
+        assertEquals(0, port.markDisconnectedCalls, "reset fanout must not use the active teardown path");
+        assertEquals(1, port.markDisconnectedByAdapterResetCalls,
+                "the reset invalidated the native model; the port must follow");
     }
 
     @Test
@@ -954,7 +957,7 @@ class DeviceReconcilerTest {
         // The pre-reset connect attempt "succeeds" late, against an adapter that no longer has that link.
         r.productionRuntimeForTest().submit(new DeviceEvent.NativeConnected(staleGeneration));
 
-        assertEquals(DeviceWaitingOn.ADAPTER_RESET, r.productionActorDiagnostics().waitingOn(),
+        assertEquals(DeviceWaitingOn.ADAPTER_RESET, r.actorDiagnostics().waitingOn(),
                 "a stale success must not resurrect the fenced attempt");
         assertEquals(0, port.resolveGattCalls, "and must never start the post-connect pipeline");
     }
@@ -973,9 +976,9 @@ class DeviceReconcilerTest {
         r.onAdapterResetStarted(7);
         r.onAdapterResetCompleted(7, "SUCCESS");
 
-        assertEquals(DeviceActorState.DISCOVERING, r.productionActorDiagnostics().state(),
+        assertEquals(DeviceActorState.DISCOVERING, r.actorDiagnostics().state(),
                 "a wanted device re-parks in DISCOVERING: its handle died with the adapter");
-        assertEquals(DeviceWaitingOn.NATIVE_HANDLE, r.productionActorDiagnostics().waitingOn());
+        assertEquals(DeviceWaitingOn.NATIVE_HANDLE, r.actorDiagnostics().waitingOn());
 
         // Rediscovery hands us a fresh handle; the device must connect again without manual help.
         port.hasNative = true;
@@ -997,7 +1000,7 @@ class DeviceReconcilerTest {
         r.onAdapterResetStarted(7);
         r.onAdapterResetCompleted(7, "SUCCESS");
 
-        assertEquals(DeviceActorState.IDLE_DISABLED, r.productionActorDiagnostics().state(),
+        assertEquals(DeviceActorState.IDLE_DISABLED, r.actorDiagnostics().state(),
                 "a reset must never revive a device nobody wants");
         assertEquals(0, port.connectNativeCalls);
     }
@@ -1014,7 +1017,7 @@ class DeviceReconcilerTest {
         r.onAdapterResetStarted(7);
         r.onAdapterResetCompleted(7, "INTERNAL_TIMEOUT");
 
-        assertEquals(DeviceActorState.DISCOVERING, r.productionActorDiagnostics().state(),
+        assertEquals(DeviceActorState.DISCOVERING, r.actorDiagnostics().state(),
                 "a failed reset leaves the adapter no less invalidated; the actor must not stay fenced forever");
     }
 

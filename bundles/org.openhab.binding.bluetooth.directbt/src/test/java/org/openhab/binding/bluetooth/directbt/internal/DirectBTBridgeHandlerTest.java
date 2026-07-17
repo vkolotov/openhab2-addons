@@ -15,6 +15,7 @@ package org.openhab.binding.bluetooth.directbt.internal;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
 
+import java.lang.reflect.Field;
 import java.math.BigDecimal;
 import java.util.List;
 import java.util.Locale;
@@ -419,6 +420,32 @@ class DirectBTBridgeHandlerTest {
         assertTrue(error.contains("did not power on"), error);
     }
 
+    @Test
+    void adapterResetRequestIsSingleFlight() throws Exception {
+        childThings();
+        BTAdapter a = mock(BTAdapter.class);
+        CountDownLatch resetEntered = new CountDownLatch(1);
+        CountDownLatch releaseReset = new CountDownLatch(1);
+        when(a.reset()).thenAnswer(invocation -> {
+            resetEntered.countDown();
+            assertTrue(releaseReset.await(5, TimeUnit.SECONDS));
+            return HCIStatusCode.SUCCESS;
+        });
+        when(a.isPowered()).thenReturn(true);
+        setAdapter(handler(), a);
+
+        try {
+            handler().requestAdapterReset();
+            assertTrue(resetEntered.await(5, TimeUnit.SECONDS), "first reset must enter native reset");
+
+            handler().requestAdapterReset();
+
+            verify(a, timeout(500).times(1)).reset();
+        } finally {
+            releaseReset.countDown();
+        }
+    }
+
     // --- helpers -----------------------------------------------------------------------------------
 
     private void childThings(Thing... things) {
@@ -465,5 +492,11 @@ class DirectBTBridgeHandlerTest {
         DirectBTBridgeHandler h = handler;
         assertNotNull(h);
         return h;
+    }
+
+    private static void setAdapter(DirectBTBridgeHandler handler, BTAdapter adapter) throws Exception {
+        Field field = DirectBTBridgeHandler.class.getDeclaredField("adapter");
+        field.setAccessible(true);
+        field.set(handler, adapter);
     }
 }

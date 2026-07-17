@@ -418,18 +418,18 @@ public class DirectBTBluetoothDevice extends BaseBluetoothDevice implements Devi
      */
     private void applyPhyPreference() {
         String phy = bridge.getDevicePhy(address);
-        if (phy == null || "auto".equals(phy)) {
+        LE_PHYs.PHY requested;
+        if ("2m".equals(phy)) {
+            requested = LE_PHYs.PHY.LE_2M;
+        } else if ("coded".equals(phy)) {
+            requested = LE_PHYs.PHY.LE_CODED;
+        } else {
             return;
         }
         BTDevice dev = device;
         if (dev == null) {
             return;
         }
-        LE_PHYs.PHY requested = switch (phy) {
-            case "2m" -> LE_PHYs.PHY.LE_2M;
-            case "coded" -> LE_PHYs.PHY.LE_CODED;
-            default -> LE_PHYs.PHY.LE_1M;
-        };
         try {
             LE_PHYs phys = new LE_PHYs(requested.value);
             HCIStatusCode rc = dev.setConnectedLE_PHY(phys, phys);
@@ -446,6 +446,15 @@ public class DirectBTBluetoothDevice extends BaseBluetoothDevice implements Devi
 
     @Override
     public void markDisconnected() {
+        markDisconnected(true);
+    }
+
+    @Override
+    public void markDisconnectedByAdapterReset() {
+        markDisconnected(false);
+    }
+
+    private void markDisconnected(boolean nativeCleanup) {
         releaseNotifyListeners();
         resetGattModel();
         // ZOMBIE-ACL GUARD: if the native link is still up, tear it down BEFORE dropping the handle. Nulling the
@@ -453,7 +462,7 @@ public class DirectBTBluetoothDevice extends BaseBluetoothDevice implements Devi
         // peripheral stays connected (so it never advertises), and rediscovery/reconnect become impossible until
         // the link is killed externally (observed live: Thing bounce with an up link left a permanent zombie ACL).
         BTDevice dev = device;
-        if (dev != null) {
+        if (dev != null && nativeCleanup) {
             try {
                 // UNCONDITIONAL best-effort disconnect: getConnected() is not a reliable gate. An object adopted
                 // from an orphaned controller ACL can report false while the controller still holds the link —
@@ -478,6 +487,8 @@ public class DirectBTBluetoothDevice extends BaseBluetoothDevice implements Devi
             } catch (RuntimeException e) {
                 logger.debug("Best-effort native remove for {} failed", address, e);
             }
+        } else if (dev != null) {
+            logger.debug("Adapter reset invalidated {}; dropping native handle without per-device cleanup", address);
         }
         // Drop the stale native handle: after a disconnect the BTDevice no longer represents a usable link, and a
         // reconnect attempt on the old handle is exactly the path that wedges (CSR COMMAND_DISALLOWED / a connectLE
