@@ -32,6 +32,17 @@ interface DeviceProcedure {
      */
     long maxResidencyMs();
 
+    /**
+     * Phase-aware residency bound: the deadline applied while the procedure waits on {@code waitingOn}
+     * (the actor's state clock resets on every transition, so each waiting phase is timed separately).
+     * Defaults to {@link #maxResidencyMs()}; procedures with phases of very different legitimate durations
+     * (e.g. CONNECT's lease wait, bounded by the adapter's discovery slice, vs its native-connect window)
+     * override this so a slow-but-legitimate phase is not torn down by the fast phase's deadline.
+     */
+    default long maxResidencyMs(DeviceWaitingOn waitingOn) {
+        return maxResidencyMs();
+    }
+
     void start(DeviceProcedureContext ctx);
 
     void onEvent(DeviceEvent event, DeviceProcedureContext ctx);

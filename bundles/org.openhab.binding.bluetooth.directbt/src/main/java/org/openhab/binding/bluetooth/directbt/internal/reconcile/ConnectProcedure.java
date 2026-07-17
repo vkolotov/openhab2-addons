@@ -28,6 +28,13 @@ final class ConnectProcedure implements DeviceProcedure {
     static final String EFFECT_DISCONNECT_NATIVE = "disconnectNative";
     static final String EFFECT_CLEAR_STALE_PAIRING = "clearStalePairing";
 
+    /**
+     * Residency bound for the CONNECT_LEASE wait. A lease legitimately takes as long as the adapter
+     * coordinator's discovery slice (30 s) before the scan yields; this bound only catches a wedged
+     * scan that never stops (no lease may outwait it silently — frozen constraint 5).
+     */
+    static final long LEASE_WAIT_DEADLINE_MS = 45_000;
+
     private final long maxResidencyMs;
 
     ConnectProcedure(long maxResidencyMs) {
@@ -52,6 +59,11 @@ final class ConnectProcedure implements DeviceProcedure {
     @Override
     public long maxResidencyMs() {
         return maxResidencyMs;
+    }
+
+    @Override
+    public long maxResidencyMs(DeviceWaitingOn waitingOn) {
+        return waitingOn == DeviceWaitingOn.CONNECT_LEASE ? LEASE_WAIT_DEADLINE_MS : maxResidencyMs;
     }
 
     @Override

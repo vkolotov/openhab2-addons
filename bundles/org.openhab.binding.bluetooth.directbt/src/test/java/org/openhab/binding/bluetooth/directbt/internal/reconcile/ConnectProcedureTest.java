@@ -106,7 +106,9 @@ class ConnectProcedureTest {
         actor.startProcedure(new ConnectProcedure(1_000), "test-start");
         actor.drainEffects();
 
-        clock.advance(1_000);
+        // Still waiting on the connect lease: that phase carries its own (longer) deadline, bounded by the
+        // adapter's discovery slice rather than the native-connect window.
+        clock.advance(ConnectProcedure.LEASE_WAIT_DEADLINE_MS);
         actor.tick();
 
         List<DeviceEffect> effects = actor.drainEffects();

@@ -89,7 +89,8 @@ class DeviceActorRuntimeTest {
         assertTrue(runtime.isActive(DeviceProcedureName.CONNECT));
         long generation = runtime.generation();
 
-        clock.advance(1_000);
+        // The lease is never granted (scanIsOff=false), so the CONNECT_LEASE phase deadline applies.
+        clock.advance(ConnectProcedure.LEASE_WAIT_DEADLINE_MS);
         runtime.tick(true);
 
         assertEquals(generation, runtime.generation());

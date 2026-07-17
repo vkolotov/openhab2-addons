@@ -129,11 +129,15 @@ final class DeviceActor {
 
     void tick() {
         DeviceProcedure procedure = activeProcedure;
-        if (procedure == null || deadlineReported || procedure.maxResidencyMs() <= 0) {
+        if (procedure == null || deadlineReported) {
+            return;
+        }
+        long maxResidencyMs = procedure.maxResidencyMs(waitingOn);
+        if (maxResidencyMs <= 0) {
             return;
         }
         long elapsed = clock.millis() - stateStartedAt;
-        if (elapsed >= procedure.maxResidencyMs()) {
+        if (elapsed >= maxResidencyMs) {
             deadlineReported = true;
             logger.warn("[actor:{}] {} exceeded deadline after {}ms in {} waitingOn={}", deviceId, procedure.name(),
                     elapsed, state, waitingOn);

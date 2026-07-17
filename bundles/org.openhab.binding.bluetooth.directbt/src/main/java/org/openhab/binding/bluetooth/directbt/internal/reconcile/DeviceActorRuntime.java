@@ -38,6 +38,8 @@ final class DeviceActorRuntime {
     private final Consumer<DeviceActorDiagnostics> backoffObserver;
     private final List<DeviceEvent> pendingEvents = new ArrayList<>();
     private final List<DeviceEffect> unhandledEffects = new ArrayList<>();
+    // Epoch millis of the last CONNECT procedure start (0 = never): the runtime-owned retry-pacing stamp.
+    private long lastConnectStartedAt;
 
     DeviceActorRuntime(DeviceActor actor, DeviceProcedureRunner.DeviceProcedureFactory procedureFactory,
             BooleanSupplier scanIsOff, DevicePort port) {
@@ -73,8 +75,18 @@ final class DeviceActorRuntime {
 
     void start(DeviceProcedure procedure, String cause) {
         runner.start(procedure, cause);
+        if (procedure.name() == DeviceProcedureName.CONNECT) {
+            // The actor stamped stateStartedAt at the CONNECT transition; reuse it so pacing and the actor
+            // share one clock.
+            lastConnectStartedAt = actor.diagnostics().stateStartedAt();
+        }
         pump();
         applyBackoffPolicy();
+    }
+
+    /** Epoch millis of the last CONNECT procedure start, 0 if never — the attempt retry-pacing stamp. */
+    long lastConnectStartedAt() {
+        return lastConnectStartedAt;
     }
 
     void submit(DeviceEvent event) {

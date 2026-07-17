@@ -85,7 +85,9 @@ public class DeviceReconciler extends Reconciler<Boolean, DeviceReconciler.Obser
     private final DeviceActorRuntime productionRuntime;
     private final DeviceActorRuntime shadowRuntime;
 
-    // Timestamps (epoch millis). connectingSince drives the stuck deadline; lastConnectAttemptAt spaces retries.
+    // Epoch millis at which the current attempt's native connect was issued (0 = none / lease not yet
+    // granted); drives the pending-stuck pairing freeze and the wedge escalation. Retry pacing lives in the
+    // actor runtime (lastConnectStartedAt).
     private long connectingSince;
     // Consecutive failed GATT resolves on a link the flags claim is connected (stale-flag detector).
     private static final int RESOLVE_FAIL_STREAK_LIMIT = 3;
@@ -115,7 +117,6 @@ public class DeviceReconciler extends Reconciler<Boolean, DeviceReconciler.Obser
     private long resolveInFlightSince;
     // Epoch millis of the tick at which we last transitioned flag to CONNECTED (0 = never observed).
     private long connectedObservedAt;
-    private long lastConnectAttemptAt;
     // Epoch millis of the tick at which we first observed pairing in progress during the current CONNECTING window,
     // or 0 if not currently pairing. Used to freeze the connect deadline across an SMP negotiation (see act()).
     private long pairingSince;
@@ -235,7 +236,8 @@ public class DeviceReconciler extends Reconciler<Boolean, DeviceReconciler.Obser
             return;
         }
         long now = clock.millis();
-        if (lastConnectAttemptAt != 0 && now - lastConnectAttemptAt < CONNECT_RETRY_MS) {
+        long lastConnectStartedAt = productionRuntime.lastConnectStartedAt();
+        if (lastConnectStartedAt != 0 && now - lastConnectStartedAt < CONNECT_RETRY_MS) {
             shadowRuntime.shadowObserve(DeviceActorState.BACKING_OFF, DeviceWaitingOn.BACKOFF_TIMER,
                     "wanted:connectRetry");
         } else if (!scanIsOff.getAsBoolean()) {
@@ -268,6 +270,16 @@ public class DeviceReconciler extends Reconciler<Boolean, DeviceReconciler.Obser
         }
 
         if (!port.isWanted()) {
+            DeviceActorDiagnostics unwantedDiagnostics = productionRuntime.diagnostics();
+            if (unwantedDiagnostics.activeProcedureName() == DeviceProcedureName.CONNECT
+                    && unwantedDiagnostics.state() == DeviceActorState.CONNECTING) {
+                // Cancel an in-flight attempt — critically the CONNECT_LEASE wait, where a later lease grant
+                // would otherwise issue connectLE for a device nobody wants anymore.
+                logger.debug("[reconcile:{}] no longer wanted; cancelling in-flight connect attempt", name);
+                productionRuntime.submit(new DeviceEvent.WantedOffline());
+                drainUnhandledProductionEffects();
+                clearConnectWindow();
+            }
             if (o.hasNative && o.nativeConnected) {
                 logger.debug("[reconcile:{}] no longer wanted but still connected; disconnecting", name);
                 port.disconnectNative();
@@ -305,8 +317,33 @@ public class DeviceReconciler extends Reconciler<Boolean, DeviceReconciler.Obser
         // From here: wanted AND not natively connected.
         resolveInFlightSince = 0; // any in-flight-discovery age belongs to the connection that just ended
 
-        // (6) PENDING-STUCK — a CONNECTING that never produced a native connection.
-        if (o.flagConnecting && connectingSince != 0) {
+        // (6) ATTEMPT IN FLIGHT — the actor's CONNECT procedure covers BOTH phases of an attempt: the
+        // CONNECT_LEASE wait (scan has not yielded yet; no native command issued) and the native-connect
+        // window (connectLE issued, waiting for establishment). Each phase carries its own actor deadline.
+        DeviceActorDiagnostics connectDiagnostics = productionRuntime.diagnostics();
+        boolean attemptInFlight = connectDiagnostics.activeProcedureName() == DeviceProcedureName.CONNECT
+                && connectDiagnostics.state() == DeviceActorState.CONNECTING;
+        if (attemptInFlight && !o.flagConnecting) {
+            // Lease wait: the adapter coordinator's discovery slice has the radio; the lease effect executor
+            // grants inside the runtime tick (syncProductionRuntime) the moment the scan is observed OFF, and
+            // the CONNECT_LEASE deadline bounds a scan that never stops. Nothing to do here but note it.
+            if (waitingScanOffSince == 0) {
+                waitingScanOffSince = now;
+                logger.debug("[reconcile:{}] connect attempt waiting for the connect lease (scan busy)", name);
+            }
+            return;
+        }
+        if (attemptInFlight && o.flagConnecting) {
+            if (waitingScanOffSince != 0) {
+                logger.debug("[reconcile:{}] connect lease granted after {}ms", name, now - waitingScanOffSince);
+                waitingScanOffSince = 0;
+            }
+            if (connectingSince == 0) {
+                // The native connect was actually issued (lease granted, connectLE sent): the pending-stuck /
+                // wedge window starts HERE, not at procedure start — a long-but-legitimate lease wait must
+                // never count toward the "create-connection wedged" adapter-reset escalation.
+                connectingSince = now;
+            }
             // FREEZE THE DEADLINE DURING SMP NEGOTIATION. With setConnSecurityAuto the transport iterates the
             // security ladder, doing several connect/disconnect cycles to negotiate keys; that churn is correct
             // pairing behaviour but leaves no stable native link for seconds. Without this freeze the pending-stuck
@@ -351,7 +388,8 @@ public class DeviceReconciler extends Reconciler<Boolean, DeviceReconciler.Obser
             return; // give the current attempt its deadline before issuing another connect
         }
 
-        // (4) CONNECTION — issue connectLE only when the scan is observed OFF (controller rejects it otherwise).
+        // (4) CONNECTION — the actor owns scan gating (connect lease) and the attempt window; the reconciler
+        // decides only WHEN a fresh attempt may start: a native handle must exist and retries are spaced.
         if (!port.hasNativeDevice()) {
             // No native handle yet (cold start, or just cleared on a drop). Discovery must surface it first; the
             // discovery reconciler keeps the scan ON for us because wantsDiscovery() is true.
@@ -364,7 +402,8 @@ public class DeviceReconciler extends Reconciler<Boolean, DeviceReconciler.Obser
             logger.debug("[reconcile:{}] native handle available after {}ms", name, now - waitingNativeHandleSince);
             waitingNativeHandleSince = 0;
         }
-        if (now - lastConnectAttemptAt < CONNECT_RETRY_MS) {
+        long lastConnectStartedAt = productionRuntime.lastConnectStartedAt();
+        if (lastConnectStartedAt != 0 && now - lastConnectStartedAt < CONNECT_RETRY_MS) {
             if (waitingRetrySince == 0) {
                 waitingRetrySince = now;
             }
@@ -372,18 +411,6 @@ public class DeviceReconciler extends Reconciler<Boolean, DeviceReconciler.Obser
         } else if (waitingRetrySince != 0) {
             logger.debug("[reconcile:{}] connect retry spacing waited {}ms", name, now - waitingRetrySince);
             waitingRetrySince = 0;
-        }
-        if (!scanIsOff.getAsBoolean()) {
-            // We hold a native handle now, so the device no longer wants discovery; the discovery reconciler will
-            // stop the scan (its desired flips to OFF), which then lets this connect fire on a later tick. Wait.
-            if (waitingScanOffSince == 0) {
-                waitingScanOffSince = now;
-                logger.debug("[reconcile:{}] waiting for scan to stop before connect", name);
-            }
-            return;
-        } else if (waitingScanOffSince != 0) {
-            logger.debug("[reconcile:{}] scan stopped after {}ms; connect gate open", name, now - waitingScanOffSince);
-            waitingScanOffSince = 0;
         }
         startProductionConnect(now);
     }
@@ -500,12 +527,14 @@ public class DeviceReconciler extends Reconciler<Boolean, DeviceReconciler.Obser
     }
 
     private void startProductionConnect(long now) {
-        lastConnectAttemptAt = now;
-        connectingSince = now;
+        connectingSince = 0; // stamped when the native connect is actually issued (lease granted)
         pairingMirroredToActor = false;
         logger.debug("[reconcile:{}] starting actor-owned connect attempt", name);
         productionRuntime.start(new ConnectProcedure(CONNECT_DEADLINE_MS), "wanted:connectReady");
         drainUnhandledProductionEffects();
+        if (port.isFlagConnecting()) {
+            connectingSince = now; // synchronous lease grant: the scan was already off and connectLE went out
+        }
 
         DeviceActorDiagnostics diagnostics = productionRuntime.diagnostics();
         if (diagnostics.state() == DeviceActorState.CONNECTING
