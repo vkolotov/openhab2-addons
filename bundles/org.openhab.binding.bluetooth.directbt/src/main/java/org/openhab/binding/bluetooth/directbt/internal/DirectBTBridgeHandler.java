@@ -186,26 +186,27 @@ public class DirectBTBridgeHandler extends AbstractBluetoothBridgeHandler<Direct
         // for up to its 8 s cap (the requeued tick ran but returned at "backing off").
         @Override
         public void deviceConnected(BTDevice device, boolean discovered, long timestamp) {
-            getDevice(toAddress(device)).getReconciler().expediteNextAct();
-            requeueReconcile();
+            enqueueConnectionHint(toAddress(device));
         }
 
         @Override
         public void deviceReady(BTDevice device, long timestamp) {
-            getDevice(toAddress(device)).getReconciler().expediteNextAct();
-            requeueReconcile();
+            enqueueConnectionHint(toAddress(device));
         }
 
         @Override
         public void deviceDisconnected(BTDevice device, HCIStatusCode reason, short handle, long timestamp) {
             // Record and log why the link dropped so it is not lost; the core status otherwise shows only a bare
             // "communication error". The reconciler still drives the actual reconnect via requeueReconcile().
-            logger.debug("Direct-BT deviceDisconnected: {} reason={}", device.getAddressAndType(), reason);
-            DirectBTBluetoothDevice ohDevice = getDevice(toAddress(device));
-            ohDevice.setDisconnectReason(String.valueOf(reason));
-            ohDevice.noteNativeDisconnectEvent();
-            ohDevice.getReconciler().expediteNextAct(); // act on the failure now, not after the act-backoff
-            requeueReconcile();
+            BluetoothAddress address = toAddress(device);
+            logger.debug("Direct-BT deviceDisconnected: {} reason={}", address, reason);
+            scheduler.execute(() -> {
+                DirectBTBluetoothDevice ohDevice = getDevice(address);
+                ohDevice.setDisconnectReason(String.valueOf(reason));
+                ohDevice.noteNativeDisconnectEvent();
+                ohDevice.getReconciler().expediteNextAct(); // act on the failure now, not after the act-backoff
+                requeueReconcile();
+            });
         }
 
         @Override
@@ -214,24 +215,35 @@ public class DirectBTBridgeHandler extends AbstractBluetoothBridgeHandler<Direct
             // tick) lets the device reconciler observe the negotiating window promptly and freeze its connect
             // deadline, so a short-lived pairing phase between 2s ticks can't slip past and trip the stuck-connect
             // teardown. The reconciler still polls getPairingState() as the source of truth.
-            logger.debug("Direct-BT devicePairingState: {} state={} mode={}", device.getAddressAndType(), state, mode);
+            BluetoothAddress deviceAddress = toAddress(device);
+            logger.debug("Direct-BT devicePairingState: {} state={} mode={}", deviceAddress, state, mode);
             if (state == SMPPairingState.PASSKEY_EXPECTED) {
                 replyPasskey(device);
             }
             if (state == SMPPairingState.COMPLETED && mode != PairingMode.PRE_PAIRED) {
                 // A FRESH pairing just distributed keys: persist them so the bond survives a restart/power
                 // cycle. PRE_PAIRED completions reuse existing keys (nothing new to save). Only for devices
-                // that opted into a security mode; runs on the executor (createAndWrite does native reads +
-                // file I/O, and this is a native callback thread).
+                // that opted into a security mode; runs on the executor because config lookup, native key reads,
+                // and file I/O do not belong on the native callback thread.
                 BondStore store = bondStore;
-                BluetoothAddress deviceAddress = toAddress(device);
-                if (store != null && !BluetoothBindingConstants.CONNECTION_SECURITY_NONE
-                        .equalsIgnoreCase(getDeviceConnectionSecurity(deviceAddress))) {
-                    executor.submit(() -> store.save(device));
+                if (store != null) {
+                    executor.submit(() -> {
+                        if (!BluetoothBindingConstants.CONNECTION_SECURITY_NONE
+                                .equalsIgnoreCase(getDeviceConnectionSecurity(deviceAddress))) {
+                            store.save(device);
+                        }
+                    });
                 }
             }
             requeueReconcile();
         }
+    }
+
+    private void enqueueConnectionHint(BluetoothAddress address) {
+        scheduler.execute(() -> {
+            getDevice(address).getReconciler().expediteNextAct();
+            requeueReconcile();
+        });
     }
 
     /**

@@ -23,6 +23,7 @@ import java.util.Objects;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -691,6 +692,71 @@ class DirectBTBluetoothDeviceTest {
         assertTrue(all.await(10, TimeUnit.SECONDS), "all notifications must be delivered");
         for (int i = 0; i < count; i++) {
             assertEquals(i, received.get(i), "delivery order must match native submission order at index " + i);
+        }
+    }
+
+    @Test
+    void notificationCallbackCopiesPayloadBeforeAsyncFanout() throws Exception {
+        ExecutorService operationPool = Executors.newSingleThreadExecutor();
+        ExecutorService notifyPool = Executors.newSingleThreadExecutor();
+        CountDownLatch blockerStarted = new CountDownLatch(1);
+        CountDownLatch releaseNotifyPool = new CountDownLatch(1);
+        notifyPool.execute(() -> {
+            blockerStarted.countDown();
+            try {
+                releaseNotifyPool.await(2, TimeUnit.SECONDS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        });
+        DirectBTBridgeHandler customBridge = mock(DirectBTBridgeHandler.class);
+        when(customBridge.getExecutor()).thenReturn(operationPool);
+        when(customBridge.getNotifyExecutor()).thenReturn(notifyPool);
+        when(customBridge.getResetBudget()).thenReturn(new ResetBudget(8000));
+        when(customBridge.isDeviceEnabled(any())).thenReturn(true);
+        DirectBTBluetoothDevice dev = new DirectBTBluetoothDevice(customBridge, ADDRESS);
+        try {
+            dev.updateBTDevice(nativeDevice());
+            when(nativeDevice().getConnected()).thenReturn(true);
+
+            BTGattChar gattChar = mock(BTGattChar.class);
+            when(gattChar.getUUID()).thenReturn(CHAR_UUID.toString());
+            when(gattChar.getProperties()).thenReturn(new GattCharPropertySet(GattCharPropertySet.Type.Notify));
+            BTGattService service = mock(BTGattService.class);
+            when(service.getUUID()).thenReturn(SERVICE_UUID.toString());
+            when(service.getChars()).thenReturn(List.of(gattChar));
+            when(nativeDevice().getGattServices()).thenReturn(List.of(service));
+            dev.discoverServices();
+            when(gattChar.addCharListener(any())).thenReturn(true);
+            when(gattChar.enableNotificationOrIndication(any())).thenReturn(true);
+
+            AtomicInteger received = new AtomicInteger(-1);
+            CountDownLatch receivedLatch = new CountDownLatch(1);
+            BluetoothDeviceListener listener = mock(BluetoothDeviceListener.class);
+            doAnswer(invocation -> {
+                byte[] value = invocation.getArgument(1);
+                received.set(value[0] & 0xFF);
+                receivedLatch.countDown();
+                return null;
+            }).when(listener).onCharacteristicUpdate(any(), any());
+            dev.addListener(listener);
+            dev.enableNotifications(characteristic()).get();
+
+            ArgumentCaptor<BTGattCharListener> listenerCaptor = ArgumentCaptor.forClass(BTGattCharListener.class);
+            verify(gattChar).addCharListener(listenerCaptor.capture());
+            assertTrue(blockerStarted.await(1, TimeUnit.SECONDS));
+
+            byte[] nativeBuffer = new byte[] { 0x01 };
+            listenerCaptor.getValue().notificationReceived(gattChar, nativeBuffer, 1L);
+            nativeBuffer[0] = 0x02;
+
+            releaseNotifyPool.countDown();
+            assertTrue(receivedLatch.await(1, TimeUnit.SECONDS));
+            assertEquals(1, received.get(), "fanout must see the callback-time payload, not later buffer mutation");
+        } finally {
+            releaseNotifyPool.countDown();
+            operationPool.shutdownNow();
+            notifyPool.shutdownNow();
         }
     }
 

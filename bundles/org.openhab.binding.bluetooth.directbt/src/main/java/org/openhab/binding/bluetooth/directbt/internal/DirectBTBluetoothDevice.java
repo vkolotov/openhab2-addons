@@ -1029,7 +1029,8 @@ public class DirectBTBluetoothDevice extends BaseBluetoothDevice implements Devi
                         actualCharUuid, charUuid, address);
                 return;
             }
-            notifyExecutor.execute(() -> forwardOnExecutor(actualCharUuid, value));
+            byte[] valueCopy = value.clone();
+            notifyExecutor.execute(() -> forwardOnExecutor(actualCharUuid, valueCopy));
         }
 
         private void forwardOnExecutor(UUID actualCharUuid, byte[] value) {
