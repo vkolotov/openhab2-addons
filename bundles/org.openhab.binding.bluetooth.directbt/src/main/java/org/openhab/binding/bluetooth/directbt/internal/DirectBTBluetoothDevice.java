@@ -48,6 +48,7 @@ import org.openhab.binding.bluetooth.directbt.internal.reconcile.AdapterReconcil
 import org.openhab.binding.bluetooth.directbt.internal.reconcile.DeviceReconciler;
 import org.openhab.binding.bluetooth.directbt.internal.reconcile.device.DeviceActorDiagnostics;
 import org.openhab.binding.bluetooth.directbt.internal.reconcile.port.DevicePort;
+import org.openhab.binding.bluetooth.directbt.internal.reconcile.procedure.DeviceProcedureName;
 import org.openhab.binding.bluetooth.notification.BluetoothConnectionStatusNotification;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -99,6 +100,7 @@ public class DirectBTBluetoothDevice extends BaseBluetoothDevice implements Devi
      * resolve (observed live as a periodic bounce/re-pair loop).
      */
     static final long RECONNECT_GRACE_MILLIS = 25_000;
+    static final long EXTERNAL_DISCOVERY_SETTLE_GRACE_MILLIS = 1_000;
     // Until when the bridge's orphan-adoption sweep must leave this device alone. Set on markDisconnected():
     // a DELIBERATE teardown issues a native disconnect that completes asynchronously, so for a short window the
     // native device still reads connected — adopting it back would resurrect the link we just chose to drop
@@ -710,6 +712,12 @@ public class DirectBTBluetoothDevice extends BaseBluetoothDevice implements Devi
 
     @Override
     public boolean discoverServices() {
+        if (reconciler.actorDiagnostics().activeProcedureName() == DeviceProcedureName.SETTLE_LINK
+                || isInsideFreshConnectionDiscoveryGrace()) {
+            logger.debug("Direct-BT GATT discovery for {} deferred: actor is settling the fresh link", address);
+            bridge.requeueReconcile();
+            return false;
+        }
         if (!gattDiscoveryInFlight.compareAndSet(false, true)) {
             // LAST-RESORT GUARD RECOVERY: if a previous discovery never returned (a truly hung native/JNI
             // call — its finally never runs), the in-flight guard would block this device's GATT forever.
@@ -808,6 +816,11 @@ public class DirectBTBluetoothDevice extends BaseBluetoothDevice implements Devi
         // keeps the scan off as long as this device stays connected, and turns it back on (to rediscover) only
         // when the device reconciler observes the native link is gone.
         return true;
+    }
+
+    private boolean isInsideFreshConnectionDiscoveryGrace() {
+        return isNativeConnected() && !isGattResolved() && connectedAtMillis != 0
+                && clock.millis() - connectedAtMillis < EXTERNAL_DISCOVERY_SETTLE_GRACE_MILLIS;
     }
 
     @Override

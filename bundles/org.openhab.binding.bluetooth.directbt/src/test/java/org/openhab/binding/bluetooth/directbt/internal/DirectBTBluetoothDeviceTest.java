@@ -208,6 +208,20 @@ class DirectBTBluetoothDeviceTest {
     }
 
     @Test
+    void discoverServicesIsDeferredWhileActorIsSettlingFreshLink() {
+        // The generic Bluetooth handler calls discoverServices() immediately on CONNECTED when services are still
+        // unresolved. Direct-BT must not let that bypass the actor-owned settle window; early native GATT walks
+        // were observed live as instant empty service models and fast HP disconnects.
+        device().updateBTDevice(nativeDevice());
+        when(nativeDevice().getConnected()).thenReturn(true);
+        device().markConnected();
+
+        assertFalse(device().discoverServices(), "upper-layer discovery is deferred during link settle");
+        verify(nativeDevice(), never()).getGattServices();
+        verify(bridge()).requeueReconcile();
+    }
+
+    @Test
     void adoptionIsSuppressedDuringTheQuietWindowAfterATeardown() {
         // A deliberate teardown issues an ASYNC native disconnect; for a short window the native device still
         // reads connected. The adoption sweep must not re-attach it in that window (it would resurrect the link
