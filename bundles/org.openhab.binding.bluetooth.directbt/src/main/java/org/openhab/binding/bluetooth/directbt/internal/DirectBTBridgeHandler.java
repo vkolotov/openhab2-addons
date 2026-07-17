@@ -156,19 +156,22 @@ public class DirectBTBridgeHandler extends AbstractBluetoothBridgeHandler<Direct
     private class DirectBTStatusListener extends AdapterStatusListener {
         @Override
         public boolean deviceFound(BTDevice device, long timestamp) {
-            logger.debug("Direct-BT deviceFound: {}", device.getAddressAndType());
-            DirectBTBluetoothDevice btDevice = handleDeviceFound(device);
-            requeueReconcile(); // hint: a wanted device may now be connectable
+            BluetoothAddress address = toAddress(device);
+            logger.debug("Direct-BT deviceFound: {}", address);
+            DirectBTBluetoothDevice btDevice = getDevice(address);
+            boolean wanted = btDevice.isWanted();
+            enqueueDeviceSeen(btDevice, device, true);
             // Direct-BT's return value is ownership, not discovery flow-control: false removes the native device
             // from the shared list and the BTDevice can no longer be used for a later connect. Keep only devices
             // with active connection intent; background advertisements can stay cheap/non-persistent.
-            return btDevice != null && btDevice.isWanted();
+            return wanted;
         }
 
         @Override
         public void deviceUpdated(BTDevice device, EIRDataTypeSet updateMask, long timestamp) {
-            logger.trace("Direct-BT deviceUpdated: {}", device.getAddressAndType());
-            handleDeviceFound(device);
+            BluetoothAddress address = toAddress(device);
+            logger.trace("Direct-BT deviceUpdated: {}", address);
+            enqueueDeviceSeen(address, device, false);
         }
 
         @Override
@@ -218,8 +221,46 @@ public class DirectBTBridgeHandler extends AbstractBluetoothBridgeHandler<Direct
             BluetoothAddress deviceAddress = toAddress(device);
             logger.debug("Direct-BT devicePairingState: {} state={} mode={}", deviceAddress, state, mode);
             if (state == SMPPairingState.PASSKEY_EXPECTED) {
+                // PASSKEY_EXPECTED is the one adapter-status callback path that deliberately replies inline:
+                // Direct-BT requires the passkey while the pairing transaction is active. The heavier persistence
+                // and reconcile hinting below are still hopped off the native callback thread.
                 replyPasskey(device);
             }
+            enqueuePairingState(deviceAddress, device, state, mode);
+        }
+    }
+
+    private void enqueueDeviceSeen(DirectBTBluetoothDevice device, BTDevice btDevice, boolean requeueAfterUpdate) {
+        scheduler.execute(() -> processDeviceSeen(device, btDevice, requeueAfterUpdate));
+    }
+
+    private void enqueueDeviceSeen(BluetoothAddress address, BTDevice btDevice, boolean requeueAfterUpdate) {
+        scheduler.execute(() -> processDeviceSeen(address, btDevice, requeueAfterUpdate));
+    }
+
+    private void processDeviceSeen(BluetoothAddress address, BTDevice btDevice, boolean requeueAfterUpdate) {
+        processDeviceSeen(getDevice(address), btDevice, requeueAfterUpdate);
+    }
+
+    private void processDeviceSeen(DirectBTBluetoothDevice device, BTDevice btDevice, boolean requeueAfterUpdate) {
+        try {
+            handleDeviceFound(device, btDevice);
+            if (requeueAfterUpdate) {
+                requeueReconcile(); // hint: a wanted device may now be connectable
+            }
+        } catch (RuntimeException | LinkageError e) {
+            logger.debug("Direct-BT deviceSeen processing failed off callback thread", e);
+        }
+    }
+
+    private void enqueuePairingState(BluetoothAddress deviceAddress, BTDevice device, SMPPairingState state,
+            PairingMode mode) {
+        scheduler.execute(() -> processPairingState(deviceAddress, device, state, mode));
+    }
+
+    private void processPairingState(BluetoothAddress deviceAddress, BTDevice device, SMPPairingState state,
+            PairingMode mode) {
+        try {
             if (state == SMPPairingState.COMPLETED && mode != PairingMode.PRE_PAIRED) {
                 // A FRESH pairing just distributed keys: persist them so the bond survives a restart/power
                 // cycle. PRE_PAIRED completions reuse existing keys (nothing new to save). Only for devices
@@ -236,6 +277,8 @@ public class DirectBTBridgeHandler extends AbstractBluetoothBridgeHandler<Direct
                 }
             }
             requeueReconcile();
+        } catch (RuntimeException | LinkageError e) {
+            logger.debug("Direct-BT pairing-state processing failed off callback thread for {}", deviceAddress, e);
         }
     }
 
@@ -890,7 +933,14 @@ public class DirectBTBridgeHandler extends AbstractBluetoothBridgeHandler<Direct
         if (disposed) {
             return null;
         }
-        DirectBTBluetoothDevice device = getDevice(toAddress(btDevice));
+        return handleDeviceFound(getDevice(toAddress(btDevice)), btDevice);
+    }
+
+    @Nullable
+    private DirectBTBluetoothDevice handleDeviceFound(DirectBTBluetoothDevice device, BTDevice btDevice) {
+        if (disposed) {
+            return null;
+        }
         device.updateBTDevice(btDevice);
         executor.execute(() -> deviceDiscovered(device));
         return device;
