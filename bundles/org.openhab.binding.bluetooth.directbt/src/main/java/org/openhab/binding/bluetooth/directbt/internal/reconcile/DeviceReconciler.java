@@ -147,7 +147,9 @@ public class DeviceReconciler extends Reconciler<Boolean, DeviceReconciler.Obser
                 DeviceReconciler::createProductionProcedure, scanIsOff, port, this::observeProductionRuntimeEvent,
                 new SettleTimerEffectExecutor(clock::millis, GATT_FIRST_RESOLVE_DELAY_MS),
                 new DeviceBackoffPolicy(port), this::onProductionBackoff);
-        this.shadowRuntime = new DeviceActorRuntime(new DeviceActor(port.id(), logger, clock),
+        // The "#shadow" suffix disambiguates the two "[actor:<id>]" log streams: the shadow actor mirrors
+        // observations for A/B diagnostics only, and its generations run far ahead of the production actor's.
+        this.shadowRuntime = new DeviceActorRuntime(new DeviceActor(port.id() + "#shadow", logger, clock),
                 DeviceReconciler::createShadowProcedure, () -> false, new ShadowDevicePort(port.id()));
     }
 
@@ -339,7 +341,7 @@ public class DeviceReconciler extends Reconciler<Boolean, DeviceReconciler.Obser
                 // enters BACKING_OFF, the backoff policy marks disconnected (+ stale-bond self-heal when the
                 // device is pre-paired), and onProductionBackoff() closes the connect window.
                 productionRuntime.submit(new DeviceEvent.ConnectFailed(productionRuntime.generation(),
-                        "NATIVE_DISCONNECT_EVENT", false));
+                        "NATIVE_DISCONNECT_EVENT", port.hasStalePairing()));
                 return;
             }
             // The 8 s "CONNECTING with no native link" deadline is actor-owned now: syncProductionRuntime()

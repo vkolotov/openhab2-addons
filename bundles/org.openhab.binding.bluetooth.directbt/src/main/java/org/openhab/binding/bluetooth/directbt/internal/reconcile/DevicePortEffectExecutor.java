@@ -45,7 +45,12 @@ final class DevicePortEffectExecutor implements DeviceEffectExecutor {
             return true;
         }
         if (ConnectProcedure.EFFECT_CLEAR_STALE_PAIRING.equals(operation)) {
-            port.clearStalePairing();
+            // Evidence gate (frozen constraint 9): the effect is emitted on every failed/timed-out connect
+            // attempt, but keys are only cleared when the device actually holds stored keys — a pre-paired
+            // device whose create-connection failed is the dead-bond case; anything else is a no-op.
+            if (port.hasStalePairing()) {
+                port.clearStalePairing();
+            }
             return true;
         }
         if (ResolveGattProcedure.EFFECT_RESOLVE_GATT.equals(operation)) {
@@ -64,7 +69,9 @@ final class DevicePortEffectExecutor implements DeviceEffectExecutor {
         port.markConnecting();
         HCIStatusCode result = port.connectNative();
         if (result != HCIStatusCode.SUCCESS) {
-            eventSink.accept(new DeviceEvent.ConnectFailed(effect.generation(), result.name(), false));
+            // A failed attempt on a pre-paired device is stale-bond evidence (the stored key is what a
+            // reconnect would reuse, so it is the prime suspect); the procedure routes it to the clear effect.
+            eventSink.accept(new DeviceEvent.ConnectFailed(effect.generation(), result.name(), port.hasStalePairing()));
         }
     }
 

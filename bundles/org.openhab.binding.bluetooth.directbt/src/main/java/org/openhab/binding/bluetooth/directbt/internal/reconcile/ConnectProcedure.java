@@ -87,6 +87,10 @@ final class ConnectProcedure implements DeviceProcedure {
             DeviceEvent.ProcedureDeadlineExpired deadline = (DeviceEvent.ProcedureDeadlineExpired) event;
             if (deadline.procedure() == DeviceProcedureName.CONNECT) {
                 ctx.emit(new DeviceEffect(ctx.generation(), EFFECT_DISCONNECT_NATIVE));
+                // A create-connection that silently never establishes is the dead-bond signature on a
+                // pre-paired device (the stored key blocks the encrypted reconnect); the effect executor
+                // gates the actual clear on that evidence, so this is a no-op for unpaired devices.
+                ctx.emit(new DeviceEffect(ctx.generation(), EFFECT_CLEAR_STALE_PAIRING));
                 ctx.transitionTo(DeviceActorState.BACKING_OFF, DeviceWaitingOn.BACKOFF_TIMER, event.kind());
             }
         }

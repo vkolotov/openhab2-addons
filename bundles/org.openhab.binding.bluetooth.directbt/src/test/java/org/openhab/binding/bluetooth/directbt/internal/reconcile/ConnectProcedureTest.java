@@ -110,8 +110,11 @@ class ConnectProcedureTest {
         actor.tick();
 
         List<DeviceEffect> effects = actor.drainEffects();
-        assertEquals(1, effects.size());
+        assertEquals(2, effects.size());
         assertEquals(ConnectProcedure.EFFECT_DISCONNECT_NATIVE, effects.get(0).operation());
+        assertEquals(ConnectProcedure.EFFECT_CLEAR_STALE_PAIRING, effects.get(1).operation(),
+                "a silent never-established connect is the dead-bond signature; the executor gates the "
+                        + "actual clear on hasStalePairing() so this is a no-op for unpaired devices");
         assertEquals(DeviceActorState.BACKING_OFF, actor.diagnostics().state());
         assertEquals(DeviceWaitingOn.BACKOFF_TIMER, actor.diagnostics().waitingOn());
     }

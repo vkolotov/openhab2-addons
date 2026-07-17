@@ -27,18 +27,18 @@ import org.junit.jupiter.api.Test;
 @NonNullByDefault
 class DeviceBackoffPolicyTest {
     @Test
-    void backingOffClearsStalePairingAndMarksDisconnectedOncePerGeneration() {
+    void backingOffMarksDisconnectedOncePerGenerationWithoutTouchingTheBond() {
         FakeDevicePort port = new FakeDevicePort();
         port.prePaired = true;
         DeviceBackoffPolicy policy = new DeviceBackoffPolicy(port);
 
         assertTrue(policy.apply(diagnostics(41, DeviceActorState.BACKING_OFF)));
-        assertFalse(port.prePaired);
-        assertEquals(1, port.clearStalePairingCalls);
+        assertTrue(port.prePaired, "BACKING_OFF is reached from non-connect teardowns too; bond clearing is "
+                + "evidence-driven via the CONNECT procedure's clear effect, never a backoff side-effect");
+        assertEquals(0, port.clearStalePairingCalls);
         assertEquals(1, port.markDisconnectedCalls);
 
         assertFalse(policy.apply(diagnostics(41, DeviceActorState.BACKING_OFF)));
-        assertEquals(1, port.clearStalePairingCalls);
         assertEquals(1, port.markDisconnectedCalls);
     }
 
