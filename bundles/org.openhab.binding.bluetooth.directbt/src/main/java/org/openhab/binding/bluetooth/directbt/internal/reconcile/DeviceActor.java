@@ -21,8 +21,9 @@ import org.eclipse.jdt.annotation.Nullable;
 import org.slf4j.Logger;
 
 /**
- * Shadow-mode host for one serialized device control plane. It does not select production BLE procedures yet; it
- * provides the invariant-bearing runtime that those procedures will move into.
+ * One serialized device control plane: hosts the active {@link DeviceProcedure}, owns the generation counter
+ * that fences stale events, times each waiting phase against the procedure's residency deadline, and collects
+ * the effects procedures emit for the runtime's executors.
  *
  * @author Vlad Kolotov - Initial contribution
  */
@@ -69,19 +70,6 @@ final class DeviceActor {
         deadlineReported = false;
         transitionTo(procedure.actorState(), procedure.waitingOn(), cause);
         procedure.start(context());
-    }
-
-    void shadowObserve(DeviceActorState state, DeviceWaitingOn waitingOn, String cause) {
-        if (activeProcedure == null) {
-            transitionTo(state, waitingOn, cause);
-        }
-    }
-
-    void shadowOverride(DeviceActorState state, DeviceWaitingOn waitingOn, String cause) {
-        activeProcedure = null;
-        deadlineReported = false;
-        effects.clear();
-        transitionTo(state, waitingOn, cause);
     }
 
     void submit(DeviceEvent event) {

@@ -132,12 +132,6 @@ final class DeviceActorRuntime {
         return diagnostics().generation();
     }
 
-    void shadowObserve(DeviceActorState state, DeviceWaitingOn waitingOn, String cause) {
-        actor.shadowOverride(state, waitingOn, cause);
-        pendingEvents.clear();
-        unhandledEffects.clear();
-    }
-
     private void enqueue(DeviceEvent event) {
         eventObserver.accept(event);
         pendingEvents.add(event);

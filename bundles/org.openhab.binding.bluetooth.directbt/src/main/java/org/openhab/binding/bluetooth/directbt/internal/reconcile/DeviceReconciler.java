@@ -72,18 +72,16 @@ public class DeviceReconciler extends Reconciler<Boolean, DeviceReconciler.Obser
     private static final long PENDING_RESET_AFTER_MS = 16000;
     // Minimum spacing between connectNative() attempts.
     private static final long CONNECT_RETRY_MS = 2000;
-    // Deadlines for the post-connect pipeline procedures (settle -> resolve -> subscribe), shared by the
-    // production and shadow procedure factories. Settle/subscribe are fallbacks well above their expected
-    // sub-second phases; the resolve deadline equals the legacy in-flight cap.
+    // Deadlines for the post-connect pipeline procedures (settle -> resolve -> subscribe). Settle/subscribe
+    // are fallbacks well above their expected sub-second phases; the resolve deadline equals the legacy
+    // in-flight cap.
     private static final long SETTLE_DEADLINE_MS = 5000;
     private static final long SUBSCRIBE_DEADLINE_MS = 5000;
 
     private final DevicePort port;
-    private final BooleanSupplier scanIsOff;
     private final ResetBudget resetBudget;
     private final Runnable requestAdapterReset;
     private final DeviceActorRuntime productionRuntime;
-    private final DeviceActorRuntime shadowRuntime;
 
     // Epoch millis at which the current attempt's native connect was issued (0 = none / lease not yet
     // granted); drives the pending-stuck pairing freeze and the wedge escalation. Retry pacing lives in the
@@ -129,7 +127,8 @@ public class DeviceReconciler extends Reconciler<Boolean, DeviceReconciler.Obser
     private long waitingRetrySince;
 
     /**
-     * @param scanIsOff returns the adapter's polled scan state == OFF (connect step waits for this).
+     * @param scanIsOff returns the adapter's polled scan state == OFF (the actor's connect-lease executor
+     *            grants the lease when this turns true; the controller rejects create-connection while scanning).
      * @param requestAdapterReset asks the adapter reconciler to reset (used when a create-connection is wedged).
      */
     public DeviceReconciler(Logger logger, DevicePort port, BooleanSupplier scanIsOff, ResetBudget resetBudget,
@@ -141,17 +140,12 @@ public class DeviceReconciler extends Reconciler<Boolean, DeviceReconciler.Obser
             Runnable requestAdapterReset, Clock clock) {
         super("dev:" + port.id(), logger, Boolean.FALSE, clock);
         this.port = port;
-        this.scanIsOff = scanIsOff;
         this.resetBudget = resetBudget;
         this.requestAdapterReset = requestAdapterReset;
         this.productionRuntime = new DeviceActorRuntime(new DeviceActor(port.id(), logger, clock),
                 DeviceReconciler::createProductionProcedure, scanIsOff, port, this::observeProductionRuntimeEvent,
                 new SettleTimerEffectExecutor(clock::millis, GATT_FIRST_RESOLVE_DELAY_MS),
                 new DeviceBackoffPolicy(port), this::onProductionBackoff);
-        // The "#shadow" suffix disambiguates the two "[actor:<id>]" log streams: the shadow actor mirrors
-        // observations for A/B diagnostics only, and its generations run far ahead of the production actor's.
-        this.shadowRuntime = new DeviceActorRuntime(new DeviceActor(port.id() + "#shadow", logger, clock),
-                DeviceReconciler::createShadowProcedure, () -> false, new ShadowDevicePort(port.id()));
     }
 
     /**
@@ -207,47 +201,6 @@ public class DeviceReconciler extends Reconciler<Boolean, DeviceReconciler.Obser
     }
 
     @Override
-    protected void afterObserve(Boolean unusedDesired, Observed o) {
-        boolean wanted = port.isWanted();
-        if (!wanted) {
-            if (o.nativeConnected || o.flagConnected || o.flagConnecting) {
-                shadowRuntime.shadowObserve(DeviceActorState.DISCONNECTING, DeviceWaitingOn.DISCONNECT, "unwanted");
-            } else {
-                shadowRuntime.shadowObserve(DeviceActorState.IDLE_DISABLED, DeviceWaitingOn.NOTHING, "unwanted");
-            }
-            return;
-        }
-        if (!o.hasNative) {
-            shadowRuntime.shadowObserve(DeviceActorState.DISCOVERING, DeviceWaitingOn.NATIVE_HANDLE, "wanted:noHandle");
-            return;
-        }
-        if (o.nativeConnected) {
-            if (!o.gattResolved) {
-                shadowRuntime.start(new ResolveGattProcedure(RESOLVE_IN_FLIGHT_MAX_MS), "wanted:gattUnresolved");
-            } else {
-                shadowRuntime.shadowObserve(DeviceActorState.ONLINE, DeviceWaitingOn.NOTHING, "wanted:online");
-            }
-            return;
-        }
-        if (o.flagConnecting) {
-            shadowRuntime.shadowObserve(DeviceActorState.CONNECTING,
-                    o.pairing ? DeviceWaitingOn.PAIRING : DeviceWaitingOn.NATIVE_CONNECT,
-                    o.pairing ? "wanted:pairing" : "wanted:connecting");
-            return;
-        }
-        long now = clock.millis();
-        long lastConnectStartedAt = productionRuntime.lastConnectStartedAt();
-        if (lastConnectStartedAt != 0 && now - lastConnectStartedAt < CONNECT_RETRY_MS) {
-            shadowRuntime.shadowObserve(DeviceActorState.BACKING_OFF, DeviceWaitingOn.BACKOFF_TIMER,
-                    "wanted:connectRetry");
-        } else if (!scanIsOff.getAsBoolean()) {
-            shadowRuntime.start(new ConnectProcedure(CONNECT_DEADLINE_MS), "wanted:connectLease");
-        } else {
-            shadowRuntime.start(new ConnectProcedure(CONNECT_DEADLINE_MS), "wanted:connectReady");
-        }
-    }
-
-    @Override
     protected void act(Boolean unusedDesired, Observed o) {
         long now = clock.millis();
         syncProductionRuntime(o);
@@ -271,11 +224,12 @@ public class DeviceReconciler extends Reconciler<Boolean, DeviceReconciler.Obser
 
         if (!port.isWanted()) {
             DeviceActorDiagnostics unwantedDiagnostics = productionRuntime.diagnostics();
-            if (unwantedDiagnostics.activeProcedureName() == DeviceProcedureName.CONNECT
-                    && unwantedDiagnostics.state() == DeviceActorState.CONNECTING) {
-                // Cancel an in-flight attempt — critically the CONNECT_LEASE wait, where a later lease grant
-                // would otherwise issue connectLE for a device nobody wants anymore.
-                logger.debug("[reconcile:{}] no longer wanted; cancelling in-flight connect attempt", name);
+            if (unwantedDiagnostics.state() != DeviceActorState.IDLE_DISABLED) {
+                // Retire the actor: cancels an in-flight attempt (critically the CONNECT_LEASE wait, where a
+                // later lease grant would otherwise issue connectLE for a device nobody wants anymore) and
+                // settles a parked pipeline procedure, so diagnostics read IDLE_DISABLED while unwanted.
+                logger.debug("[reconcile:{}] no longer wanted; retiring device actor (was {})", name,
+                        unwantedDiagnostics.stateName());
                 productionRuntime.submit(new DeviceEvent.WantedOffline());
                 drainUnhandledProductionEffects();
                 clearConnectWindow();
@@ -396,6 +350,11 @@ public class DeviceReconciler extends Reconciler<Boolean, DeviceReconciler.Obser
             if (waitingNativeHandleSince == 0) {
                 waitingNativeHandleSince = now;
                 logger.debug("[reconcile:{}] waiting for discovery/native handle before connect", name);
+            }
+            if (productionRuntime.diagnostics().state() == DeviceActorState.IDLE_DISABLED) {
+                // Intent-only event: parks the actor in DISCOVERING so diagnostics show what is being waited
+                // on (the actor has no procedure for discovery — the scan is adapter-owned).
+                productionRuntime.submit(new DeviceEvent.WantedOnline());
             }
             return;
         } else if (waitingNativeHandleSince != 0) {
@@ -608,7 +567,7 @@ public class DeviceReconciler extends Reconciler<Boolean, DeviceReconciler.Obser
     }
 
     public DeviceActorDiagnostics actorDiagnostics() {
-        return shadowRuntime.diagnostics();
+        return productionRuntime.diagnostics();
     }
 
     DeviceActorDiagnostics productionActorDiagnostics() {
@@ -651,14 +610,6 @@ public class DeviceReconciler extends Reconciler<Boolean, DeviceReconciler.Obser
      * as events; see {@link #driveProductionGattPipeline}.
      */
     private static @Nullable DeviceProcedure createProductionProcedure(DeviceProcedureName procedureName) {
-        return createProcedure(procedureName);
-    }
-
-    private static @Nullable DeviceProcedure createShadowProcedure(DeviceProcedureName procedureName) {
-        return createProcedure(procedureName);
-    }
-
-    private static @Nullable DeviceProcedure createProcedure(DeviceProcedureName procedureName) {
         if (procedureName == DeviceProcedureName.CONNECT) {
             return new ConnectProcedure(CONNECT_DEADLINE_MS);
         }
@@ -675,102 +626,5 @@ public class DeviceReconciler extends Reconciler<Boolean, DeviceReconciler.Obser
             return new OnlineMonitorProcedure();
         }
         return null;
-    }
-
-    private static final class ShadowDevicePort implements DevicePort {
-        private final String id;
-
-        ShadowDevicePort(String id) {
-            this.id = id;
-        }
-
-        @Override
-        public boolean isWanted() {
-            return false;
-        }
-
-        @Override
-        public boolean hasNativeDevice() {
-            return false;
-        }
-
-        @Override
-        public boolean isNativeConnected() {
-            return false;
-        }
-
-        @Override
-        public boolean isGattResolved() {
-            return false;
-        }
-
-        @Override
-        public boolean isGattResolving() {
-            return false;
-        }
-
-        @Override
-        public boolean isFlagConnected() {
-            return false;
-        }
-
-        @Override
-        public boolean isFlagConnecting() {
-            return false;
-        }
-
-        @Override
-        public boolean isPairing() {
-            return false;
-        }
-
-        @Override
-        public boolean consumeConnectAttemptFailedEvent() {
-            return false;
-        }
-
-        @Override
-        public void markConnected() {
-        }
-
-        @Override
-        public void markDisconnected() {
-        }
-
-        @Override
-        public void markConnecting() {
-        }
-
-        @Override
-        public HCIStatusCode connectNative() {
-            return HCIStatusCode.SUCCESS;
-        }
-
-        @Override
-        public void disconnectNative() {
-        }
-
-        @Override
-        public boolean hasStalePairing() {
-            return false;
-        }
-
-        @Override
-        public void clearStalePairing() {
-        }
-
-        @Override
-        public boolean securityRequirementUnmet() {
-            return false;
-        }
-
-        @Override
-        public void resolveGatt() {
-        }
-
-        @Override
-        public String id() {
-            return id;
-        }
     }
 }

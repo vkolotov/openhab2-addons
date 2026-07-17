@@ -347,41 +347,6 @@ interface DeviceEvent {
         }
     }
 
-    final class NativeOperationHung implements DeviceEvent {
-        private final long generation;
-        private final String operation;
-        private final long elapsedMs;
-
-        NativeOperationHung(long generation, String operation, long elapsedMs) {
-            this.generation = generation;
-            this.operation = operation;
-            this.elapsedMs = elapsedMs;
-        }
-
-        @Override
-        public String kind() {
-            return "NativeOperationHung";
-        }
-
-        @Override
-        public boolean generationScoped() {
-            return true;
-        }
-
-        @Override
-        public long generation() {
-            return generation;
-        }
-
-        String operation() {
-            return operation;
-        }
-
-        long elapsedMs() {
-            return elapsedMs;
-        }
-    }
-
     final class AdapterResetStarted implements DeviceEvent {
         private final long adapterGeneration;
 

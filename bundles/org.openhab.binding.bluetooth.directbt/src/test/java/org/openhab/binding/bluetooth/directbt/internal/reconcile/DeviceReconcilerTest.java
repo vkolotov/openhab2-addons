@@ -103,7 +103,7 @@ class DeviceReconcilerTest {
     }
 
     @Test
-    void shadowDiagnosticsReportDiscoveryWait() {
+    void diagnosticsReportDiscoveryWait() {
         FakeDevicePort port = new FakeDevicePort();
         port.wanted = true;
         port.hasNative = false;
@@ -117,7 +117,7 @@ class DeviceReconcilerTest {
     }
 
     @Test
-    void shadowDiagnosticsReportConnectLeaseWaitWithoutChangingBehavior() {
+    void diagnosticsReportConnectLeaseWaitWhileScanIsActive() {
         FakeDevicePort port = new FakeDevicePort();
         port.wanted = true;
         port.hasNative = true;
@@ -129,11 +129,11 @@ class DeviceReconcilerTest {
         DeviceActorDiagnostics diagnostics = r.actorDiagnostics();
         assertEquals(DeviceActorState.CONNECTING, diagnostics.state());
         assertEquals(DeviceWaitingOn.CONNECT_LEASE, diagnostics.waitingOn());
-        assertEquals(0, port.connectNativeCalls, "shadow diagnostics must not bypass the existing scan-off gate");
+        assertEquals(0, port.connectNativeCalls, "no connectLE before the lease is granted (scan still active)");
     }
 
     @Test
-    void shadowRuntimeConnectReadyProbeDoesNotDuplicateLiveConnect() {
+    void diagnosticsReportNativeConnectWaitAfterCommandIssued() {
         FakeDevicePort port = new FakeDevicePort();
         port.wanted = true;
         port.hasNative = true;
@@ -143,8 +143,8 @@ class DeviceReconcilerTest {
         r.reconcile();
 
         assertEquals(DeviceActorState.CONNECTING, r.actorDiagnostics().state());
-        assertEquals(DeviceWaitingOn.CONNECT_LEASE, r.actorDiagnostics().waitingOn());
-        assertEquals(1, port.connectNativeCalls, "live reconciler still owns the real connect command");
+        assertEquals(DeviceWaitingOn.NATIVE_CONNECT, r.actorDiagnostics().waitingOn());
+        assertEquals(1, port.connectNativeCalls);
         assertEquals(1, port.markConnectingCalls);
         assertEquals(0, port.disconnectNativeCalls);
     }
@@ -205,7 +205,7 @@ class DeviceReconcilerTest {
     }
 
     @Test
-    void shadowRuntimeConnectProbeIsOverriddenByLaterOnlineObservation() {
+    void connectionArrivingDuringLeaseWaitHandsOffWithoutConnectLE() {
         FakeDevicePort port = new FakeDevicePort();
         port.wanted = true;
         port.hasNative = true;
@@ -218,19 +218,22 @@ class DeviceReconcilerTest {
         assertEquals(0, port.connectNativeCalls);
         assertEquals(0, port.disconnectNativeCalls);
 
+        // The connection materialises without our connectLE (fully adopted, already resolved): the device is
+        // in sync, so no corrective act runs — the pending attempt parks as-is (its lease grant is
+        // generation-fenced) and is replaced by the next lifecycle event. Critically, connectLE is never
+        // issued and nothing is torn down.
         port.nativeConnected = true;
         port.flagConnected = true;
         port.gattResolved = true;
 
         assertTrue(r.reconcile());
-        assertEquals(DeviceActorState.ONLINE, r.actorDiagnostics().state());
-        assertEquals(DeviceWaitingOn.NOTHING, r.actorDiagnostics().waitingOn());
+        assertEquals(DeviceActorState.CONNECTING, r.actorDiagnostics().state());
         assertEquals(0, port.connectNativeCalls);
         assertEquals(0, port.disconnectNativeCalls);
     }
 
     @Test
-    void shadowRuntimeGattResolveProbeDoesNotDuplicateLiveResolve() {
+    void adoptedUnresolvedLinkGetsExactlyOneResolvePerTick() {
         FakeDevicePort port = new FakeDevicePort();
         port.wanted = true;
         port.hasNative = true;
@@ -244,25 +247,8 @@ class DeviceReconcilerTest {
 
         assertEquals(DeviceActorState.RESOLVING_GATT, r.actorDiagnostics().state());
         assertEquals(DeviceWaitingOn.GATT_RESOLVE, r.actorDiagnostics().waitingOn());
-        assertEquals(1, port.resolveGattCalls, "shadow diagnostics must not issue a second real GATT resolve");
+        assertEquals(1, port.resolveGattCalls, "one resolve attempt per reconcile tick, driven through the actor");
         assertEquals(0, port.disconnectNativeCalls);
-    }
-
-    @Test
-    void shadowDiagnosticsReportOnlineEvenWhenNoActIsNeeded() {
-        FakeDevicePort port = new FakeDevicePort();
-        port.wanted = true;
-        port.hasNative = true;
-        port.nativeConnected = true;
-        port.flagConnected = true;
-        port.gattResolved = true;
-
-        DeviceReconciler r = reconciler(port, scanOff(), new MutableClock(START));
-        assertTrue(r.reconcile());
-
-        DeviceActorDiagnostics diagnostics = r.actorDiagnostics();
-        assertEquals(DeviceActorState.ONLINE, diagnostics.state());
-        assertEquals(DeviceWaitingOn.NOTHING, diagnostics.waitingOn());
     }
 
     // ---------------------------------------------------------------------------------------------
