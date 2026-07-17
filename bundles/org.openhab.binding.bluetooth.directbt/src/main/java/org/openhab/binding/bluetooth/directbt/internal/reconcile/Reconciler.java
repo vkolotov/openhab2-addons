@@ -88,10 +88,6 @@ public abstract class Reconciler<D, O> {
     /** @return true if the observed state already satisfies the desired intent. */
     protected abstract boolean inSync(D desired, O observed);
 
-    /** Optional observation-side hook for diagnostics. Must not issue native/controller commands. */
-    protected void afterObserve(D desired, O observed) {
-    }
-
     /** Issue the idempotent corrective command to move observed toward desired. */
     protected abstract void act(D desired, O observed);
 
@@ -130,7 +126,6 @@ public abstract class Reconciler<D, O> {
         this.observed = obs;
         long now = clock.millis();
         D des = desired;
-        afterObserve(des, obs);
         if (inSync(des, obs)) {
             if (inSyncSince == 0) {
                 inSyncSince = now;

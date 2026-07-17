@@ -52,9 +52,9 @@ import org.openhab.binding.bluetooth.BluetoothAddress;
 import org.openhab.binding.bluetooth.BluetoothBindingConstants;
 import org.openhab.binding.bluetooth.BluetoothCharacteristic;
 import org.openhab.binding.bluetooth.BluetoothDeviceListener;
-import org.openhab.binding.bluetooth.directbt.internal.reconcile.DeviceActorDiagnostics;
 import org.openhab.binding.bluetooth.directbt.internal.reconcile.MutableClock;
 import org.openhab.binding.bluetooth.directbt.internal.reconcile.ResetBudget;
+import org.openhab.binding.bluetooth.directbt.internal.reconcile.device.DeviceActorDiagnostics;
 
 /**
  * Regression harness for {@link DirectBTBluetoothDevice} — the pure {@link org.openhab.binding.bluetooth.directbt

@@ -13,6 +13,12 @@
 package org.openhab.binding.bluetooth.directbt.internal.reconcile;
 
 import org.eclipse.jdt.annotation.NonNullByDefault;
+import org.openhab.binding.bluetooth.directbt.internal.reconcile.adapter.*;
+import org.openhab.binding.bluetooth.directbt.internal.reconcile.device.*;
+import org.openhab.binding.bluetooth.directbt.internal.reconcile.effect.*;
+import org.openhab.binding.bluetooth.directbt.internal.reconcile.event.*;
+import org.openhab.binding.bluetooth.directbt.internal.reconcile.port.*;
+import org.openhab.binding.bluetooth.directbt.internal.reconcile.procedure.*;
 
 /**
  * Implementation-neutral driver for the device connection lifecycle, so the SAME behavioural contract

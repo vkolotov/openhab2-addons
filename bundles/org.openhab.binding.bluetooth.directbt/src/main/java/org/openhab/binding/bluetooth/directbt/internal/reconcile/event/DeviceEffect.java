@@ -10,7 +10,7 @@
  *
  * SPDX-License-Identifier: EPL-2.0
  */
-package org.openhab.binding.bluetooth.directbt.internal.reconcile;
+package org.openhab.binding.bluetooth.directbt.internal.reconcile.event;
 
 import org.eclipse.jdt.annotation.NonNullByDefault;
 
@@ -21,20 +21,20 @@ import org.eclipse.jdt.annotation.NonNullByDefault;
  * @author Vlad Kolotov - Initial contribution
  */
 @NonNullByDefault
-final class DeviceEffect {
+public final class DeviceEffect {
     private final long generation;
-    private final String operation;
+    private final DeviceEffectOperation operation;
 
-    DeviceEffect(long generation, String operation) {
+    public DeviceEffect(long generation, DeviceEffectOperation operation) {
         this.generation = generation;
         this.operation = operation;
     }
 
-    long generation() {
+    public long generation() {
         return generation;
     }
 
-    String operation() {
+    public DeviceEffectOperation operation() {
         return operation;
     }
 }

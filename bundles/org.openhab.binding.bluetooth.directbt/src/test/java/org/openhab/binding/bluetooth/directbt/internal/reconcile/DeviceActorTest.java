@@ -22,6 +22,12 @@ import java.util.List;
 
 import org.eclipse.jdt.annotation.NonNullByDefault;
 import org.junit.jupiter.api.Test;
+import org.openhab.binding.bluetooth.directbt.internal.reconcile.adapter.*;
+import org.openhab.binding.bluetooth.directbt.internal.reconcile.device.*;
+import org.openhab.binding.bluetooth.directbt.internal.reconcile.effect.*;
+import org.openhab.binding.bluetooth.directbt.internal.reconcile.event.*;
+import org.openhab.binding.bluetooth.directbt.internal.reconcile.port.*;
+import org.openhab.binding.bluetooth.directbt.internal.reconcile.procedure.*;
 
 /**
  * Contract tests for the per-device actor runtime.
@@ -75,8 +81,9 @@ class DeviceActorTest {
         actor.startProcedure(procedure, "test-start");
         long generation = actor.diagnostics().generation();
 
-        actor.submit(new DeviceEvent.NativeEffectCompleted(generation - 1, "connectLE", "late-success"));
-        actor.submit(new DeviceEvent.NativeEffectCompleted(generation, "connectLE", "success"));
+        actor.submit(new DeviceEvent.NativeEffectCompleted(generation - 1, DeviceEffectOperation.CONNECT_LE,
+                "late-success"));
+        actor.submit(new DeviceEvent.NativeEffectCompleted(generation, DeviceEffectOperation.CONNECT_LE, "success"));
 
         assertEquals(1, procedure.events.size());
         assertEquals("success", ((DeviceEvent.NativeEffectCompleted) procedure.events.get(0)).result());
@@ -116,7 +123,7 @@ class DeviceActorTest {
         List<DeviceEffect> effects = actor.drainEffects();
         assertEquals(1, effects.size());
         assertEquals(actor.diagnostics().generation(), effects.get(0).generation());
-        assertEquals("connectLE", effects.get(0).operation());
+        assertEquals(DeviceEffectOperation.CONNECT_LE, effects.get(0).operation());
     }
 
     private static final class FakeProcedure implements DeviceProcedure {
@@ -150,7 +157,7 @@ class DeviceActorTest {
 
         @Override
         public void start(DeviceProcedureContext ctx) {
-            ctx.emit(new DeviceEffect(ctx.generation(), "connectLE"));
+            ctx.emit(new DeviceEffect(ctx.generation(), DeviceEffectOperation.CONNECT_LE));
         }
 
         @Override

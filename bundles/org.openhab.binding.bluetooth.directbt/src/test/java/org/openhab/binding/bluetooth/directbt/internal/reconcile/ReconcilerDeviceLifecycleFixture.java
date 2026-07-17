@@ -18,6 +18,12 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import org.eclipse.jdt.annotation.NonNullByDefault;
+import org.openhab.binding.bluetooth.directbt.internal.reconcile.adapter.*;
+import org.openhab.binding.bluetooth.directbt.internal.reconcile.device.*;
+import org.openhab.binding.bluetooth.directbt.internal.reconcile.effect.*;
+import org.openhab.binding.bluetooth.directbt.internal.reconcile.event.*;
+import org.openhab.binding.bluetooth.directbt.internal.reconcile.port.*;
+import org.openhab.binding.bluetooth.directbt.internal.reconcile.procedure.*;
 
 /**
  * {@link DeviceLifecycleFixture} over the current {@link DeviceReconciler}, wired exactly the way

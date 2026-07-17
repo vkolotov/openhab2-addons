@@ -10,21 +10,24 @@
  *
  * SPDX-License-Identifier: EPL-2.0
  */
-package org.openhab.binding.bluetooth.directbt.internal.reconcile;
+package org.openhab.binding.bluetooth.directbt.internal.reconcile.procedure;
 
 import org.eclipse.jdt.annotation.NonNullByDefault;
 
 /**
- * Boundary for executing actor-emitted side effects outside the actor thread.
+ * Ordered BLE procedures that the device actor may run.
  *
  * @author Vlad Kolotov - Initial contribution
  */
 @NonNullByDefault
-interface DeviceEffectExecutor {
-    /**
-     * Executes a known effect.
-     *
-     * @return true when the effect was understood by this executor.
-     */
-    boolean execute(DeviceEffect effect);
+public enum DeviceProcedureName {
+    DISCOVER_DEVICE,
+    CONNECT,
+    SETTLE_LINK,
+    RESOLVE_GATT,
+    SUBSCRIBE_NOTIFICATIONS,
+    ONLINE_MONITOR,
+    RECOVER_STALE_GATT,
+    DISCONNECT,
+    BACKOFF
 }

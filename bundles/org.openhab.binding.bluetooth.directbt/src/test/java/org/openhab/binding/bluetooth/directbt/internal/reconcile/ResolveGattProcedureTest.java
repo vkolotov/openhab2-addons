@@ -18,6 +18,12 @@ import java.util.List;
 
 import org.eclipse.jdt.annotation.NonNullByDefault;
 import org.junit.jupiter.api.Test;
+import org.openhab.binding.bluetooth.directbt.internal.reconcile.adapter.*;
+import org.openhab.binding.bluetooth.directbt.internal.reconcile.device.*;
+import org.openhab.binding.bluetooth.directbt.internal.reconcile.effect.*;
+import org.openhab.binding.bluetooth.directbt.internal.reconcile.event.*;
+import org.openhab.binding.bluetooth.directbt.internal.reconcile.port.*;
+import org.openhab.binding.bluetooth.directbt.internal.reconcile.procedure.*;
 
 /**
  * Pure contract tests for GATT resolution as its own procedure.
@@ -36,7 +42,7 @@ class ResolveGattProcedureTest {
 
         List<DeviceEffect> effects = actor.drainEffects();
         assertEquals(1, effects.size());
-        assertEquals(ResolveGattProcedure.EFFECT_RESOLVE_GATT, effects.get(0).operation());
+        assertEquals(DeviceEffectOperation.RESOLVE_GATT, effects.get(0).operation());
         assertEquals(DeviceActorState.RESOLVING_GATT, actor.diagnostics().state());
         assertEquals(DeviceWaitingOn.GATT_RESOLVE, actor.diagnostics().waitingOn());
     }
@@ -52,7 +58,7 @@ class ResolveGattProcedureTest {
 
         List<DeviceEffect> effects = actor.drainEffects();
         assertEquals(1, effects.size());
-        assertEquals(ResolveGattProcedure.EFFECT_START_SUBSCRIBE_PROCEDURE, effects.get(0).operation());
+        assertEquals(DeviceEffectOperation.START_SUBSCRIBE_PROCEDURE, effects.get(0).operation());
         assertEquals(DeviceActorState.SUBSCRIBING, actor.diagnostics().state());
         assertEquals(DeviceWaitingOn.SUBSCRIPTION, actor.diagnostics().waitingOn());
     }
@@ -82,7 +88,7 @@ class ResolveGattProcedureTest {
 
         List<DeviceEffect> effects = actor.drainEffects();
         assertEquals(1, effects.size());
-        assertEquals(ResolveGattProcedure.EFFECT_DISCONNECT_NATIVE, effects.get(0).operation());
+        assertEquals(DeviceEffectOperation.DISCONNECT_NATIVE, effects.get(0).operation());
         assertEquals(DeviceActorState.BACKING_OFF, actor.diagnostics().state());
         assertEquals(DeviceWaitingOn.BACKOFF_TIMER, actor.diagnostics().waitingOn());
     }
@@ -99,7 +105,7 @@ class ResolveGattProcedureTest {
 
         List<DeviceEffect> effects = actor.drainEffects();
         assertEquals(1, effects.size());
-        assertEquals(ResolveGattProcedure.EFFECT_DISCONNECT_NATIVE, effects.get(0).operation());
+        assertEquals(DeviceEffectOperation.DISCONNECT_NATIVE, effects.get(0).operation());
         assertEquals(DeviceActorState.BACKING_OFF, actor.diagnostics().state());
         assertEquals(DeviceWaitingOn.BACKOFF_TIMER, actor.diagnostics().waitingOn());
     }

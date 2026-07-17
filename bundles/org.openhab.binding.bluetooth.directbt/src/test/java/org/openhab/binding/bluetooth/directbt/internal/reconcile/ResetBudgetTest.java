@@ -17,6 +17,12 @@ import static org.openhab.binding.bluetooth.directbt.internal.reconcile.Reconcil
 
 import org.eclipse.jdt.annotation.NonNullByDefault;
 import org.junit.jupiter.api.Test;
+import org.openhab.binding.bluetooth.directbt.internal.reconcile.adapter.*;
+import org.openhab.binding.bluetooth.directbt.internal.reconcile.device.*;
+import org.openhab.binding.bluetooth.directbt.internal.reconcile.effect.*;
+import org.openhab.binding.bluetooth.directbt.internal.reconcile.event.*;
+import org.openhab.binding.bluetooth.directbt.internal.reconcile.port.*;
+import org.openhab.binding.bluetooth.directbt.internal.reconcile.procedure.*;
 
 /**
  * Regression harness for {@link ResetBudget} — the shared minimum-interval gate for adapter {@code reset()}.

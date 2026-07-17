@@ -10,12 +10,15 @@
  *
  * SPDX-License-Identifier: EPL-2.0
  */
-package org.openhab.binding.bluetooth.directbt.internal.reconcile;
+package org.openhab.binding.bluetooth.directbt.internal.reconcile.effect;
 
 import java.util.function.LongSupplier;
 
 import org.eclipse.jdt.annotation.NonNullByDefault;
 import org.eclipse.jdt.annotation.Nullable;
+import org.openhab.binding.bluetooth.directbt.internal.reconcile.event.DeviceEffect;
+import org.openhab.binding.bluetooth.directbt.internal.reconcile.event.DeviceEffectOperation;
+import org.openhab.binding.bluetooth.directbt.internal.reconcile.event.DeviceEvent;
 
 /**
  * Owns the actor-side link-settle timer effect.
@@ -23,21 +26,21 @@ import org.eclipse.jdt.annotation.Nullable;
  * @author Vlad Kolotov - Initial contribution
  */
 @NonNullByDefault
-final class SettleTimerEffectExecutor implements DeviceEffectExecutor {
+public final class SettleTimerEffectExecutor implements DeviceEffectExecutor {
     private final LongSupplier nowMillis;
     private final long settleDelayMs;
 
     private long generation = -1;
     private long dueAt = -1;
 
-    SettleTimerEffectExecutor(LongSupplier nowMillis, long settleDelayMs) {
+    public SettleTimerEffectExecutor(LongSupplier nowMillis, long settleDelayMs) {
         this.nowMillis = nowMillis;
         this.settleDelayMs = settleDelayMs;
     }
 
     @Override
     public boolean execute(DeviceEffect effect) {
-        if (!SettleLinkProcedure.EFFECT_SCHEDULE_LINK_SETTLE_TIMER.equals(effect.operation())) {
+        if (effect.operation() != DeviceEffectOperation.SCHEDULE_LINK_SETTLE_TIMER) {
             return false;
         }
         generation = effect.generation();
@@ -46,7 +49,7 @@ final class SettleTimerEffectExecutor implements DeviceEffectExecutor {
     }
 
     @Nullable
-    DeviceEvent tick(long currentGeneration) {
+    public DeviceEvent tick(long currentGeneration) {
         if (dueAt < 0) {
             return null;
         }

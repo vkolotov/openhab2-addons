@@ -10,11 +10,12 @@
  *
  * SPDX-License-Identifier: EPL-2.0
  */
-package org.openhab.binding.bluetooth.directbt.internal.reconcile;
+package org.openhab.binding.bluetooth.directbt.internal.reconcile.adapter;
 
 import java.time.Clock;
 
 import org.eclipse.jdt.annotation.NonNullByDefault;
+import org.openhab.binding.bluetooth.directbt.internal.reconcile.ResetBudget;
 import org.slf4j.Logger;
 
 /**
@@ -51,11 +52,11 @@ public class AdapterLeaseCoordinator {
     // Contention slice lengths. A connect slice fits ~2 attempt cycles (2s retry spacing + establishment);
     // a discovery slice is long enough for a slow advertiser (battery gauges advertise every few seconds)
     // to be heard several times at 50% scan duty.
-    static final long CONNECT_SLICE_MS = 16_000;
-    static final long DISCOVERY_SLICE_MS = 30_000;
+    public static final long CONNECT_SLICE_MS = 16_000;
+    public static final long DISCOVERY_SLICE_MS = 30_000;
 
     // How long a wanted device may stay continuously undiscovered before each escalation rung fires.
-    static final long LADDER_RUNG_MS = 180_000;
+    public static final long LADDER_RUNG_MS = 180_000;
 
     private final Logger logger;
     private final ResetBudget resetBudget;

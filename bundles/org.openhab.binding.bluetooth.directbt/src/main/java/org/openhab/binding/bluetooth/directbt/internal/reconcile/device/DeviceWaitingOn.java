@@ -10,25 +10,26 @@
  *
  * SPDX-License-Identifier: EPL-2.0
  */
-package org.openhab.binding.bluetooth.directbt.internal.reconcile;
+package org.openhab.binding.bluetooth.directbt.internal.reconcile.device;
 
 import org.eclipse.jdt.annotation.NonNullByDefault;
 
 /**
- * Procedure-level device lifecycle state exposed by the actor diagnostics.
+ * Coarse "what are we blocked on?" diagnostic for silent-wait debugging.
  *
  * @author Vlad Kolotov - Initial contribution
  */
 @NonNullByDefault
-enum DeviceActorState {
-    IDLE_DISABLED,
-    DISCOVERING,
-    CONNECTING,
-    LINK_SETTLING,
-    RESOLVING_GATT,
-    SUBSCRIBING,
-    ONLINE,
-    RECOVERING,
-    DISCONNECTING,
-    BACKING_OFF
+public enum DeviceWaitingOn {
+    NOTHING,
+    NATIVE_HANDLE,
+    CONNECT_LEASE,
+    NATIVE_CONNECT,
+    PAIRING,
+    SETTLE_TIMER,
+    GATT_RESOLVE,
+    SUBSCRIPTION,
+    BACKOFF_TIMER,
+    DISCONNECT,
+    ADAPTER_RESET
 }

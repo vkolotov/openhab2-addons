@@ -10,12 +10,15 @@
  *
  * SPDX-License-Identifier: EPL-2.0
  */
-package org.openhab.binding.bluetooth.directbt.internal.reconcile;
+package org.openhab.binding.bluetooth.directbt.internal.reconcile.effect;
 
 import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
 
 import org.eclipse.jdt.annotation.NonNullByDefault;
+import org.openhab.binding.bluetooth.directbt.internal.reconcile.event.DeviceEffect;
+import org.openhab.binding.bluetooth.directbt.internal.reconcile.event.DeviceEffectOperation;
+import org.openhab.binding.bluetooth.directbt.internal.reconcile.event.DeviceEvent;
 
 /**
  * Handles the actor's scan-off connect lease request. If the scan is still on, the lease request is remembered and
@@ -24,20 +27,20 @@ import org.eclipse.jdt.annotation.NonNullByDefault;
  * @author Vlad Kolotov - Initial contribution
  */
 @NonNullByDefault
-final class ConnectLeaseEffectExecutor implements DeviceEffectExecutor {
+public final class ConnectLeaseEffectExecutor implements DeviceEffectExecutor {
     private final BooleanSupplier scanIsOff;
     private final Consumer<DeviceEvent> eventSink;
 
     private long pendingGeneration = -1;
 
-    ConnectLeaseEffectExecutor(BooleanSupplier scanIsOff, Consumer<DeviceEvent> eventSink) {
+    public ConnectLeaseEffectExecutor(BooleanSupplier scanIsOff, Consumer<DeviceEvent> eventSink) {
         this.scanIsOff = scanIsOff;
         this.eventSink = eventSink;
     }
 
     @Override
     public boolean execute(DeviceEffect effect) {
-        if (!ConnectProcedure.EFFECT_REQUEST_CONNECT_LEASE.equals(effect.operation())) {
+        if (effect.operation() != DeviceEffectOperation.REQUEST_CONNECT_LEASE) {
             return false;
         }
         pendingGeneration = effect.generation();
@@ -45,7 +48,7 @@ final class ConnectLeaseEffectExecutor implements DeviceEffectExecutor {
         return true;
     }
 
-    void tick(long currentGeneration) {
+    public void tick(long currentGeneration) {
         if (pendingGeneration == -1) {
             return;
         }
@@ -60,7 +63,7 @@ final class ConnectLeaseEffectExecutor implements DeviceEffectExecutor {
         }
     }
 
-    boolean hasPendingLease() {
+    public boolean hasPendingLease() {
         return pendingGeneration != -1;
     }
 }

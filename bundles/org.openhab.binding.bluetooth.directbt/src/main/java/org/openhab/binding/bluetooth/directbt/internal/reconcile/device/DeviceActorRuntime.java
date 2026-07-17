@@ -10,7 +10,7 @@
  *
  * SPDX-License-Identifier: EPL-2.0
  */
-package org.openhab.binding.bluetooth.directbt.internal.reconcile;
+package org.openhab.binding.bluetooth.directbt.internal.reconcile.device;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -19,6 +19,15 @@ import java.util.function.Consumer;
 
 import org.eclipse.jdt.annotation.NonNullByDefault;
 import org.eclipse.jdt.annotation.Nullable;
+import org.openhab.binding.bluetooth.directbt.internal.reconcile.effect.ConnectLeaseEffectExecutor;
+import org.openhab.binding.bluetooth.directbt.internal.reconcile.effect.DevicePortEffectExecutor;
+import org.openhab.binding.bluetooth.directbt.internal.reconcile.effect.SettleTimerEffectExecutor;
+import org.openhab.binding.bluetooth.directbt.internal.reconcile.event.DeviceEffect;
+import org.openhab.binding.bluetooth.directbt.internal.reconcile.event.DeviceEvent;
+import org.openhab.binding.bluetooth.directbt.internal.reconcile.port.DevicePort;
+import org.openhab.binding.bluetooth.directbt.internal.reconcile.procedure.DeviceProcedure;
+import org.openhab.binding.bluetooth.directbt.internal.reconcile.procedure.DeviceProcedureName;
+import org.openhab.binding.bluetooth.directbt.internal.reconcile.procedure.DeviceProcedureRunner;
 
 /**
  * Composes the actor, procedure runner, and first effect executors into one pumpable control-plane runtime. This
@@ -27,7 +36,7 @@ import org.eclipse.jdt.annotation.Nullable;
  * @author Vlad Kolotov - Initial contribution
  */
 @NonNullByDefault
-final class DeviceActorRuntime {
+public final class DeviceActorRuntime {
     private final DeviceActor actor;
     private final DeviceProcedureRunner runner;
     private final ConnectLeaseEffectExecutor connectLeaseExecutor;
@@ -41,25 +50,25 @@ final class DeviceActorRuntime {
     // Epoch millis of the last CONNECT procedure start (0 = never): the runtime-owned retry-pacing stamp.
     private long lastConnectStartedAt;
 
-    DeviceActorRuntime(DeviceActor actor, DeviceProcedureRunner.DeviceProcedureFactory procedureFactory,
+    public DeviceActorRuntime(DeviceActor actor, DeviceProcedureRunner.DeviceProcedureFactory procedureFactory,
             BooleanSupplier scanIsOff, DevicePort port) {
         this(actor, procedureFactory, scanIsOff, port, event -> {
         });
     }
 
-    DeviceActorRuntime(DeviceActor actor, DeviceProcedureRunner.DeviceProcedureFactory procedureFactory,
+    public DeviceActorRuntime(DeviceActor actor, DeviceProcedureRunner.DeviceProcedureFactory procedureFactory,
             BooleanSupplier scanIsOff, DevicePort port, Consumer<DeviceEvent> eventObserver) {
         this(actor, procedureFactory, scanIsOff, port, eventObserver, null, diagnostics -> {
         });
     }
 
-    DeviceActorRuntime(DeviceActor actor, DeviceProcedureRunner.DeviceProcedureFactory procedureFactory,
+    public DeviceActorRuntime(DeviceActor actor, DeviceProcedureRunner.DeviceProcedureFactory procedureFactory,
             BooleanSupplier scanIsOff, DevicePort port, Consumer<DeviceEvent> eventObserver,
             @Nullable DeviceBackoffPolicy backoffPolicy, Consumer<DeviceActorDiagnostics> backoffObserver) {
         this(actor, procedureFactory, scanIsOff, port, eventObserver, null, backoffPolicy, backoffObserver);
     }
 
-    DeviceActorRuntime(DeviceActor actor, DeviceProcedureRunner.DeviceProcedureFactory procedureFactory,
+    public DeviceActorRuntime(DeviceActor actor, DeviceProcedureRunner.DeviceProcedureFactory procedureFactory,
             BooleanSupplier scanIsOff, DevicePort port, Consumer<DeviceEvent> eventObserver,
             @Nullable SettleTimerEffectExecutor settleTimerExecutor, @Nullable DeviceBackoffPolicy backoffPolicy,
             Consumer<DeviceActorDiagnostics> backoffObserver) {
@@ -73,7 +82,7 @@ final class DeviceActorRuntime {
         this.backoffObserver = backoffObserver;
     }
 
-    void start(DeviceProcedure procedure, String cause) {
+    public void start(DeviceProcedure procedure, String cause) {
         runner.start(procedure, cause);
         if (procedure.name() == DeviceProcedureName.CONNECT) {
             // The actor stamped stateStartedAt at the CONNECT transition; reuse it so pacing and the actor
@@ -85,21 +94,21 @@ final class DeviceActorRuntime {
     }
 
     /** Epoch millis of the last CONNECT procedure start, 0 if never — the attempt retry-pacing stamp. */
-    long lastConnectStartedAt() {
+    public long lastConnectStartedAt() {
         return lastConnectStartedAt;
     }
 
-    void submit(DeviceEvent event) {
+    public void submit(DeviceEvent event) {
         runner.submit(event);
         pump();
         applyBackoffPolicy();
     }
 
-    void tick() {
+    public void tick() {
         tick(false);
     }
 
-    void tick(boolean procedureDeadlinePaused) {
+    public void tick(boolean procedureDeadlinePaused) {
         tickSettleTimer();
         connectLeaseExecutor.tick(actor.diagnostics().generation());
         // Deliver any expired-timer events BEFORE judging procedure residency: on a sparse tick (paused
@@ -114,21 +123,21 @@ final class DeviceActorRuntime {
         applyBackoffPolicy();
     }
 
-    List<DeviceEffect> drainUnhandledEffects() {
+    public List<DeviceEffect> drainUnhandledEffects() {
         List<DeviceEffect> drained = List.copyOf(unhandledEffects);
         unhandledEffects.clear();
         return drained;
     }
 
-    DeviceActorDiagnostics diagnostics() {
+    public DeviceActorDiagnostics diagnostics() {
         return actor.diagnostics();
     }
 
-    boolean isActive(DeviceProcedureName procedureName) {
+    public boolean isActive(DeviceProcedureName procedureName) {
         return procedureName == diagnostics().activeProcedureName();
     }
 
-    long generation() {
+    public long generation() {
         return diagnostics().generation();
     }
 

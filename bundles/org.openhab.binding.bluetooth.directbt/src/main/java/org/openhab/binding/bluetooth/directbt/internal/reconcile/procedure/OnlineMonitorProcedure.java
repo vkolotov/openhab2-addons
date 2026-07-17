@@ -10,9 +10,15 @@
  *
  * SPDX-License-Identifier: EPL-2.0
  */
-package org.openhab.binding.bluetooth.directbt.internal.reconcile;
+package org.openhab.binding.bluetooth.directbt.internal.reconcile.procedure;
+
+import static org.openhab.binding.bluetooth.directbt.internal.reconcile.event.DeviceEffectOperation.DISCONNECT_NATIVE;
 
 import org.eclipse.jdt.annotation.NonNullByDefault;
+import org.openhab.binding.bluetooth.directbt.internal.reconcile.device.DeviceActorState;
+import org.openhab.binding.bluetooth.directbt.internal.reconcile.device.DeviceWaitingOn;
+import org.openhab.binding.bluetooth.directbt.internal.reconcile.event.DeviceEffect;
+import org.openhab.binding.bluetooth.directbt.internal.reconcile.event.DeviceEvent;
 
 /**
  * Stable online procedure. It has no deadline and exists so an explicit wanted-offline cancellation still maps to
@@ -21,9 +27,7 @@ import org.eclipse.jdt.annotation.NonNullByDefault;
  * @author Vlad Kolotov - Initial contribution
  */
 @NonNullByDefault
-final class OnlineMonitorProcedure implements DeviceProcedure {
-    static final String EFFECT_DISCONNECT_NATIVE = ConnectProcedure.EFFECT_DISCONNECT_NATIVE;
-
+public final class OnlineMonitorProcedure implements DeviceProcedure {
     @Override
     public DeviceProcedureName name() {
         return DeviceProcedureName.ONLINE_MONITOR;
@@ -54,6 +58,6 @@ final class OnlineMonitorProcedure implements DeviceProcedure {
 
     @Override
     public void cancel(String reason, DeviceProcedureContext ctx) {
-        ctx.emit(new DeviceEffect(ctx.generation(), EFFECT_DISCONNECT_NATIVE));
+        ctx.emit(new DeviceEffect(ctx.generation(), DISCONNECT_NATIVE));
     }
 }

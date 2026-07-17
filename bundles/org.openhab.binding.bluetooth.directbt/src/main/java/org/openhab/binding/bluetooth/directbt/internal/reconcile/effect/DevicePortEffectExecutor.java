@@ -10,12 +10,15 @@
  *
  * SPDX-License-Identifier: EPL-2.0
  */
-package org.openhab.binding.bluetooth.directbt.internal.reconcile;
+package org.openhab.binding.bluetooth.directbt.internal.reconcile.effect;
 
 import java.util.function.Consumer;
 
 import org.direct_bt.HCIStatusCode;
 import org.eclipse.jdt.annotation.NonNullByDefault;
+import org.openhab.binding.bluetooth.directbt.internal.reconcile.event.DeviceEffect;
+import org.openhab.binding.bluetooth.directbt.internal.reconcile.event.DeviceEvent;
+import org.openhab.binding.bluetooth.directbt.internal.reconcile.port.DevicePort;
 
 /**
  * Executes actor effects against the existing {@link DevicePort} abstraction and reports synchronous outcomes back
@@ -24,45 +27,43 @@ import org.eclipse.jdt.annotation.NonNullByDefault;
  * @author Vlad Kolotov - Initial contribution
  */
 @NonNullByDefault
-final class DevicePortEffectExecutor implements DeviceEffectExecutor {
+public final class DevicePortEffectExecutor implements DeviceEffectExecutor {
     private final DevicePort port;
     private final Consumer<DeviceEvent> eventSink;
 
-    DevicePortEffectExecutor(DevicePort port, Consumer<DeviceEvent> eventSink) {
+    public DevicePortEffectExecutor(DevicePort port, Consumer<DeviceEvent> eventSink) {
         this.port = port;
         this.eventSink = eventSink;
     }
 
     @Override
     public boolean execute(DeviceEffect effect) {
-        String operation = effect.operation();
-        if (ConnectProcedure.EFFECT_CONNECT_LE.equals(operation)) {
-            executeConnect(effect);
-            return true;
+        switch (effect.operation()) {
+            case CONNECT_LE:
+                executeConnect(effect);
+                return true;
+            case DISCONNECT_NATIVE:
+                port.disconnectNative();
+                return true;
+            case CLEAR_STALE_PAIRING:
+                // Evidence gate (frozen constraint 9): the effect is emitted on every failed/timed-out connect
+                // attempt, but keys are only cleared when the device actually holds stored keys — a pre-paired
+                // device whose create-connection failed is the dead-bond case; anything else is a no-op.
+                if (port.hasStalePairing()) {
+                    port.clearStalePairing();
+                }
+                return true;
+            case RESOLVE_GATT:
+                executeResolveGatt(effect);
+                return true;
+            case MARK_CONNECTED:
+                port.markConnected();
+                eventSink.accept(
+                        new DeviceEvent.NativeEffectCompleted(effect.generation(), effect.operation(), "SUCCESS"));
+                return true;
+            default:
+                return false;
         }
-        if (ConnectProcedure.EFFECT_DISCONNECT_NATIVE.equals(operation)) {
-            port.disconnectNative();
-            return true;
-        }
-        if (ConnectProcedure.EFFECT_CLEAR_STALE_PAIRING.equals(operation)) {
-            // Evidence gate (frozen constraint 9): the effect is emitted on every failed/timed-out connect
-            // attempt, but keys are only cleared when the device actually holds stored keys — a pre-paired
-            // device whose create-connection failed is the dead-bond case; anything else is a no-op.
-            if (port.hasStalePairing()) {
-                port.clearStalePairing();
-            }
-            return true;
-        }
-        if (ResolveGattProcedure.EFFECT_RESOLVE_GATT.equals(operation)) {
-            executeResolveGatt(effect);
-            return true;
-        }
-        if (SubscribeNotificationsProcedure.EFFECT_MARK_CONNECTED.equals(operation)) {
-            port.markConnected();
-            eventSink.accept(new DeviceEvent.NativeEffectCompleted(effect.generation(), operation, "SUCCESS"));
-            return true;
-        }
-        return false;
     }
 
     private void executeConnect(DeviceEffect effect) {

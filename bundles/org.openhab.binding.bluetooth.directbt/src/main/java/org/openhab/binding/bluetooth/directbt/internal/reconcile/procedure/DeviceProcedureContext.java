@@ -10,9 +10,12 @@
  *
  * SPDX-License-Identifier: EPL-2.0
  */
-package org.openhab.binding.bluetooth.directbt.internal.reconcile;
+package org.openhab.binding.bluetooth.directbt.internal.reconcile.procedure;
 
 import org.eclipse.jdt.annotation.NonNullByDefault;
+import org.openhab.binding.bluetooth.directbt.internal.reconcile.device.DeviceActorState;
+import org.openhab.binding.bluetooth.directbt.internal.reconcile.device.DeviceWaitingOn;
+import org.openhab.binding.bluetooth.directbt.internal.reconcile.event.DeviceEffect;
 
 /**
  * Procedure side-effect boundary. Procedures emit effects here instead of calling Direct-BT/native code.
@@ -20,7 +23,7 @@ import org.eclipse.jdt.annotation.NonNullByDefault;
  * @author Vlad Kolotov - Initial contribution
  */
 @NonNullByDefault
-interface DeviceProcedureContext {
+public interface DeviceProcedureContext {
     String deviceId();
 
     long generation();

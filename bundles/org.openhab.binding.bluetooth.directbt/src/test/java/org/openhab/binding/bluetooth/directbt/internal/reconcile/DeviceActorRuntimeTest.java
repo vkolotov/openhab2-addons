@@ -23,6 +23,12 @@ import org.direct_bt.HCIStatusCode;
 import org.eclipse.jdt.annotation.NonNullByDefault;
 import org.eclipse.jdt.annotation.Nullable;
 import org.junit.jupiter.api.Test;
+import org.openhab.binding.bluetooth.directbt.internal.reconcile.adapter.*;
+import org.openhab.binding.bluetooth.directbt.internal.reconcile.device.*;
+import org.openhab.binding.bluetooth.directbt.internal.reconcile.effect.*;
+import org.openhab.binding.bluetooth.directbt.internal.reconcile.event.*;
+import org.openhab.binding.bluetooth.directbt.internal.reconcile.port.*;
+import org.openhab.binding.bluetooth.directbt.internal.reconcile.procedure.*;
 
 /**
  * Tests for the composed actor/effect runtime.
@@ -150,7 +156,7 @@ class DeviceActorRuntimeTest {
 
         runtime.start(new SettleLinkProcedure(5_000), "test-settle");
 
-        assertEffects(runtime.drainUnhandledEffects(), SettleLinkProcedure.EFFECT_SCHEDULE_LINK_SETTLE_TIMER);
+        assertEffects(runtime.drainUnhandledEffects(), DeviceEffectOperation.SCHEDULE_LINK_SETTLE_TIMER);
     }
 
     @Test
@@ -193,7 +199,7 @@ class DeviceActorRuntimeTest {
         return null;
     }
 
-    private static void assertEffects(List<DeviceEffect> effects, String... operations) {
+    private static void assertEffects(List<DeviceEffect> effects, DeviceEffectOperation... operations) {
         assertEquals(operations.length, effects.size());
         for (int i = 0; i < operations.length; i++) {
             assertEquals(operations[i], effects.get(i).operation());

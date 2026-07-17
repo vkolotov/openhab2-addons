@@ -10,9 +10,10 @@
  *
  * SPDX-License-Identifier: EPL-2.0
  */
-package org.openhab.binding.bluetooth.directbt.internal.reconcile;
+package org.openhab.binding.bluetooth.directbt.internal.reconcile.device;
 
 import org.eclipse.jdt.annotation.NonNullByDefault;
+import org.openhab.binding.bluetooth.directbt.internal.reconcile.port.DevicePort;
 
 /**
  * Applies once-per-generation port cleanup when an actor procedure reaches BACKING_OFF.
@@ -25,15 +26,15 @@ import org.eclipse.jdt.annotation.NonNullByDefault;
  * @author Vlad Kolotov - Initial contribution
  */
 @NonNullByDefault
-final class DeviceBackoffPolicy {
+public final class DeviceBackoffPolicy {
     private final DevicePort port;
     private long appliedGeneration = -1;
 
-    DeviceBackoffPolicy(DevicePort port) {
+    public DeviceBackoffPolicy(DevicePort port) {
         this.port = port;
     }
 
-    boolean apply(DeviceActorDiagnostics diagnostics) {
+    public boolean apply(DeviceActorDiagnostics diagnostics) {
         if (diagnostics.state() != DeviceActorState.BACKING_OFF || diagnostics.generation() == appliedGeneration) {
             return false;
         }

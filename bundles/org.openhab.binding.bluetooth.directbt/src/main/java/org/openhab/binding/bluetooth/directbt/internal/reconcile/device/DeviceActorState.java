@@ -10,24 +10,25 @@
  *
  * SPDX-License-Identifier: EPL-2.0
  */
-package org.openhab.binding.bluetooth.directbt.internal.reconcile;
+package org.openhab.binding.bluetooth.directbt.internal.reconcile.device;
 
 import org.eclipse.jdt.annotation.NonNullByDefault;
 
 /**
- * Ordered BLE procedures that the device actor may run.
+ * Procedure-level device lifecycle state exposed by the actor diagnostics.
  *
  * @author Vlad Kolotov - Initial contribution
  */
 @NonNullByDefault
-enum DeviceProcedureName {
-    DISCOVER_DEVICE,
-    CONNECT,
-    SETTLE_LINK,
-    RESOLVE_GATT,
-    SUBSCRIBE_NOTIFICATIONS,
-    ONLINE_MONITOR,
-    RECOVER_STALE_GATT,
-    DISCONNECT,
-    BACKOFF
+public enum DeviceActorState {
+    IDLE_DISABLED,
+    DISCOVERING,
+    CONNECTING,
+    LINK_SETTLING,
+    RESOLVING_GATT,
+    SUBSCRIBING,
+    ONLINE,
+    RECOVERING,
+    DISCONNECTING,
+    BACKING_OFF
 }

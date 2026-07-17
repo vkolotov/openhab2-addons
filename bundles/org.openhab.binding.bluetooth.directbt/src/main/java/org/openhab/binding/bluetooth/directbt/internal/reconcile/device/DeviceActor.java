@@ -10,7 +10,7 @@
  *
  * SPDX-License-Identifier: EPL-2.0
  */
-package org.openhab.binding.bluetooth.directbt.internal.reconcile;
+package org.openhab.binding.bluetooth.directbt.internal.reconcile.device;
 
 import java.time.Clock;
 import java.util.ArrayList;
@@ -18,6 +18,10 @@ import java.util.List;
 
 import org.eclipse.jdt.annotation.NonNullByDefault;
 import org.eclipse.jdt.annotation.Nullable;
+import org.openhab.binding.bluetooth.directbt.internal.reconcile.event.DeviceEffect;
+import org.openhab.binding.bluetooth.directbt.internal.reconcile.event.DeviceEvent;
+import org.openhab.binding.bluetooth.directbt.internal.reconcile.procedure.DeviceProcedure;
+import org.openhab.binding.bluetooth.directbt.internal.reconcile.procedure.DeviceProcedureContext;
 import org.slf4j.Logger;
 
 /**
@@ -28,7 +32,7 @@ import org.slf4j.Logger;
  * @author Vlad Kolotov - Initial contribution
  */
 @NonNullByDefault
-final class DeviceActor {
+public final class DeviceActor {
     private final String deviceId;
     private final Logger logger;
     private final Clock clock;
@@ -43,14 +47,14 @@ final class DeviceActor {
     private @Nullable DeviceProcedure activeProcedure;
     private boolean deadlineReported;
 
-    DeviceActor(String deviceId, Logger logger, Clock clock) {
+    public DeviceActor(String deviceId, Logger logger, Clock clock) {
         this.deviceId = deviceId;
         this.logger = logger;
         this.clock = clock;
         this.stateStartedAt = clock.millis();
     }
 
-    void startProcedure(DeviceProcedure procedure, String cause) {
+    public void startProcedure(DeviceProcedure procedure, String cause) {
         ensureDeadline(procedure);
         DeviceProcedure previous = activeProcedure;
         DeviceProcedureContext ctx = context();
@@ -64,7 +68,7 @@ final class DeviceActor {
         procedure.start(context());
     }
 
-    void handoffProcedure(DeviceProcedure procedure, String cause) {
+    public void handoffProcedure(DeviceProcedure procedure, String cause) {
         ensureDeadline(procedure);
         activeProcedure = procedure;
         deadlineReported = false;
@@ -72,7 +76,7 @@ final class DeviceActor {
         procedure.start(context());
     }
 
-    void submit(DeviceEvent event) {
+    public void submit(DeviceEvent event) {
         if (event instanceof DeviceEvent.WantedOnline) {
             wantedOnline = true;
             if (activeProcedure == null && state == DeviceActorState.IDLE_DISABLED) {
@@ -115,7 +119,7 @@ final class DeviceActor {
         }
     }
 
-    void tick() {
+    public void tick() {
         DeviceProcedure procedure = activeProcedure;
         if (procedure == null || deadlineReported) {
             return;
@@ -134,13 +138,13 @@ final class DeviceActor {
         }
     }
 
-    List<DeviceEffect> drainEffects() {
+    public List<DeviceEffect> drainEffects() {
         List<DeviceEffect> drained = List.copyOf(effects);
         effects.clear();
         return drained;
     }
 
-    DeviceActorDiagnostics diagnostics() {
+    public DeviceActorDiagnostics diagnostics() {
         long now = clock.millis();
         DeviceProcedure procedure = activeProcedure;
         return new DeviceActorDiagnostics(deviceId, generation, state, waitingOn, stateStartedAt, now - stateStartedAt,

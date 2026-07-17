@@ -19,6 +19,12 @@ import java.util.List;
 import org.eclipse.jdt.annotation.NonNullByDefault;
 import org.eclipse.jdt.annotation.Nullable;
 import org.junit.jupiter.api.Test;
+import org.openhab.binding.bluetooth.directbt.internal.reconcile.adapter.*;
+import org.openhab.binding.bluetooth.directbt.internal.reconcile.device.*;
+import org.openhab.binding.bluetooth.directbt.internal.reconcile.effect.*;
+import org.openhab.binding.bluetooth.directbt.internal.reconcile.event.*;
+import org.openhab.binding.bluetooth.directbt.internal.reconcile.port.*;
+import org.openhab.binding.bluetooth.directbt.internal.reconcile.procedure.*;
 
 /**
  * Pure tests for actor-owned procedure handoff interpretation.
@@ -36,25 +42,25 @@ class DeviceProcedureRunnerTest {
 
         runner.start(new ConnectProcedure(30_000), "wanted-online");
         long generation = actor.diagnostics().generation();
-        assertEffects(runner.drainEffects(), ConnectProcedure.EFFECT_REQUEST_CONNECT_LEASE);
+        assertEffects(runner.drainEffects(), DeviceEffectOperation.REQUEST_CONNECT_LEASE);
 
         runner.submit(new DeviceEvent.ConnectLeaseGranted(generation));
-        assertEffects(runner.drainEffects(), ConnectProcedure.EFFECT_CONNECT_LE);
+        assertEffects(runner.drainEffects(), DeviceEffectOperation.CONNECT_LE);
 
         runner.submit(new DeviceEvent.NativeConnected(generation));
         assertEquals(generation, actor.diagnostics().generation());
         assertEquals(DeviceActorState.LINK_SETTLING, actor.diagnostics().state());
-        assertEffects(runner.drainEffects(), SettleLinkProcedure.EFFECT_SCHEDULE_LINK_SETTLE_TIMER);
+        assertEffects(runner.drainEffects(), DeviceEffectOperation.SCHEDULE_LINK_SETTLE_TIMER);
 
         runner.submit(new DeviceEvent.LinkSettleTimerExpired(generation));
         assertEquals(generation, actor.diagnostics().generation());
         assertEquals(DeviceActorState.RESOLVING_GATT, actor.diagnostics().state());
-        assertEffects(runner.drainEffects(), ResolveGattProcedure.EFFECT_RESOLVE_GATT);
+        assertEffects(runner.drainEffects(), DeviceEffectOperation.RESOLVE_GATT);
 
         runner.submit(new DeviceEvent.GattResolveSucceeded(generation));
         assertEquals(generation, actor.diagnostics().generation());
         assertEquals(DeviceActorState.SUBSCRIBING, actor.diagnostics().state());
-        assertEffects(runner.drainEffects(), ResolveGattProcedure.EFFECT_START_SUBSCRIBE_PROCEDURE);
+        assertEffects(runner.drainEffects(), DeviceEffectOperation.START_SUBSCRIBE_PROCEDURE);
     }
 
     @Test
@@ -64,15 +70,15 @@ class DeviceProcedureRunnerTest {
 
         runner.start(new ConnectProcedure(30_000), "first-connect");
         long firstGeneration = actor.diagnostics().generation();
-        assertEffects(runner.drainEffects(), ConnectProcedure.EFFECT_REQUEST_CONNECT_LEASE);
+        assertEffects(runner.drainEffects(), DeviceEffectOperation.REQUEST_CONNECT_LEASE);
 
         runner.submit(new DeviceEvent.ConnectLeaseGranted(firstGeneration));
-        assertEffects(runner.drainEffects(), ConnectProcedure.EFFECT_CONNECT_LE);
+        assertEffects(runner.drainEffects(), DeviceEffectOperation.CONNECT_LE);
 
         runner.start(new ConnectProcedure(30_000), "retry-connect");
 
         assertEquals(firstGeneration + 1, actor.diagnostics().generation());
-        assertEffects(runner.drainEffects(), ConnectProcedure.EFFECT_REQUEST_CONNECT_LEASE);
+        assertEffects(runner.drainEffects(), DeviceEffectOperation.REQUEST_CONNECT_LEASE);
     }
 
     @Test
@@ -82,13 +88,13 @@ class DeviceProcedureRunnerTest {
 
         runner.start(new ConnectProcedure(30_000), "wanted-online");
         long onlineGeneration = actor.diagnostics().generation();
-        assertEffects(runner.drainEffects(), ConnectProcedure.EFFECT_REQUEST_CONNECT_LEASE);
+        assertEffects(runner.drainEffects(), DeviceEffectOperation.REQUEST_CONNECT_LEASE);
 
         runner.submit(new DeviceEvent.WantedOffline());
 
         assertEquals(onlineGeneration + 1, actor.diagnostics().generation());
         assertEquals(DeviceActorState.DISCONNECTING, actor.diagnostics().state());
-        assertEffects(runner.drainEffects(), ConnectProcedure.EFFECT_DISCONNECT_NATIVE);
+        assertEffects(runner.drainEffects(), DeviceEffectOperation.DISCONNECT_NATIVE);
     }
 
     @Test
@@ -99,10 +105,10 @@ class DeviceProcedureRunnerTest {
 
         runner.start(new SubscribeNotificationsProcedure(5_000), "gatt-resolved");
         long generation = actor.diagnostics().generation();
-        assertEffects(runner.drainEffects(), SubscribeNotificationsProcedure.EFFECT_MARK_CONNECTED);
+        assertEffects(runner.drainEffects(), DeviceEffectOperation.MARK_CONNECTED);
 
-        runner.submit(new DeviceEvent.NativeEffectCompleted(generation,
-                SubscribeNotificationsProcedure.EFFECT_MARK_CONNECTED, "SUCCESS"));
+        runner.submit(
+                new DeviceEvent.NativeEffectCompleted(generation, DeviceEffectOperation.MARK_CONNECTED, "SUCCESS"));
 
         assertEquals(generation, actor.diagnostics().generation());
         assertEquals(DeviceActorState.ONLINE, actor.diagnostics().state());
@@ -129,7 +135,7 @@ class DeviceProcedureRunnerTest {
         return null;
     }
 
-    private static void assertEffects(List<DeviceEffect> effects, String... operations) {
+    private static void assertEffects(List<DeviceEffect> effects, DeviceEffectOperation... operations) {
         assertEquals(operations.length, effects.size());
         for (int i = 0; i < operations.length; i++) {
             assertEquals(operations[i], effects.get(i).operation());

@@ -10,10 +10,11 @@
  *
  * SPDX-License-Identifier: EPL-2.0
  */
-package org.openhab.binding.bluetooth.directbt.internal.reconcile;
+package org.openhab.binding.bluetooth.directbt.internal.reconcile.device;
 
 import org.eclipse.jdt.annotation.NonNullByDefault;
 import org.eclipse.jdt.annotation.Nullable;
+import org.openhab.binding.bluetooth.directbt.internal.reconcile.procedure.DeviceProcedureName;
 
 /**
  * Snapshot of actor progress for logs, Thing diagnostics, and tests.
@@ -31,7 +32,7 @@ public final class DeviceActorDiagnostics {
     private final String lastCause;
     private final @Nullable DeviceProcedureName activeProcedureName;
 
-    DeviceActorDiagnostics(String deviceId, long generation, DeviceActorState state, DeviceWaitingOn waitingOn,
+    public DeviceActorDiagnostics(String deviceId, long generation, DeviceActorState state, DeviceWaitingOn waitingOn,
             long stateStartedAt, long timeInStateMs, String lastCause,
             @Nullable DeviceProcedureName activeProcedureName) {
         this.deviceId = deviceId;
@@ -44,7 +45,7 @@ public final class DeviceActorDiagnostics {
         this.activeProcedureName = activeProcedureName;
     }
 
-    String deviceId() {
+    public String deviceId() {
         return deviceId;
     }
 
@@ -52,7 +53,7 @@ public final class DeviceActorDiagnostics {
         return generation;
     }
 
-    DeviceActorState state() {
+    public DeviceActorState state() {
         return state;
     }
 
@@ -60,7 +61,7 @@ public final class DeviceActorDiagnostics {
         return state.name();
     }
 
-    DeviceWaitingOn waitingOn() {
+    public DeviceWaitingOn waitingOn() {
         return waitingOn;
     }
 
@@ -81,7 +82,7 @@ public final class DeviceActorDiagnostics {
     }
 
     @Nullable
-    DeviceProcedureName activeProcedureName() {
+    public DeviceProcedureName activeProcedureName() {
         return activeProcedureName;
     }
 

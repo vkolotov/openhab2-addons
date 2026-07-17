@@ -18,6 +18,12 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.eclipse.jdt.annotation.NonNullByDefault;
 import org.junit.jupiter.api.Test;
+import org.openhab.binding.bluetooth.directbt.internal.reconcile.adapter.*;
+import org.openhab.binding.bluetooth.directbt.internal.reconcile.device.*;
+import org.openhab.binding.bluetooth.directbt.internal.reconcile.effect.*;
+import org.openhab.binding.bluetooth.directbt.internal.reconcile.event.*;
+import org.openhab.binding.bluetooth.directbt.internal.reconcile.port.*;
+import org.openhab.binding.bluetooth.directbt.internal.reconcile.procedure.*;
 
 /**
  * Tests for the link-settle timer effect executor.
@@ -34,8 +40,7 @@ class SettleTimerEffectExecutorTest {
         MutableClock clock = new MutableClock(START);
         SettleTimerEffectExecutor executor = new SettleTimerEffectExecutor(() -> clock.millis(), 2_000);
 
-        assertTrue(
-                executor.execute(new DeviceEffect(GENERATION, SettleLinkProcedure.EFFECT_SCHEDULE_LINK_SETTLE_TIMER)));
+        assertTrue(executor.execute(new DeviceEffect(GENERATION, DeviceEffectOperation.SCHEDULE_LINK_SETTLE_TIMER)));
         assertNull(executor.tick(GENERATION));
 
         clock.advance(2_000);
@@ -49,8 +54,7 @@ class SettleTimerEffectExecutorTest {
         MutableClock clock = new MutableClock(START);
         SettleTimerEffectExecutor executor = new SettleTimerEffectExecutor(() -> clock.millis(), 2_000);
 
-        assertTrue(
-                executor.execute(new DeviceEffect(GENERATION, SettleLinkProcedure.EFFECT_SCHEDULE_LINK_SETTLE_TIMER)));
+        assertTrue(executor.execute(new DeviceEffect(GENERATION, DeviceEffectOperation.SCHEDULE_LINK_SETTLE_TIMER)));
         clock.advance(2_000);
 
         assertNull(executor.tick(GENERATION + 1));
@@ -62,6 +66,6 @@ class SettleTimerEffectExecutorTest {
         MutableClock clock = new MutableClock(START);
         SettleTimerEffectExecutor executor = new SettleTimerEffectExecutor(() -> clock.millis(), 2_000);
 
-        assertFalse(executor.execute(new DeviceEffect(GENERATION, "other")));
+        assertFalse(executor.execute(new DeviceEffect(GENERATION, DeviceEffectOperation.CONNECT_LE)));
     }
 }

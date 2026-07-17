@@ -18,6 +18,12 @@ import java.util.List;
 
 import org.eclipse.jdt.annotation.NonNullByDefault;
 import org.junit.jupiter.api.Test;
+import org.openhab.binding.bluetooth.directbt.internal.reconcile.adapter.*;
+import org.openhab.binding.bluetooth.directbt.internal.reconcile.device.*;
+import org.openhab.binding.bluetooth.directbt.internal.reconcile.effect.*;
+import org.openhab.binding.bluetooth.directbt.internal.reconcile.event.*;
+import org.openhab.binding.bluetooth.directbt.internal.reconcile.port.*;
+import org.openhab.binding.bluetooth.directbt.internal.reconcile.procedure.*;
 
 /**
  * Pure contract tests for the connect procedure before production wiring.
@@ -36,7 +42,7 @@ class ConnectProcedureTest {
 
         List<DeviceEffect> effects = actor.drainEffects();
         assertEquals(1, effects.size());
-        assertEquals(ConnectProcedure.EFFECT_REQUEST_CONNECT_LEASE, effects.get(0).operation());
+        assertEquals(DeviceEffectOperation.REQUEST_CONNECT_LEASE, effects.get(0).operation());
         assertEquals(DeviceActorState.CONNECTING, actor.diagnostics().state());
         assertEquals(DeviceWaitingOn.CONNECT_LEASE, actor.diagnostics().waitingOn());
     }
@@ -52,7 +58,7 @@ class ConnectProcedureTest {
 
         List<DeviceEffect> effects = actor.drainEffects();
         assertEquals(1, effects.size());
-        assertEquals(ConnectProcedure.EFFECT_CONNECT_LE, effects.get(0).operation());
+        assertEquals(DeviceEffectOperation.CONNECT_LE, effects.get(0).operation());
         assertEquals(DeviceActorState.CONNECTING, actor.diagnostics().state());
         assertEquals(DeviceWaitingOn.NATIVE_CONNECT, actor.diagnostics().waitingOn());
     }
@@ -94,7 +100,7 @@ class ConnectProcedureTest {
 
         List<DeviceEffect> effects = actor.drainEffects();
         assertEquals(1, effects.size());
-        assertEquals(ConnectProcedure.EFFECT_START_SETTLE_LINK_PROCEDURE, effects.get(0).operation());
+        assertEquals(DeviceEffectOperation.START_SETTLE_LINK_PROCEDURE, effects.get(0).operation());
         assertEquals(DeviceActorState.LINK_SETTLING, actor.diagnostics().state());
         assertEquals(DeviceWaitingOn.SETTLE_TIMER, actor.diagnostics().waitingOn());
     }
@@ -113,8 +119,8 @@ class ConnectProcedureTest {
 
         List<DeviceEffect> effects = actor.drainEffects();
         assertEquals(2, effects.size());
-        assertEquals(ConnectProcedure.EFFECT_DISCONNECT_NATIVE, effects.get(0).operation());
-        assertEquals(ConnectProcedure.EFFECT_CLEAR_STALE_PAIRING, effects.get(1).operation(),
+        assertEquals(DeviceEffectOperation.DISCONNECT_NATIVE, effects.get(0).operation());
+        assertEquals(DeviceEffectOperation.CLEAR_STALE_PAIRING, effects.get(1).operation(),
                 "a silent never-established connect is the dead-bond signature; the executor gates the "
                         + "actual clear on hasStalePairing() so this is a no-op for unpaired devices");
         assertEquals(DeviceActorState.BACKING_OFF, actor.diagnostics().state());
@@ -132,8 +138,8 @@ class ConnectProcedureTest {
 
         List<DeviceEffect> effects = actor.drainEffects();
         assertEquals(2, effects.size());
-        assertEquals(ConnectProcedure.EFFECT_DISCONNECT_NATIVE, effects.get(0).operation());
-        assertEquals(ConnectProcedure.EFFECT_CLEAR_STALE_PAIRING, effects.get(1).operation());
+        assertEquals(DeviceEffectOperation.DISCONNECT_NATIVE, effects.get(0).operation());
+        assertEquals(DeviceEffectOperation.CLEAR_STALE_PAIRING, effects.get(1).operation());
         assertEquals(DeviceActorState.BACKING_OFF, actor.diagnostics().state());
         assertEquals(DeviceWaitingOn.BACKOFF_TIMER, actor.diagnostics().waitingOn());
     }
@@ -149,7 +155,7 @@ class ConnectProcedureTest {
 
         List<DeviceEffect> effects = actor.drainEffects();
         assertEquals(1, effects.size());
-        assertEquals(ConnectProcedure.EFFECT_DISCONNECT_NATIVE, effects.get(0).operation());
+        assertEquals(DeviceEffectOperation.DISCONNECT_NATIVE, effects.get(0).operation());
         assertEquals(DeviceActorState.BACKING_OFF, actor.diagnostics().state());
     }
 

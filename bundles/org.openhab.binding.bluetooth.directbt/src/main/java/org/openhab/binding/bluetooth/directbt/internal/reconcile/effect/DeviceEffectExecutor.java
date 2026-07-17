@@ -10,26 +10,22 @@
  *
  * SPDX-License-Identifier: EPL-2.0
  */
-package org.openhab.binding.bluetooth.directbt.internal.reconcile;
+package org.openhab.binding.bluetooth.directbt.internal.reconcile.effect;
 
 import org.eclipse.jdt.annotation.NonNullByDefault;
+import org.openhab.binding.bluetooth.directbt.internal.reconcile.event.DeviceEffect;
 
 /**
- * Coarse "what are we blocked on?" diagnostic for silent-wait debugging.
+ * Boundary for executing actor-emitted side effects outside the actor thread.
  *
  * @author Vlad Kolotov - Initial contribution
  */
 @NonNullByDefault
-enum DeviceWaitingOn {
-    NOTHING,
-    NATIVE_HANDLE,
-    CONNECT_LEASE,
-    NATIVE_CONNECT,
-    PAIRING,
-    SETTLE_TIMER,
-    GATT_RESOLVE,
-    SUBSCRIPTION,
-    BACKOFF_TIMER,
-    DISCONNECT,
-    ADAPTER_RESET
+public interface DeviceEffectExecutor {
+    /**
+     * Executes a known effect.
+     *
+     * @return true when the effect was understood by this executor.
+     */
+    boolean execute(DeviceEffect effect);
 }

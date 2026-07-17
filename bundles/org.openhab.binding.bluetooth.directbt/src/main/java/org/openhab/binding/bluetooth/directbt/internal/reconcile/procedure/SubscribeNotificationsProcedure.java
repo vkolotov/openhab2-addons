@@ -10,9 +10,17 @@
  *
  * SPDX-License-Identifier: EPL-2.0
  */
-package org.openhab.binding.bluetooth.directbt.internal.reconcile;
+package org.openhab.binding.bluetooth.directbt.internal.reconcile.procedure;
+
+import static org.openhab.binding.bluetooth.directbt.internal.reconcile.event.DeviceEffectOperation.DISCONNECT_NATIVE;
+import static org.openhab.binding.bluetooth.directbt.internal.reconcile.event.DeviceEffectOperation.MARK_CONNECTED;
+import static org.openhab.binding.bluetooth.directbt.internal.reconcile.event.DeviceEffectOperation.START_ONLINE_MONITOR_PROCEDURE;
 
 import org.eclipse.jdt.annotation.NonNullByDefault;
+import org.openhab.binding.bluetooth.directbt.internal.reconcile.device.DeviceActorState;
+import org.openhab.binding.bluetooth.directbt.internal.reconcile.device.DeviceWaitingOn;
+import org.openhab.binding.bluetooth.directbt.internal.reconcile.event.DeviceEffect;
+import org.openhab.binding.bluetooth.directbt.internal.reconcile.event.DeviceEvent;
 
 /**
  * Final connection-ready procedure. Today this maps the actor's subscription phase onto the existing
@@ -22,14 +30,10 @@ import org.eclipse.jdt.annotation.NonNullByDefault;
  * @author Vlad Kolotov - Initial contribution
  */
 @NonNullByDefault
-final class SubscribeNotificationsProcedure implements DeviceProcedure {
-    static final String EFFECT_MARK_CONNECTED = "markConnected";
-    static final String EFFECT_START_ONLINE_MONITOR_PROCEDURE = "startProcedure:ONLINE_MONITOR";
-    static final String EFFECT_DISCONNECT_NATIVE = ConnectProcedure.EFFECT_DISCONNECT_NATIVE;
-
+public final class SubscribeNotificationsProcedure implements DeviceProcedure {
     private final long maxResidencyMs;
 
-    SubscribeNotificationsProcedure(long maxResidencyMs) {
+    public SubscribeNotificationsProcedure(long maxResidencyMs) {
         this.maxResidencyMs = maxResidencyMs;
     }
 
@@ -55,22 +59,22 @@ final class SubscribeNotificationsProcedure implements DeviceProcedure {
 
     @Override
     public void start(DeviceProcedureContext ctx) {
-        ctx.emit(new DeviceEffect(ctx.generation(), EFFECT_MARK_CONNECTED));
+        ctx.emit(new DeviceEffect(ctx.generation(), MARK_CONNECTED));
     }
 
     @Override
     public void onEvent(DeviceEvent event, DeviceProcedureContext ctx) {
         if (event instanceof DeviceEvent.NativeEffectCompleted) {
             DeviceEvent.NativeEffectCompleted completed = (DeviceEvent.NativeEffectCompleted) event;
-            if (EFFECT_MARK_CONNECTED.equals(completed.operation())) {
-                ctx.emit(new DeviceEffect(ctx.generation(), EFFECT_START_ONLINE_MONITOR_PROCEDURE));
+            if (completed.operation() == MARK_CONNECTED) {
+                ctx.emit(new DeviceEffect(ctx.generation(), START_ONLINE_MONITOR_PROCEDURE));
             }
             return;
         }
         if (event instanceof DeviceEvent.ProcedureDeadlineExpired) {
             DeviceEvent.ProcedureDeadlineExpired deadline = (DeviceEvent.ProcedureDeadlineExpired) event;
             if (deadline.procedure() == DeviceProcedureName.SUBSCRIBE_NOTIFICATIONS) {
-                ctx.emit(new DeviceEffect(ctx.generation(), EFFECT_DISCONNECT_NATIVE));
+                ctx.emit(new DeviceEffect(ctx.generation(), DISCONNECT_NATIVE));
                 ctx.transitionTo(DeviceActorState.BACKING_OFF, DeviceWaitingOn.BACKOFF_TIMER, event.kind());
             }
         }
@@ -78,6 +82,6 @@ final class SubscribeNotificationsProcedure implements DeviceProcedure {
 
     @Override
     public void cancel(String reason, DeviceProcedureContext ctx) {
-        ctx.emit(new DeviceEffect(ctx.generation(), EFFECT_DISCONNECT_NATIVE));
+        ctx.emit(new DeviceEffect(ctx.generation(), DISCONNECT_NATIVE));
     }
 }

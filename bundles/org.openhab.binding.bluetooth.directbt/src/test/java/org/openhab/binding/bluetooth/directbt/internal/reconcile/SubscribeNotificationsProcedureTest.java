@@ -18,6 +18,12 @@ import java.util.List;
 
 import org.eclipse.jdt.annotation.NonNullByDefault;
 import org.junit.jupiter.api.Test;
+import org.openhab.binding.bluetooth.directbt.internal.reconcile.adapter.*;
+import org.openhab.binding.bluetooth.directbt.internal.reconcile.device.*;
+import org.openhab.binding.bluetooth.directbt.internal.reconcile.effect.*;
+import org.openhab.binding.bluetooth.directbt.internal.reconcile.event.*;
+import org.openhab.binding.bluetooth.directbt.internal.reconcile.port.*;
+import org.openhab.binding.bluetooth.directbt.internal.reconcile.procedure.*;
 
 /**
  * Pure contract tests for the subscription/connection-ready procedure.
@@ -36,7 +42,7 @@ class SubscribeNotificationsProcedureTest {
 
         List<DeviceEffect> effects = actor.drainEffects();
         assertEquals(1, effects.size());
-        assertEquals(SubscribeNotificationsProcedure.EFFECT_MARK_CONNECTED, effects.get(0).operation());
+        assertEquals(DeviceEffectOperation.MARK_CONNECTED, effects.get(0).operation());
         assertEquals(DeviceActorState.SUBSCRIBING, actor.diagnostics().state());
         assertEquals(DeviceWaitingOn.SUBSCRIPTION, actor.diagnostics().waitingOn());
     }
@@ -48,12 +54,12 @@ class SubscribeNotificationsProcedureTest {
         actor.drainEffects();
         long generation = actor.diagnostics().generation();
 
-        actor.submit(new DeviceEvent.NativeEffectCompleted(generation,
-                SubscribeNotificationsProcedure.EFFECT_MARK_CONNECTED, "SUCCESS"));
+        actor.submit(
+                new DeviceEvent.NativeEffectCompleted(generation, DeviceEffectOperation.MARK_CONNECTED, "SUCCESS"));
 
         List<DeviceEffect> effects = actor.drainEffects();
         assertEquals(1, effects.size());
-        assertEquals(SubscribeNotificationsProcedure.EFFECT_START_ONLINE_MONITOR_PROCEDURE, effects.get(0).operation());
+        assertEquals(DeviceEffectOperation.START_ONLINE_MONITOR_PROCEDURE, effects.get(0).operation());
         assertEquals(DeviceActorState.SUBSCRIBING, actor.diagnostics().state());
         assertEquals(DeviceWaitingOn.SUBSCRIPTION, actor.diagnostics().waitingOn());
     }
@@ -70,7 +76,7 @@ class SubscribeNotificationsProcedureTest {
 
         List<DeviceEffect> effects = actor.drainEffects();
         assertEquals(1, effects.size());
-        assertEquals(SubscribeNotificationsProcedure.EFFECT_DISCONNECT_NATIVE, effects.get(0).operation());
+        assertEquals(DeviceEffectOperation.DISCONNECT_NATIVE, effects.get(0).operation());
         assertEquals(DeviceActorState.BACKING_OFF, actor.diagnostics().state());
         assertEquals(DeviceWaitingOn.BACKOFF_TIMER, actor.diagnostics().waitingOn());
     }

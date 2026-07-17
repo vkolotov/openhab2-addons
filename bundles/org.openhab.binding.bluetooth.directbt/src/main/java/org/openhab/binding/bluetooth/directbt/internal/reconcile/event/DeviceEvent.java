@@ -10,10 +10,11 @@
  *
  * SPDX-License-Identifier: EPL-2.0
  */
-package org.openhab.binding.bluetooth.directbt.internal.reconcile;
+package org.openhab.binding.bluetooth.directbt.internal.reconcile.event;
 
 import org.eclipse.jdt.annotation.NonNullByDefault;
 import org.eclipse.jdt.annotation.Nullable;
+import org.openhab.binding.bluetooth.directbt.internal.reconcile.procedure.DeviceProcedureName;
 
 /**
  * Control-plane event consumed by the device actor. Events that belong to one connection attempt carry the actor
@@ -22,7 +23,7 @@ import org.eclipse.jdt.annotation.Nullable;
  * @author Vlad Kolotov - Initial contribution
  */
 @NonNullByDefault
-interface DeviceEvent {
+public interface DeviceEvent {
     String kind();
 
     default boolean generationScoped() {
@@ -50,7 +51,7 @@ interface DeviceEvent {
     final class ConnectLeaseGranted implements DeviceEvent {
         private final long generation;
 
-        ConnectLeaseGranted(long generation) {
+        public ConnectLeaseGranted(long generation) {
             this.generation = generation;
         }
 
@@ -73,7 +74,7 @@ interface DeviceEvent {
     final class NativeConnected implements DeviceEvent {
         private final long generation;
 
-        NativeConnected(long generation) {
+        public NativeConnected(long generation) {
             this.generation = generation;
         }
 
@@ -96,7 +97,7 @@ interface DeviceEvent {
     final class PairingStarted implements DeviceEvent {
         private final long generation;
 
-        PairingStarted(long generation) {
+        public PairingStarted(long generation) {
             this.generation = generation;
         }
 
@@ -119,7 +120,7 @@ interface DeviceEvent {
     final class PairingEnded implements DeviceEvent {
         private final long generation;
 
-        PairingEnded(long generation) {
+        public PairingEnded(long generation) {
             this.generation = generation;
         }
 
@@ -144,7 +145,7 @@ interface DeviceEvent {
         private final String reason;
         private final boolean staleBondSuspected;
 
-        ConnectFailed(long generation, String reason, boolean staleBondSuspected) {
+        public ConnectFailed(long generation, String reason, boolean staleBondSuspected) {
             this.generation = generation;
             this.reason = reason;
             this.staleBondSuspected = staleBondSuspected;
@@ -165,11 +166,11 @@ interface DeviceEvent {
             return generation;
         }
 
-        String reason() {
+        public String reason() {
             return reason;
         }
 
-        boolean staleBondSuspected() {
+        public boolean staleBondSuspected() {
             return staleBondSuspected;
         }
     }
@@ -177,7 +178,7 @@ interface DeviceEvent {
     final class LinkSettleTimerExpired implements DeviceEvent {
         private final long generation;
 
-        LinkSettleTimerExpired(long generation) {
+        public LinkSettleTimerExpired(long generation) {
             this.generation = generation;
         }
 
@@ -205,7 +206,7 @@ interface DeviceEvent {
     final class GattResolveRequested implements DeviceEvent {
         private final long generation;
 
-        GattResolveRequested(long generation) {
+        public GattResolveRequested(long generation) {
             this.generation = generation;
         }
 
@@ -228,7 +229,7 @@ interface DeviceEvent {
     final class GattResolveSucceeded implements DeviceEvent {
         private final long generation;
 
-        GattResolveSucceeded(long generation) {
+        public GattResolveSucceeded(long generation) {
             this.generation = generation;
         }
 
@@ -252,7 +253,7 @@ interface DeviceEvent {
         private final long generation;
         private final String reason;
 
-        GattResolveFailed(long generation, String reason) {
+        public GattResolveFailed(long generation, String reason) {
             this.generation = generation;
             this.reason = reason;
         }
@@ -272,7 +273,7 @@ interface DeviceEvent {
             return generation;
         }
 
-        String reason() {
+        public String reason() {
             return reason;
         }
     }
@@ -282,7 +283,7 @@ interface DeviceEvent {
         private final DeviceProcedureName procedure;
         private final long elapsedMs;
 
-        ProcedureDeadlineExpired(long generation, DeviceProcedureName procedure, long elapsedMs) {
+        public ProcedureDeadlineExpired(long generation, DeviceProcedureName procedure, long elapsedMs) {
             this.generation = generation;
             this.procedure = procedure;
             this.elapsedMs = elapsedMs;
@@ -303,21 +304,21 @@ interface DeviceEvent {
             return generation;
         }
 
-        DeviceProcedureName procedure() {
+        public DeviceProcedureName procedure() {
             return procedure;
         }
 
-        long elapsedMs() {
+        public long elapsedMs() {
             return elapsedMs;
         }
     }
 
     final class NativeEffectCompleted implements DeviceEvent {
         private final long generation;
-        private final String operation;
+        private final DeviceEffectOperation operation;
         private final String result;
 
-        NativeEffectCompleted(long generation, String operation, String result) {
+        public NativeEffectCompleted(long generation, DeviceEffectOperation operation, String result) {
             this.generation = generation;
             this.operation = operation;
             this.result = result;
@@ -338,11 +339,11 @@ interface DeviceEvent {
             return generation;
         }
 
-        String operation() {
+        public DeviceEffectOperation operation() {
             return operation;
         }
 
-        String result() {
+        public String result() {
             return result;
         }
     }
@@ -350,7 +351,7 @@ interface DeviceEvent {
     final class AdapterResetStarted implements DeviceEvent {
         private final long adapterGeneration;
 
-        AdapterResetStarted(long adapterGeneration) {
+        public AdapterResetStarted(long adapterGeneration) {
             this.adapterGeneration = adapterGeneration;
         }
 
@@ -359,7 +360,7 @@ interface DeviceEvent {
             return "AdapterResetStarted";
         }
 
-        long adapterGeneration() {
+        public long adapterGeneration() {
             return adapterGeneration;
         }
     }
@@ -368,7 +369,7 @@ interface DeviceEvent {
         private final long adapterGeneration;
         private final @Nullable String result;
 
-        AdapterResetCompleted(long adapterGeneration, @Nullable String result) {
+        public AdapterResetCompleted(long adapterGeneration, @Nullable String result) {
             this.adapterGeneration = adapterGeneration;
             this.result = result;
         }
@@ -378,12 +379,12 @@ interface DeviceEvent {
             return "AdapterResetCompleted";
         }
 
-        long adapterGeneration() {
+        public long adapterGeneration() {
             return adapterGeneration;
         }
 
         @Nullable
-        String result() {
+        public String result() {
             return result;
         }
     }

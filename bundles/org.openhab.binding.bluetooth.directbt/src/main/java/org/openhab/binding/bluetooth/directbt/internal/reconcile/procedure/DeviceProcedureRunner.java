@@ -10,13 +10,16 @@
  *
  * SPDX-License-Identifier: EPL-2.0
  */
-package org.openhab.binding.bluetooth.directbt.internal.reconcile;
+package org.openhab.binding.bluetooth.directbt.internal.reconcile.procedure;
 
 import java.util.ArrayList;
 import java.util.List;
 
 import org.eclipse.jdt.annotation.NonNullByDefault;
 import org.eclipse.jdt.annotation.Nullable;
+import org.openhab.binding.bluetooth.directbt.internal.reconcile.device.DeviceActor;
+import org.openhab.binding.bluetooth.directbt.internal.reconcile.event.DeviceEffect;
+import org.openhab.binding.bluetooth.directbt.internal.reconcile.event.DeviceEvent;
 
 /**
  * Minimal actor-side procedure runner. It consumes internal procedure-handoff effects and leaves only external
@@ -25,34 +28,32 @@ import org.eclipse.jdt.annotation.Nullable;
  * @author Vlad Kolotov - Initial contribution
  */
 @NonNullByDefault
-final class DeviceProcedureRunner {
-    private static final String START_PROCEDURE_PREFIX = "startProcedure:";
-
+public final class DeviceProcedureRunner {
     private final DeviceActor actor;
     private final DeviceProcedureFactory procedureFactory;
     private final List<DeviceEffect> externalEffects = new ArrayList<>();
 
-    DeviceProcedureRunner(DeviceActor actor, DeviceProcedureFactory procedureFactory) {
+    public DeviceProcedureRunner(DeviceActor actor, DeviceProcedureFactory procedureFactory) {
         this.actor = actor;
         this.procedureFactory = procedureFactory;
     }
 
-    void start(DeviceProcedure procedure, String cause) {
+    public void start(DeviceProcedure procedure, String cause) {
         actor.startProcedure(procedure, cause);
         drainAndInterpret();
     }
 
-    void submit(DeviceEvent event) {
+    public void submit(DeviceEvent event) {
         actor.submit(event);
         drainAndInterpret();
     }
 
-    void tick() {
+    public void tick() {
         actor.tick();
         drainAndInterpret();
     }
 
-    List<DeviceEffect> drainEffects() {
+    public List<DeviceEffect> drainEffects() {
         List<DeviceEffect> drained = List.copyOf(externalEffects);
         externalEffects.clear();
         return drained;
@@ -77,22 +78,20 @@ final class DeviceProcedureRunner {
     }
 
     private boolean handleInternalEffect(DeviceEffect effect) {
-        String operation = effect.operation();
-        if (!operation.startsWith(START_PROCEDURE_PREFIX)) {
+        DeviceProcedureName procedureName = effect.operation().targetProcedure();
+        if (procedureName == null) {
             return false;
         }
-        DeviceProcedureName procedureName = DeviceProcedureName
-                .valueOf(operation.substring(START_PROCEDURE_PREFIX.length()));
         DeviceProcedure procedure = procedureFactory.create(procedureName);
         if (procedure == null) {
             return false;
         }
-        actor.handoffProcedure(procedure, operation);
+        actor.handoffProcedure(procedure, effect.operation().name());
         return true;
     }
 
     @FunctionalInterface
-    interface DeviceProcedureFactory {
+    public interface DeviceProcedureFactory {
         @Nullable
         DeviceProcedure create(DeviceProcedureName procedureName);
     }

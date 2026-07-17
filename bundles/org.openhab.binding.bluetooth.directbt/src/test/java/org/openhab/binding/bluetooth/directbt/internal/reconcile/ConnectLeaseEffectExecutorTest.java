@@ -22,6 +22,12 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 import org.eclipse.jdt.annotation.NonNullByDefault;
 import org.junit.jupiter.api.Test;
+import org.openhab.binding.bluetooth.directbt.internal.reconcile.adapter.*;
+import org.openhab.binding.bluetooth.directbt.internal.reconcile.device.*;
+import org.openhab.binding.bluetooth.directbt.internal.reconcile.effect.*;
+import org.openhab.binding.bluetooth.directbt.internal.reconcile.event.*;
+import org.openhab.binding.bluetooth.directbt.internal.reconcile.port.*;
+import org.openhab.binding.bluetooth.directbt.internal.reconcile.procedure.*;
 
 /**
  * Tests for scan-off connect lease gating.
@@ -38,7 +44,7 @@ class ConnectLeaseEffectExecutorTest {
         List<DeviceEvent> events = new ArrayList<>();
         ConnectLeaseEffectExecutor executor = new ConnectLeaseEffectExecutor(scanOff::get, events::add);
 
-        assertTrue(executor.execute(new DeviceEffect(GENERATION, ConnectProcedure.EFFECT_REQUEST_CONNECT_LEASE)));
+        assertTrue(executor.execute(new DeviceEffect(GENERATION, DeviceEffectOperation.REQUEST_CONNECT_LEASE)));
 
         assertFalse(executor.hasPendingLease());
         assertLeaseGranted(events, GENERATION);
@@ -50,7 +56,7 @@ class ConnectLeaseEffectExecutorTest {
         List<DeviceEvent> events = new ArrayList<>();
         ConnectLeaseEffectExecutor executor = new ConnectLeaseEffectExecutor(scanOff::get, events::add);
 
-        assertTrue(executor.execute(new DeviceEffect(GENERATION, ConnectProcedure.EFFECT_REQUEST_CONNECT_LEASE)));
+        assertTrue(executor.execute(new DeviceEffect(GENERATION, DeviceEffectOperation.REQUEST_CONNECT_LEASE)));
 
         assertTrue(executor.hasPendingLease());
         assertEquals(0, events.size());
@@ -68,7 +74,7 @@ class ConnectLeaseEffectExecutorTest {
         List<DeviceEvent> events = new ArrayList<>();
         ConnectLeaseEffectExecutor executor = new ConnectLeaseEffectExecutor(scanOff::get, events::add);
 
-        assertTrue(executor.execute(new DeviceEffect(GENERATION, ConnectProcedure.EFFECT_REQUEST_CONNECT_LEASE)));
+        assertTrue(executor.execute(new DeviceEffect(GENERATION, DeviceEffectOperation.REQUEST_CONNECT_LEASE)));
 
         scanOff.set(true);
         executor.tick(GENERATION + 1);
@@ -83,8 +89,8 @@ class ConnectLeaseEffectExecutorTest {
         List<DeviceEvent> events = new ArrayList<>();
         ConnectLeaseEffectExecutor executor = new ConnectLeaseEffectExecutor(scanOff::get, events::add);
 
-        assertTrue(executor.execute(new DeviceEffect(GENERATION, ConnectProcedure.EFFECT_REQUEST_CONNECT_LEASE)));
-        assertTrue(executor.execute(new DeviceEffect(GENERATION + 1, ConnectProcedure.EFFECT_REQUEST_CONNECT_LEASE)));
+        assertTrue(executor.execute(new DeviceEffect(GENERATION, DeviceEffectOperation.REQUEST_CONNECT_LEASE)));
+        assertTrue(executor.execute(new DeviceEffect(GENERATION + 1, DeviceEffectOperation.REQUEST_CONNECT_LEASE)));
 
         scanOff.set(true);
         executor.tick(GENERATION + 1);
@@ -98,7 +104,7 @@ class ConnectLeaseEffectExecutorTest {
         ConnectLeaseEffectExecutor executor = new ConnectLeaseEffectExecutor(scanOff::get, event -> {
         });
 
-        assertFalse(executor.execute(new DeviceEffect(GENERATION, ConnectProcedure.EFFECT_CONNECT_LE)));
+        assertFalse(executor.execute(new DeviceEffect(GENERATION, DeviceEffectOperation.CONNECT_LE)));
     }
 
     private static void assertLeaseGranted(List<DeviceEvent> events, long generation) {

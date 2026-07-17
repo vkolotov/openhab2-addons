@@ -16,7 +16,7 @@ import static org.junit.jupiter.api.Assertions.*;
 
 import org.eclipse.jdt.annotation.NonNullByDefault;
 import org.junit.jupiter.api.Test;
-import org.openhab.binding.bluetooth.directbt.internal.reconcile.AdapterLeaseCoordinator;
+import org.openhab.binding.bluetooth.directbt.internal.reconcile.adapter.AdapterLeaseCoordinator;
 
 /**
  * Regression harness for {@link AdapterLeaseCoordinator#scanWanted} — the pure predicate deciding whether the

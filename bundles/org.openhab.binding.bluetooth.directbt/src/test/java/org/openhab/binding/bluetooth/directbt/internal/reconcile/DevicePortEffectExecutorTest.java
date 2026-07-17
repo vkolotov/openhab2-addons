@@ -22,6 +22,12 @@ import java.util.List;
 import org.direct_bt.HCIStatusCode;
 import org.eclipse.jdt.annotation.NonNullByDefault;
 import org.junit.jupiter.api.Test;
+import org.openhab.binding.bluetooth.directbt.internal.reconcile.adapter.*;
+import org.openhab.binding.bluetooth.directbt.internal.reconcile.device.*;
+import org.openhab.binding.bluetooth.directbt.internal.reconcile.effect.*;
+import org.openhab.binding.bluetooth.directbt.internal.reconcile.event.*;
+import org.openhab.binding.bluetooth.directbt.internal.reconcile.port.*;
+import org.openhab.binding.bluetooth.directbt.internal.reconcile.procedure.*;
 
 /**
  * Tests for translating actor effects to the existing device port boundary.
@@ -39,7 +45,7 @@ class DevicePortEffectExecutorTest {
         List<DeviceEvent> events = new ArrayList<>();
         DevicePortEffectExecutor executor = new DevicePortEffectExecutor(port, events::add);
 
-        boolean handled = executor.execute(new DeviceEffect(GENERATION, ConnectProcedure.EFFECT_CONNECT_LE));
+        boolean handled = executor.execute(new DeviceEffect(GENERATION, DeviceEffectOperation.CONNECT_LE));
 
         assertTrue(handled);
         assertEquals(1, port.markConnectingCalls);
@@ -57,7 +63,7 @@ class DevicePortEffectExecutorTest {
         List<DeviceEvent> events = new ArrayList<>();
         DevicePortEffectExecutor executor = new DevicePortEffectExecutor(port, events::add);
 
-        boolean handled = executor.execute(new DeviceEffect(GENERATION, ConnectProcedure.EFFECT_CONNECT_LE));
+        boolean handled = executor.execute(new DeviceEffect(GENERATION, DeviceEffectOperation.CONNECT_LE));
 
         assertTrue(handled);
         assertEquals(1, port.markConnectingCalls);
@@ -72,8 +78,8 @@ class DevicePortEffectExecutorTest {
         DevicePortEffectExecutor executor = new DevicePortEffectExecutor(port, event -> {
         });
 
-        assertTrue(executor.execute(new DeviceEffect(GENERATION, ConnectProcedure.EFFECT_DISCONNECT_NATIVE)));
-        assertTrue(executor.execute(new DeviceEffect(GENERATION, ConnectProcedure.EFFECT_CLEAR_STALE_PAIRING)));
+        assertTrue(executor.execute(new DeviceEffect(GENERATION, DeviceEffectOperation.DISCONNECT_NATIVE)));
+        assertTrue(executor.execute(new DeviceEffect(GENERATION, DeviceEffectOperation.CLEAR_STALE_PAIRING)));
 
         assertEquals(1, port.disconnectNativeCalls);
         assertEquals(1, port.clearStalePairingCalls);
@@ -86,7 +92,7 @@ class DevicePortEffectExecutorTest {
         List<DeviceEvent> events = new ArrayList<>();
         DevicePortEffectExecutor executor = new DevicePortEffectExecutor(port, events::add);
 
-        assertTrue(executor.execute(new DeviceEffect(GENERATION, ResolveGattProcedure.EFFECT_RESOLVE_GATT)));
+        assertTrue(executor.execute(new DeviceEffect(GENERATION, DeviceEffectOperation.RESOLVE_GATT)));
 
         assertEquals(1, port.resolveGattCalls);
         assertEquals(1, events.size());
@@ -101,16 +107,14 @@ class DevicePortEffectExecutorTest {
         List<DeviceEvent> events = new ArrayList<>();
         DevicePortEffectExecutor executor = new DevicePortEffectExecutor(port, events::add);
 
-        assertTrue(
-                executor.execute(new DeviceEffect(GENERATION, SubscribeNotificationsProcedure.EFFECT_MARK_CONNECTED)));
+        assertTrue(executor.execute(new DeviceEffect(GENERATION, DeviceEffectOperation.MARK_CONNECTED)));
 
         assertEquals(1, port.markConnectedCalls);
         assertEquals(1, events.size());
         DeviceEvent event = events.get(0);
         assertTrue(event instanceof DeviceEvent.NativeEffectCompleted);
         assertEquals(GENERATION, event.generation());
-        assertEquals(SubscribeNotificationsProcedure.EFFECT_MARK_CONNECTED,
-                ((DeviceEvent.NativeEffectCompleted) event).operation());
+        assertEquals(DeviceEffectOperation.MARK_CONNECTED, ((DeviceEvent.NativeEffectCompleted) event).operation());
     }
 
     @Test
@@ -120,7 +124,7 @@ class DevicePortEffectExecutorTest {
         List<DeviceEvent> events = new ArrayList<>();
         DevicePortEffectExecutor executor = new DevicePortEffectExecutor(port, events::add);
 
-        assertTrue(executor.execute(new DeviceEffect(GENERATION, ResolveGattProcedure.EFFECT_RESOLVE_GATT)));
+        assertTrue(executor.execute(new DeviceEffect(GENERATION, DeviceEffectOperation.RESOLVE_GATT)));
 
         assertEquals(1, port.resolveGattCalls);
         assertEquals(0, events.size());
@@ -132,6 +136,6 @@ class DevicePortEffectExecutorTest {
         DevicePortEffectExecutor executor = new DevicePortEffectExecutor(port, event -> {
         });
 
-        assertFalse(executor.execute(new DeviceEffect(GENERATION, ConnectProcedure.EFFECT_REQUEST_CONNECT_LEASE)));
+        assertFalse(executor.execute(new DeviceEffect(GENERATION, DeviceEffectOperation.REQUEST_CONNECT_LEASE)));
     }
 }

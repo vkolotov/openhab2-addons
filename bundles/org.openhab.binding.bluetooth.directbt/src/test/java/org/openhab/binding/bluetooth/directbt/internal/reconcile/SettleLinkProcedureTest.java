@@ -18,6 +18,12 @@ import java.util.List;
 
 import org.eclipse.jdt.annotation.NonNullByDefault;
 import org.junit.jupiter.api.Test;
+import org.openhab.binding.bluetooth.directbt.internal.reconcile.adapter.*;
+import org.openhab.binding.bluetooth.directbt.internal.reconcile.device.*;
+import org.openhab.binding.bluetooth.directbt.internal.reconcile.effect.*;
+import org.openhab.binding.bluetooth.directbt.internal.reconcile.event.*;
+import org.openhab.binding.bluetooth.directbt.internal.reconcile.port.*;
+import org.openhab.binding.bluetooth.directbt.internal.reconcile.procedure.*;
 
 /**
  * Pure contract tests for the post-connect settle procedure.
@@ -36,7 +42,7 @@ class SettleLinkProcedureTest {
 
         List<DeviceEffect> effects = actor.drainEffects();
         assertEquals(1, effects.size());
-        assertEquals(SettleLinkProcedure.EFFECT_SCHEDULE_LINK_SETTLE_TIMER, effects.get(0).operation());
+        assertEquals(DeviceEffectOperation.SCHEDULE_LINK_SETTLE_TIMER, effects.get(0).operation());
         assertEquals(DeviceActorState.LINK_SETTLING, actor.diagnostics().state());
         assertEquals(DeviceWaitingOn.SETTLE_TIMER, actor.diagnostics().waitingOn());
     }
@@ -52,7 +58,7 @@ class SettleLinkProcedureTest {
 
         List<DeviceEffect> effects = actor.drainEffects();
         assertEquals(1, effects.size());
-        assertEquals(SettleLinkProcedure.EFFECT_START_RESOLVE_GATT_PROCEDURE, effects.get(0).operation());
+        assertEquals(DeviceEffectOperation.START_RESOLVE_GATT_PROCEDURE, effects.get(0).operation());
         assertEquals(DeviceActorState.RESOLVING_GATT, actor.diagnostics().state());
         assertEquals(DeviceWaitingOn.GATT_RESOLVE, actor.diagnostics().waitingOn());
     }
@@ -83,7 +89,7 @@ class SettleLinkProcedureTest {
 
         List<DeviceEffect> effects = actor.drainEffects();
         assertEquals(1, effects.size());
-        assertEquals(SettleLinkProcedure.EFFECT_DISCONNECT_NATIVE, effects.get(0).operation());
+        assertEquals(DeviceEffectOperation.DISCONNECT_NATIVE, effects.get(0).operation());
         assertEquals(DeviceActorState.BACKING_OFF, actor.diagnostics().state());
         assertEquals(DeviceWaitingOn.BACKOFF_TIMER, actor.diagnostics().waitingOn());
     }

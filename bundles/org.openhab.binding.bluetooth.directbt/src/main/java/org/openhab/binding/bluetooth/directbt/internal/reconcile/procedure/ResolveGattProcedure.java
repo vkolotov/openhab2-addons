@@ -10,9 +10,17 @@
  *
  * SPDX-License-Identifier: EPL-2.0
  */
-package org.openhab.binding.bluetooth.directbt.internal.reconcile;
+package org.openhab.binding.bluetooth.directbt.internal.reconcile.procedure;
+
+import static org.openhab.binding.bluetooth.directbt.internal.reconcile.event.DeviceEffectOperation.DISCONNECT_NATIVE;
+import static org.openhab.binding.bluetooth.directbt.internal.reconcile.event.DeviceEffectOperation.RESOLVE_GATT;
+import static org.openhab.binding.bluetooth.directbt.internal.reconcile.event.DeviceEffectOperation.START_SUBSCRIBE_PROCEDURE;
 
 import org.eclipse.jdt.annotation.NonNullByDefault;
+import org.openhab.binding.bluetooth.directbt.internal.reconcile.device.DeviceActorState;
+import org.openhab.binding.bluetooth.directbt.internal.reconcile.device.DeviceWaitingOn;
+import org.openhab.binding.bluetooth.directbt.internal.reconcile.event.DeviceEffect;
+import org.openhab.binding.bluetooth.directbt.internal.reconcile.event.DeviceEvent;
 
 /**
  * Pure GATT discovery procedure. GATT resolution starts only after the link-settle procedure hands off to it.
@@ -20,14 +28,10 @@ import org.eclipse.jdt.annotation.NonNullByDefault;
  * @author Vlad Kolotov - Initial contribution
  */
 @NonNullByDefault
-final class ResolveGattProcedure implements DeviceProcedure {
-    static final String EFFECT_RESOLVE_GATT = "resolveGatt";
-    static final String EFFECT_START_SUBSCRIBE_PROCEDURE = "startProcedure:SUBSCRIBE_NOTIFICATIONS";
-    static final String EFFECT_DISCONNECT_NATIVE = ConnectProcedure.EFFECT_DISCONNECT_NATIVE;
-
+public final class ResolveGattProcedure implements DeviceProcedure {
     private final long maxResidencyMs;
 
-    ResolveGattProcedure(long maxResidencyMs) {
+    public ResolveGattProcedure(long maxResidencyMs) {
         this.maxResidencyMs = maxResidencyMs;
     }
 
@@ -53,24 +57,24 @@ final class ResolveGattProcedure implements DeviceProcedure {
 
     @Override
     public void start(DeviceProcedureContext ctx) {
-        ctx.emit(new DeviceEffect(ctx.generation(), EFFECT_RESOLVE_GATT));
+        ctx.emit(new DeviceEffect(ctx.generation(), RESOLVE_GATT));
     }
 
     @Override
     public void onEvent(DeviceEvent event, DeviceProcedureContext ctx) {
         if (event instanceof DeviceEvent.GattResolveRequested) {
             // Retry pacing is external (one request per reconcile tick); the procedure just re-issues the work.
-            ctx.emit(new DeviceEffect(ctx.generation(), EFFECT_RESOLVE_GATT));
+            ctx.emit(new DeviceEffect(ctx.generation(), RESOLVE_GATT));
             return;
         }
         if (event instanceof DeviceEvent.GattResolveSucceeded) {
-            ctx.emit(new DeviceEffect(ctx.generation(), EFFECT_START_SUBSCRIBE_PROCEDURE));
+            ctx.emit(new DeviceEffect(ctx.generation(), START_SUBSCRIBE_PROCEDURE));
             ctx.transitionTo(DeviceActorState.SUBSCRIBING, DeviceWaitingOn.SUBSCRIPTION, event.kind());
             return;
         }
         if (event instanceof DeviceEvent.GattResolveFailed) {
             DeviceEvent.GattResolveFailed failed = (DeviceEvent.GattResolveFailed) event;
-            ctx.emit(new DeviceEffect(ctx.generation(), EFFECT_DISCONNECT_NATIVE));
+            ctx.emit(new DeviceEffect(ctx.generation(), DISCONNECT_NATIVE));
             ctx.transitionTo(DeviceActorState.BACKING_OFF, DeviceWaitingOn.BACKOFF_TIMER,
                     event.kind() + ":" + failed.reason());
             return;
@@ -78,7 +82,7 @@ final class ResolveGattProcedure implements DeviceProcedure {
         if (event instanceof DeviceEvent.ProcedureDeadlineExpired) {
             DeviceEvent.ProcedureDeadlineExpired deadline = (DeviceEvent.ProcedureDeadlineExpired) event;
             if (deadline.procedure() == DeviceProcedureName.RESOLVE_GATT) {
-                ctx.emit(new DeviceEffect(ctx.generation(), EFFECT_DISCONNECT_NATIVE));
+                ctx.emit(new DeviceEffect(ctx.generation(), DISCONNECT_NATIVE));
                 ctx.transitionTo(DeviceActorState.BACKING_OFF, DeviceWaitingOn.BACKOFF_TIMER, event.kind());
             }
         }
@@ -86,6 +90,6 @@ final class ResolveGattProcedure implements DeviceProcedure {
 
     @Override
     public void cancel(String reason, DeviceProcedureContext ctx) {
-        ctx.emit(new DeviceEffect(ctx.generation(), EFFECT_DISCONNECT_NATIVE));
+        ctx.emit(new DeviceEffect(ctx.generation(), DISCONNECT_NATIVE));
     }
 }
