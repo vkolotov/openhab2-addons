@@ -69,7 +69,11 @@ final class DevicePortEffectExecutor implements DeviceEffectExecutor {
     }
 
     private void executeResolveGatt(DeviceEffect effect) {
-        port.resolveGatt();
+        // Never issue a discovery on top of one already in flight (the 12:00 race lesson: an in-flight
+        // walk is progress and must not be disturbed); the resolve procedure's deadline bounds a hang.
+        if (!port.isGattResolving()) {
+            port.resolveGatt();
+        }
         if (port.isGattResolved()) {
             eventSink.accept(new DeviceEvent.GattResolveSucceeded(effect.generation()));
         }

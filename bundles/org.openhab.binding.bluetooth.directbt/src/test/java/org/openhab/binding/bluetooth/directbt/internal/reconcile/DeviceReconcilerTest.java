@@ -167,7 +167,7 @@ class DeviceReconcilerTest {
     }
 
     @Test
-    void productionRuntimeConnectSliceDoesNotRunGattAfterNativeConnected() {
+    void productionRuntimeHandsOffToSettleLinkAfterNativeConnected() {
         FakeDevicePort port = new FakeDevicePort();
         port.wanted = true;
         port.hasNative = true;
@@ -179,9 +179,11 @@ class DeviceReconcilerTest {
         r.productionRuntimeForTest().submit(new DeviceEvent.NativeConnected(r.productionRuntimeForTest().generation()));
 
         assertEquals(0, port.resolveGattCalls,
-                "the production actor slice owns connect only; legacy GATT timing still owns real discovery");
-        assertEquals(1, r.productionRuntimeForTest().drainUnhandledEffects().size(),
-                "post-connect procedure handoff must stay unhandled until that slice is migrated");
+                "the settle window separates native-connected from first ATT use; no immediate discovery");
+        assertEquals(0, r.productionRuntimeForTest().drainUnhandledEffects().size(),
+                "the settle handoff is inside the production slice now — every effect must have an executor");
+        assertEquals(DeviceActorState.LINK_SETTLING, r.productionActorDiagnostics().state());
+        assertEquals(DeviceProcedureName.SETTLE_LINK, r.productionActorDiagnostics().activeProcedureName());
     }
 
     @Test

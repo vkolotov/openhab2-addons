@@ -197,6 +197,34 @@ interface DeviceEvent {
         }
     }
 
+    /**
+     * A re-attempt request for an in-progress RESOLVE_GATT procedure: the reconciler paces retries (one per
+     * reconcile tick, exactly like the legacy inline branch) and the procedure answers by re-emitting its
+     * resolve effect.
+     */
+    final class GattResolveRequested implements DeviceEvent {
+        private final long generation;
+
+        GattResolveRequested(long generation) {
+            this.generation = generation;
+        }
+
+        @Override
+        public String kind() {
+            return "GattResolveRequested";
+        }
+
+        @Override
+        public boolean generationScoped() {
+            return true;
+        }
+
+        @Override
+        public long generation() {
+            return generation;
+        }
+    }
+
     final class GattResolveSucceeded implements DeviceEvent {
         private final long generation;
 

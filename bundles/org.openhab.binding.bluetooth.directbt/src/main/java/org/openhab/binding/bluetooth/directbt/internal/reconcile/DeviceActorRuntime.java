@@ -90,6 +90,11 @@ final class DeviceActorRuntime {
     void tick(boolean procedureDeadlinePaused) {
         tickSettleTimer();
         connectLeaseExecutor.tick(actor.diagnostics().generation());
+        // Deliver any expired-timer events BEFORE judging procedure residency: on a sparse tick (paused
+        // adapter, long backoff) both the settle timer (500 ms) and the settle deadline (5 s) can be past due
+        // at once, and the deadline must not tear down a link whose timer-driven handoff is already earned
+        // (evidence preempts waits).
+        pump();
         if (!procedureDeadlinePaused) {
             runner.tick();
         }

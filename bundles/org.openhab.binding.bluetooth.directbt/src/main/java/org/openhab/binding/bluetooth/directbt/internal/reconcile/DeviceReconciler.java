@@ -34,7 +34,8 @@ import org.slf4j.Logger;
  * <li><b>pending-stuck</b> — if CONNECTING longer than the connect deadline with no native connection, clear the
  * stuck create-connection via {@link DevicePort#disconnectNative()}, and past a harder deadline request an
  * adapter reset (shared budget);</li>
- * <li><b>gatt</b> — if connected but GATT not resolved, {@link DevicePort#resolveGatt()}.</li>
+ * <li><b>gatt</b> — if connected but GATT not resolved, drive the actor-owned settle/resolve/subscribe
+ * pipeline (see {@code driveProductionGattPipeline}).</li>
  * </ol>
  * The state-flag sync sub-step runs even while the adapter reconciler is unhealthy (it is pure observe->cleanup
  * with no radio command, and a just-reset adapter means every device must be marked disconnected); the connect /
@@ -71,8 +72,11 @@ public class DeviceReconciler extends Reconciler<Boolean, DeviceReconciler.Obser
     private static final long PENDING_RESET_AFTER_MS = 16000;
     // Minimum spacing between connectNative() attempts.
     private static final long CONNECT_RETRY_MS = 2000;
-    private static final long SHADOW_SETTLE_DEADLINE_MS = 5000;
-    private static final long SHADOW_SUBSCRIBE_DEADLINE_MS = 5000;
+    // Deadlines for the post-connect pipeline procedures (settle -> resolve -> subscribe), shared by the
+    // production and shadow procedure factories. Settle/subscribe are fallbacks well above their expected
+    // sub-second phases; the resolve deadline equals the legacy in-flight cap.
+    private static final long SETTLE_DEADLINE_MS = 5000;
+    private static final long SUBSCRIBE_DEADLINE_MS = 5000;
 
     private final DevicePort port;
     private final BooleanSupplier scanIsOff;
@@ -141,6 +145,7 @@ public class DeviceReconciler extends Reconciler<Boolean, DeviceReconciler.Obser
         this.requestAdapterReset = requestAdapterReset;
         this.productionRuntime = new DeviceActorRuntime(new DeviceActor(port.id(), logger, clock),
                 DeviceReconciler::createProductionProcedure, scanIsOff, port, this::observeProductionRuntimeEvent,
+                new SettleTimerEffectExecutor(clock::millis, GATT_FIRST_RESOLVE_DELAY_MS),
                 new DeviceBackoffPolicy(port), this::onProductionBackoff);
         this.shadowRuntime = new DeviceActorRuntime(new DeviceActor(port.id(), logger, clock),
                 DeviceReconciler::createShadowProcedure, () -> false, new ShadowDevicePort(port.id()));
@@ -287,73 +292,7 @@ public class DeviceReconciler extends Reconciler<Boolean, DeviceReconciler.Obser
                 return;
             }
             if (!o.gattResolved) {
-                if (connectedObservedAt != 0 && now - connectedObservedAt < GATT_FIRST_RESOLVE_DELAY_MS) {
-                    logger.debug("[reconcile:{}] connected but GATT unresolved; waiting {}ms before first resolve",
-                            name, GATT_FIRST_RESOLVE_DELAY_MS - (now - connectedObservedAt));
-                    return;
-                }
-                logger.debug("[reconcile:{}] connected but GATT unresolved; resolving", name);
-                if (port.isGattResolving()) {
-                    resolveFailStreak = 0;
-                    if (resolveInFlightSince == 0) {
-                        resolveInFlightSince = now;
-                    }
-                    // In-flight discovery is progress, not failure — but not forever: a discovery whose
-                    // thread hung in native code would otherwise suppress recovery indefinitely.
-                    if (now - resolveInFlightSince > RESOLVE_IN_FLIGHT_MAX_MS) {
-                        logger.warn(
-                                "[reconcile:{}] GATT resolve in flight for {}ms (cap {}ms); treating the discovery as hung and tearing down",
-                                name, now - resolveInFlightSince, RESOLVE_IN_FLIGHT_MAX_MS);
-                        resolveInFlightSince = 0;
-                        port.markDisconnected();
-                    } else {
-                        logger.debug("[reconcile:{}] GATT resolve already in flight; waiting", name);
-                    }
-                    return;
-                }
-                resolveInFlightSince = 0;
-                long resolveStarted = now;
-                port.resolveGatt();
-                long resolveElapsed = clock.millis() - resolveStarted;
-                // TRUST BUT VERIFY the "connected" verdict. Direct-BT's Java-side getConnected() and
-                // getConnectionHandle() can both go stale after a silent link drop: they keep reporting a
-                // connection while the native side has none and the device is out advertising. In that state
-                // every resolve returns empty (GATTHandler nullptr) and this branch loops forever. A real,
-                // healthy link resolves GATT in one or two attempts — so a short streak of failed resolves IS
-                // the disconnect signal. Tear the flag down and let the normal rediscover->connect path
-                // rebuild from a fresh advertisement.
-                if (!port.isGattResolved()) {
-                    if (port.isGattResolving()) {
-                        resolveFailStreak = 0;
-                        if (resolveInFlightSince == 0) {
-                            resolveInFlightSince = now;
-                        }
-                        logger.debug("[reconcile:{}] GATT resolve still in flight after {}ms; waiting", name,
-                                resolveElapsed);
-                    } else if (connectedObservedAt != 0 && now - connectedObservedAt < GATT_WARMUP_GRACE_MS
-                            && resolveElapsed < 500) {
-                        // Not a failure verdict: an INSTANT empty resolve right after connect means native GATT
-                        // is not servable yet (the event-expedited tick gets here ~300 ms after the connection
-                        // event, before the ATT channel is up). A genuinely dead link fails SLOWLY (ATT
-                        // timeouts, 10+ s), so "returned immediately, connection young" is warm-up, not
-                        // evidence — retry next tick without burning the silent-drop streak.
-                        logger.debug("[reconcile:{}] GATT not servable yet {}ms after connect; retrying", name,
-                                now - connectedObservedAt);
-                    } else if (++resolveFailStreak >= RESOLVE_FAIL_STREAK_LIMIT) {
-                        logger.warn(
-                                "[reconcile:{}] GATT resolve failed {} times on a supposedly-connected link; treating as silently dropped",
-                                name, resolveFailStreak);
-                        resolveFailStreak = 0;
-                        port.markDisconnected();
-                    } else {
-                        logger.debug("[reconcile:{}] GATT resolve attempt failed after {}ms (streak {}/{})", name,
-                                resolveElapsed, resolveFailStreak, RESOLVE_FAIL_STREAK_LIMIT);
-                    }
-                } else {
-                    resolveFailStreak = 0;
-                    resolveInFlightSince = 0;
-                    logger.debug("[reconcile:{}] GATT resolve completed in {}ms", name, resolveElapsed);
-                }
+                driveProductionGattPipeline(now);
             } else {
                 resolveFailStreak = 0;
                 resolveInFlightSince = 0;
@@ -447,6 +386,111 @@ public class DeviceReconciler extends Reconciler<Boolean, DeviceReconciler.Obser
         startProductionConnect(now);
     }
 
+    /**
+     * Drive the actor-owned settle -> resolve -> subscribe pipeline for a connected link whose GATT is not yet
+     * resolved. The actor owns the states, deadlines and teardown effects (frozen-design constraints 3+5); the
+     * reconciler contributes what only observation can: retry pacing (one resolve request per reconcile tick,
+     * the legacy cadence) and the TRUST-BUT-VERIFY judgment over attempt outcomes, fed to the actor as events
+     * instead of acted on the port directly. The judgment is unchanged from the old inline branch: Direct-BT's
+     * Java-side getConnected()/getConnectionHandle() can both go stale after a silent link drop, in which state
+     * every resolve returns empty (GATTHandler nullptr) — a short streak of failed resolves IS the disconnect
+     * signal, with two exemptions: an in-flight discovery is progress (bounded by the in-flight cap), and an
+     * INSTANT empty resolve on a young link is ATT warm-up, not evidence (a genuinely dead link fails SLOWLY).
+     */
+    private void driveProductionGattPipeline(long now) {
+        DeviceProcedureName active = productionRuntime.diagnostics().activeProcedureName();
+        boolean inPipeline = active == DeviceProcedureName.SETTLE_LINK || active == DeviceProcedureName.RESOLVE_GATT
+                || active == DeviceProcedureName.SUBSCRIBE_NOTIFICATIONS
+                || active == DeviceProcedureName.ONLINE_MONITOR;
+        if (!inPipeline && connectedObservedAt != 0 && now - connectedObservedAt < GATT_FIRST_RESOLVE_DELAY_MS) {
+            // Fresh connection outside the actor's own connect handoff: enter via SETTLE_LINK so the first
+            // resolve still honours the fresh-link settle delay. (An ADOPTED live link — flag already
+            // connected before this reconciler ever saw the transition — resolves immediately below, exactly
+            // like the legacy inline branch.)
+            logger.debug("[reconcile:{}] connected but GATT unresolved; entering actor settle/resolve pipeline", name);
+            productionRuntime.start(new SettleLinkProcedure(SETTLE_DEADLINE_MS), "wanted:gattUnresolved");
+            drainUnhandledProductionEffects();
+            return;
+        }
+        if (active == DeviceProcedureName.RESOLVE_GATT && port.isGattResolving()) {
+            // In-flight discovery is progress, not failure — but not forever: a discovery whose thread hung
+            // in native code would otherwise suppress recovery indefinitely.
+            resolveFailStreak = 0;
+            if (resolveInFlightSince == 0) {
+                resolveInFlightSince = now;
+            }
+            if (now - resolveInFlightSince > RESOLVE_IN_FLIGHT_MAX_MS) {
+                logger.warn(
+                        "[reconcile:{}] GATT resolve in flight for {}ms (cap {}ms); treating the discovery as hung and tearing down",
+                        name, now - resolveInFlightSince, RESOLVE_IN_FLIGHT_MAX_MS);
+                resolveInFlightSince = 0;
+                productionRuntime
+                        .submit(new DeviceEvent.GattResolveFailed(productionRuntime.generation(), "RESOLVE_HUNG"));
+            } else {
+                logger.debug("[reconcile:{}] GATT resolve already in flight; waiting", name);
+                productionRuntime.tick(false);
+            }
+            drainUnhandledProductionEffects();
+            return;
+        }
+        resolveInFlightSince = 0;
+        long resolveStarted = clock.millis();
+        boolean attempted;
+        if (!inPipeline) {
+            // Adopted/settled link with no pipeline running: enter RESOLVE_GATT directly; its start performs
+            // the first attempt inside this call (skipped by the executor if a discovery is already in flight).
+            logger.debug("[reconcile:{}] connected but GATT unresolved; entering actor resolve pipeline", name);
+            productionRuntime.start(new ResolveGattProcedure(RESOLVE_IN_FLIGHT_MAX_MS), "wanted:gattUnresolved");
+            attempted = true;
+        } else if (active == DeviceProcedureName.RESOLVE_GATT) {
+            logger.debug("[reconcile:{}] connected but GATT unresolved; resolving", name);
+            productionRuntime.submit(new DeviceEvent.GattResolveRequested(productionRuntime.generation()));
+            attempted = true;
+        } else {
+            // LINK_SETTLING (or a stale later phase): the tick advances the settle timer; its expiry hands
+            // off to RESOLVE_GATT, whose start performs the first attempt inside this same call.
+            productionRuntime.tick(false);
+            attempted = productionRuntime.diagnostics().activeProcedureName() == DeviceProcedureName.RESOLVE_GATT
+                    || port.isGattResolved();
+            if (!attempted) {
+                logger.debug("[reconcile:{}] connected but GATT unresolved; waiting out the settle window", name);
+            }
+        }
+        drainUnhandledProductionEffects();
+        if (!attempted) {
+            return;
+        }
+        long resolveElapsed = clock.millis() - resolveStarted;
+        if (!port.isGattResolved()) {
+            if (port.isGattResolving()) {
+                resolveFailStreak = 0;
+                if (resolveInFlightSince == 0) {
+                    resolveInFlightSince = now;
+                }
+                logger.debug("[reconcile:{}] GATT resolve still in flight after {}ms; waiting", name, resolveElapsed);
+            } else if (connectedObservedAt != 0 && now - connectedObservedAt < GATT_WARMUP_GRACE_MS
+                    && resolveElapsed < 500) {
+                logger.debug("[reconcile:{}] GATT not servable yet {}ms after connect; retrying", name,
+                        now - connectedObservedAt);
+            } else if (++resolveFailStreak >= RESOLVE_FAIL_STREAK_LIMIT) {
+                logger.warn(
+                        "[reconcile:{}] GATT resolve failed {} times on a supposedly-connected link; treating as silently dropped",
+                        name, resolveFailStreak);
+                resolveFailStreak = 0;
+                productionRuntime
+                        .submit(new DeviceEvent.GattResolveFailed(productionRuntime.generation(), "SILENT_DROP"));
+                drainUnhandledProductionEffects();
+            } else {
+                logger.debug("[reconcile:{}] GATT resolve attempt failed after {}ms (streak {}/{})", name,
+                        resolveElapsed, resolveFailStreak, RESOLVE_FAIL_STREAK_LIMIT);
+            }
+        } else {
+            resolveFailStreak = 0;
+            resolveInFlightSince = 0;
+            logger.debug("[reconcile:{}] GATT resolve completed in {}ms", name, resolveElapsed);
+        }
+    }
+
     /** Close the current CONNECTING window: clears both the connect deadline and any in-flight pairing freeze. */
     private void clearConnectWindow() {
         connectingSince = 0;
@@ -472,9 +516,9 @@ public class DeviceReconciler extends Reconciler<Boolean, DeviceReconciler.Obser
 
     /**
      * Mirror the async connect-attempt outcomes into the production actor and drive its deadline. Runs at the
-     * top of every act(). The production slice is connect-only, so the actor is only fed and ticked while its
-     * CONNECT procedure is in flight; after a successful establishment it parks (LINK_SETTLING) until the next
-     * attempt replaces it — the reconciler still owns settle/resolve/subscribe.
+     * top of every act(). On NativeConnected the CONNECT procedure hands off to the actor-owned post-connect
+     * pipeline (settle -> resolve -> subscribe -> online), which {@link #driveProductionGattPipeline} advances
+     * from the connected branch of act().
      */
     private void syncProductionRuntime(Observed o) {
         DeviceActorDiagnostics diagnostics = productionRuntime.diagnostics();
@@ -503,7 +547,7 @@ public class DeviceReconciler extends Reconciler<Boolean, DeviceReconciler.Obser
         drainUnhandledProductionEffects();
     }
 
-    /** Effects the connect-only production slice deliberately does not execute (e.g. the settle handoff). */
+    /** Safety valve: any actor effect no executor claimed is drained and logged rather than silently dropped. */
     private void drainUnhandledProductionEffects() {
         for (DeviceEffect effect : productionRuntime.drainUnhandledEffects()) {
             logger.debug("[reconcile:{}] actor effect outside the production slice: {}", name, effect.operation());
@@ -569,25 +613,32 @@ public class DeviceReconciler extends Reconciler<Boolean, DeviceReconciler.Obser
         }
     }
 
+    /**
+     * The production actor runs the full lifecycle chain: CONNECT hands off to SETTLE_LINK on native
+     * connection, whose timer expiry hands off to RESOLVE_GATT, then SUBSCRIBE_NOTIFICATIONS, then the
+     * (deadline-free) ONLINE_MONITOR. The reconciler paces resolve retries and feeds outcome judgments
+     * as events; see {@link #driveProductionGattPipeline}.
+     */
     private static @Nullable DeviceProcedure createProductionProcedure(DeviceProcedureName procedureName) {
-        if (procedureName == DeviceProcedureName.CONNECT) {
-            return new ConnectProcedure(CONNECT_DEADLINE_MS);
-        }
-        return null;
+        return createProcedure(procedureName);
     }
 
     private static @Nullable DeviceProcedure createShadowProcedure(DeviceProcedureName procedureName) {
+        return createProcedure(procedureName);
+    }
+
+    private static @Nullable DeviceProcedure createProcedure(DeviceProcedureName procedureName) {
         if (procedureName == DeviceProcedureName.CONNECT) {
             return new ConnectProcedure(CONNECT_DEADLINE_MS);
         }
         if (procedureName == DeviceProcedureName.SETTLE_LINK) {
-            return new SettleLinkProcedure(SHADOW_SETTLE_DEADLINE_MS);
+            return new SettleLinkProcedure(SETTLE_DEADLINE_MS);
         }
         if (procedureName == DeviceProcedureName.RESOLVE_GATT) {
             return new ResolveGattProcedure(RESOLVE_IN_FLIGHT_MAX_MS);
         }
         if (procedureName == DeviceProcedureName.SUBSCRIBE_NOTIFICATIONS) {
-            return new SubscribeNotificationsProcedure(SHADOW_SUBSCRIBE_DEADLINE_MS);
+            return new SubscribeNotificationsProcedure(SUBSCRIBE_DEADLINE_MS);
         }
         if (procedureName == DeviceProcedureName.ONLINE_MONITOR) {
             return new OnlineMonitorProcedure();

@@ -58,6 +58,11 @@ final class ResolveGattProcedure implements DeviceProcedure {
 
     @Override
     public void onEvent(DeviceEvent event, DeviceProcedureContext ctx) {
+        if (event instanceof DeviceEvent.GattResolveRequested) {
+            // Retry pacing is external (one request per reconcile tick); the procedure just re-issues the work.
+            ctx.emit(new DeviceEffect(ctx.generation(), EFFECT_RESOLVE_GATT));
+            return;
+        }
         if (event instanceof DeviceEvent.GattResolveSucceeded) {
             ctx.emit(new DeviceEffect(ctx.generation(), EFFECT_START_SUBSCRIBE_PROCEDURE));
             ctx.transitionTo(DeviceActorState.SUBSCRIBING, DeviceWaitingOn.SUBSCRIPTION, event.kind());
