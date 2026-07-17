@@ -24,6 +24,8 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 
 import org.direct_bt.AdapterStatusListener;
 import org.direct_bt.BTAdapter;
@@ -122,6 +124,10 @@ public class DirectBTBridgeHandler extends AbstractBluetoothBridgeHandler<Direct
     // events (OH connect/disconnect + native deviceFound/Connected/Disconnected/discoveringChanged) collapses
     // to a single tick that observes the latest native truth; the surplus requests do ZERO native reads.
     private final AtomicBoolean reconcilePending = new AtomicBoolean();
+    // Adapter reset fanout (constraint 12): monotonic generation stamped on every reset announcement, and the
+    // completion handed from the async reset thread to the reconcile tick that announces it to the devices.
+    private final AtomicLong adapterResetGeneration = new AtomicLong();
+    private final AtomicReference<@Nullable AdapterResetCompletion> pendingAdapterResetCompletion = new AtomicReference<>();
     // When the last reconcile tick (periodic or event-driven) last ran, for the MIN_OBSERVE_INTERVAL_MS floor.
     private volatile long lastTickAt;
     private final ResetBudget resetBudget = new ResetBudget();
@@ -439,6 +445,9 @@ public class DirectBTBridgeHandler extends AbstractBluetoothBridgeHandler<Direct
                     forEachDevice(d -> d.getReconciler().pause());
                     return;
                 }
+                // Announce any completed adapter reset before the devices act on it: their actors must be
+                // re-parked by intent (post-reset generation) before this tick's reconcile drives recovery.
+                fanOutPendingAdapterResetCompletion();
                 // Devices first (they update connected/connecting state that the scan's desired is computed from),
                 // then the adapter scan field. The flag-sync sub-step inside a device runs even right after a reset.
                 adoptOrphanNativeConnections();
@@ -656,10 +665,17 @@ public class DirectBTBridgeHandler extends AbstractBluetoothBridgeHandler<Direct
         if (a == null) {
             return;
         }
+        // FANOUT (frozen constraint 12): an adapter reset is a generation boundary for EVERY device on it —
+        // the reset invalidates all native handles/connections at once. Announcing it BEFORE the native call
+        // fences every in-flight attempt's events and effects as stale, so nothing from the pre-reset world can
+        // land on the post-reset adapter. Announced on the reconcile tick thread (the actor runtime is
+        // caller-threaded); the native reset itself runs async below.
+        long adapterGeneration = adapterResetGeneration.incrementAndGet();
+        forEachDevice(d -> d.getReconciler().onAdapterResetStarted(adapterGeneration));
         // OFF the reconcile tick, always: DBTAdapter.reset() is a native call observed to hang indefinitely
         // (2026-07-16: 5+ min inside resetImpl, wedging every reconcile and device operation behind the tick's
         // forEachDevice lock). A hung reset must cost at most one pool thread, never the reconcile loop.
-        logger.warn("Direct-BT adapter reset requested; running async");
+        logger.warn("Direct-BT adapter reset requested (generation {}); running async", adapterGeneration);
         executor.execute(() -> {
             long started = System.nanoTime();
             HCIStatusCode rc = a.reset();
@@ -668,8 +684,37 @@ public class DirectBTBridgeHandler extends AbstractBluetoothBridgeHandler<Direct
             if (rc == HCIStatusCode.SUCCESS && !a.isPowered()) {
                 a.setPowered(true);
             }
+            // Completion fans out on the RECONCILE TICK, not this pool thread: the actor runtime is
+            // caller-threaded, so the announcement must be serialized with every other actor input. Any
+            // result re-parks the actors by intent (a failed reset leaves the adapter no less invalidated).
+            pendingAdapterResetCompletion.set(new AdapterResetCompletion(adapterGeneration, rc.name()));
             requeueReconcile();
         });
+    }
+
+    /** One completed adapter reset awaiting fanout on the next reconcile tick. */
+    private static final class AdapterResetCompletion {
+        private final long generation;
+        private final String result;
+
+        AdapterResetCompletion(long generation, String result) {
+            this.generation = generation;
+            this.result = result;
+        }
+    }
+
+    /**
+     * Deliver a completed adapter reset to every device actor (see {@link #requestAdapterReset()}). Runs at the
+     * top of the reconcile tick so the announcement is serialized with the actors' other inputs.
+     */
+    private void fanOutPendingAdapterResetCompletion() {
+        AdapterResetCompletion completion = pendingAdapterResetCompletion.getAndSet(null);
+        if (completion == null) {
+            return;
+        }
+        logger.debug("Direct-BT adapter reset generation {} completed ({}); announcing to device actors",
+                completion.generation, completion.result);
+        forEachDevice(d -> d.getReconciler().onAdapterResetCompleted(completion.generation, completion.result));
     }
 
     private void bringUpAdapter(BTAdapter added, BluetoothAddress wanted) {

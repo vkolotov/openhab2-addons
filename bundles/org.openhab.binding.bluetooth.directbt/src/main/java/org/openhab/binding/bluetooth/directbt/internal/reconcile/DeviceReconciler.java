@@ -121,6 +121,9 @@ public class DeviceReconciler extends Reconciler<Boolean, DeviceReconciler.Obser
     // Last pairing state mirrored into the production actor (rising/falling edges become Pairing* events, whose
     // transitions reset the actor's state clock — the actor-side equivalent of the connect-deadline freeze).
     private boolean pairingMirroredToActor;
+    // Last connection intent mirrored into the production actor (see syncProductionIntent). Boxed: null means
+    // "never mirrored", so the first observation always fires its edge.
+    private @Nullable Boolean wantedMirroredToActor;
     // Gate timing diagnostics. These do not drive behavior; they explain where connection setup time is spent.
     private long waitingNativeHandleSince;
     private long waitingScanOffSince;
@@ -203,6 +206,7 @@ public class DeviceReconciler extends Reconciler<Boolean, DeviceReconciler.Obser
     @Override
     protected void act(Boolean unusedDesired, Observed o) {
         long now = clock.millis();
+        syncProductionIntent();
         syncProductionRuntime(o);
 
         // (5) STATE-FLAG SYNC — always reconcile our flag to native truth first.
@@ -223,17 +227,6 @@ public class DeviceReconciler extends Reconciler<Boolean, DeviceReconciler.Obser
         }
 
         if (!port.isWanted()) {
-            DeviceActorDiagnostics unwantedDiagnostics = productionRuntime.diagnostics();
-            if (unwantedDiagnostics.state() != DeviceActorState.IDLE_DISABLED) {
-                // Retire the actor: cancels an in-flight attempt (critically the CONNECT_LEASE wait, where a
-                // later lease grant would otherwise issue connectLE for a device nobody wants anymore) and
-                // settles a parked pipeline procedure, so diagnostics read IDLE_DISABLED while unwanted.
-                logger.debug("[reconcile:{}] no longer wanted; retiring device actor (was {})", name,
-                        unwantedDiagnostics.stateName());
-                productionRuntime.submit(new DeviceEvent.WantedOffline());
-                drainUnhandledProductionEffects();
-                clearConnectWindow();
-            }
             if (o.hasNative && o.nativeConnected) {
                 logger.debug("[reconcile:{}] no longer wanted but still connected; disconnecting", name);
                 port.disconnectNative();
@@ -350,11 +343,6 @@ public class DeviceReconciler extends Reconciler<Boolean, DeviceReconciler.Obser
             if (waitingNativeHandleSince == 0) {
                 waitingNativeHandleSince = now;
                 logger.debug("[reconcile:{}] waiting for discovery/native handle before connect", name);
-            }
-            if (productionRuntime.diagnostics().state() == DeviceActorState.IDLE_DISABLED) {
-                // Intent-only event: parks the actor in DISCOVERING so diagnostics show what is being waited
-                // on (the actor has no procedure for discovery — the scan is adapter-owned).
-                productionRuntime.submit(new DeviceEvent.WantedOnline());
             }
             return;
         } else if (waitingNativeHandleSince != 0) {
@@ -505,6 +493,30 @@ public class DeviceReconciler extends Reconciler<Boolean, DeviceReconciler.Obser
     }
 
     /**
+     * Mirror the connection INTENT into the production actor on every edge. Intent is the one input the actor
+     * cannot observe for itself, and it outlives any single attempt: {@code AdapterResetCompleted} re-parks the
+     * actor by intent (DISCOVERING vs IDLE_DISABLED), so a stale intent would strand a wanted device after a
+     * reset. Wanted-offline also cancels whatever is in flight — critically a CONNECT_LEASE wait, where a later
+     * lease grant would otherwise issue connectLE for a device nobody wants anymore — and settles a parked
+     * pipeline procedure, so diagnostics read IDLE_DISABLED while unwanted.
+     */
+    private void syncProductionIntent() {
+        boolean wanted = port.isWanted();
+        if (wantedMirroredToActor != null && wantedMirroredToActor == wanted) {
+            return;
+        }
+        wantedMirroredToActor = wanted;
+        DeviceActorState before = productionRuntime.diagnostics().state();
+        productionRuntime.submit(wanted ? new DeviceEvent.WantedOnline() : new DeviceEvent.WantedOffline());
+        drainUnhandledProductionEffects();
+        if (!wanted) {
+            clearConnectWindow();
+        }
+        logger.debug("[reconcile:{}] connection intent -> {} (actor {} -> {})", name, wanted ? "online" : "offline",
+                before, productionRuntime.diagnostics().stateName());
+    }
+
+    /**
      * Mirror the async connect-attempt outcomes into the production actor and drive its deadline. Runs at the
      * top of every act(). On NativeConnected the CONNECT procedure hands off to the actor-owned post-connect
      * pipeline (settle -> resolve -> subscribe -> online), which {@link #driveProductionGattPipeline} advances
@@ -564,6 +576,31 @@ public class DeviceReconciler extends Reconciler<Boolean, DeviceReconciler.Obser
 
     public @Nullable Observed lastObserved() {
         return observed;
+    }
+
+    /**
+     * Adapter reset fanout (frozen constraint 12): an adapter reset is a generation boundary for every device
+     * on that adapter. Started cancels the active procedure and bumps the device generation, so every event
+     * and effect from the pre-reset world is fenced as stale; the backoff policy clears the port (handles
+     * dropped, rediscovery from a fresh advert). Local judgment state falls with it. Must be called on the
+     * reconcile tick thread — the actor runtime is caller-threaded.
+     */
+    public void onAdapterResetStarted(long adapterGeneration) {
+        productionRuntime.submit(new DeviceEvent.AdapterResetStarted(adapterGeneration));
+        drainUnhandledProductionEffects();
+        clearConnectWindow();
+        commandDisallowedStreak = 0;
+        resolveFailStreak = 0;
+        resolveInFlightSince = 0;
+    }
+
+    /**
+     * Adapter reset finished (any result): the actor re-parks by intent — DISCOVERING when the device asked
+     * to be online before, IDLE_DISABLED otherwise — and the next reconcile drives recovery as a cold start.
+     */
+    public void onAdapterResetCompleted(long adapterGeneration, @Nullable String result) {
+        productionRuntime.submit(new DeviceEvent.AdapterResetCompleted(adapterGeneration, result));
+        drainUnhandledProductionEffects();
     }
 
     public DeviceActorDiagnostics actorDiagnostics() {

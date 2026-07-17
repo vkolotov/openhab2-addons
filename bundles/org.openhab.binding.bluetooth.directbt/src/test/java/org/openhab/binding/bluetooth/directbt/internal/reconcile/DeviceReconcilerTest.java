@@ -914,6 +914,110 @@ class DeviceReconcilerTest {
 
     // --- helpers ---------------------------------------------------------------------------------
 
+    // ---------------------------------------------------------------------------------------------
+    // Adapter reset fanout (frozen constraint 12): a reset invalidates every native handle on the adapter at
+    // once, so it is a generation boundary for EVERY device actor on it. Everything from the pre-reset world
+    // must be fenced as stale, and a wanted device must recover as a cold start afterwards.
+    // ---------------------------------------------------------------------------------------------
+    @Test
+    void adapterResetStartedFencesTheInFlightAttempt() {
+        FakeDevicePort port = new FakeDevicePort();
+        port.wanted = true;
+        port.hasNative = true;
+        port.nativeConnected = false;
+
+        DeviceReconciler r = reconciler(port, scanOff(), new MutableClock(START));
+        r.reconcile();
+        long attemptGeneration = r.productionRuntimeForTest().generation();
+        assertEquals(DeviceActorState.CONNECTING, r.productionActorDiagnostics().state());
+
+        r.onAdapterResetStarted(7);
+
+        assertNotEquals(attemptGeneration, r.productionRuntimeForTest().generation(),
+                "the device generation must bump so the pre-reset attempt's events and effects are stale");
+        assertEquals(DeviceWaitingOn.ADAPTER_RESET, r.productionActorDiagnostics().waitingOn());
+        assertEquals(1, port.markDisconnectedCalls, "the reset invalidated the native model; the port must follow");
+    }
+
+    @Test
+    void eventsFromThePreResetWorldAreIgnored() {
+        FakeDevicePort port = new FakeDevicePort();
+        port.wanted = true;
+        port.hasNative = true;
+        port.nativeConnected = false;
+
+        DeviceReconciler r = reconciler(port, scanOff(), new MutableClock(START));
+        r.reconcile();
+        long staleGeneration = r.productionRuntimeForTest().generation();
+
+        r.onAdapterResetStarted(7);
+        // The pre-reset connect attempt "succeeds" late, against an adapter that no longer has that link.
+        r.productionRuntimeForTest().submit(new DeviceEvent.NativeConnected(staleGeneration));
+
+        assertEquals(DeviceWaitingOn.ADAPTER_RESET, r.productionActorDiagnostics().waitingOn(),
+                "a stale success must not resurrect the fenced attempt");
+        assertEquals(0, port.resolveGattCalls, "and must never start the post-connect pipeline");
+    }
+
+    @Test
+    void wantedDeviceRecoversAsAColdStartAfterAdapterReset() {
+        FakeDevicePort port = new FakeDevicePort();
+        port.wanted = true;
+        port.hasNative = true;
+        port.nativeConnected = false;
+
+        MutableClock clock = new MutableClock(START);
+        DeviceReconciler r = reconciler(port, scanOff(), clock);
+        r.reconcile();
+
+        r.onAdapterResetStarted(7);
+        r.onAdapterResetCompleted(7, "SUCCESS");
+
+        assertEquals(DeviceActorState.DISCOVERING, r.productionActorDiagnostics().state(),
+                "a wanted device re-parks in DISCOVERING: its handle died with the adapter");
+        assertEquals(DeviceWaitingOn.NATIVE_HANDLE, r.productionActorDiagnostics().waitingOn());
+
+        // Rediscovery hands us a fresh handle; the device must connect again without manual help.
+        port.hasNative = true;
+        int connectsBefore = port.connectNativeCalls;
+        clock.advance(CONNECT_RETRY_MS + 1000);
+        r.reconcile();
+        assertTrue(port.connectNativeCalls > connectsBefore, "recovery must resume on its own after the reset");
+    }
+
+    @Test
+    void unwantedDeviceStaysIdleAfterAdapterReset() {
+        FakeDevicePort port = new FakeDevicePort();
+        port.wanted = false;
+        port.hasNative = true;
+
+        DeviceReconciler r = reconciler(port, scanOff(), new MutableClock(START));
+        r.reconcile();
+
+        r.onAdapterResetStarted(7);
+        r.onAdapterResetCompleted(7, "SUCCESS");
+
+        assertEquals(DeviceActorState.IDLE_DISABLED, r.productionActorDiagnostics().state(),
+                "a reset must never revive a device nobody wants");
+        assertEquals(0, port.connectNativeCalls);
+    }
+
+    @Test
+    void failedAdapterResetStillReParksTheActor() {
+        FakeDevicePort port = new FakeDevicePort();
+        port.wanted = true;
+        port.hasNative = true;
+
+        DeviceReconciler r = reconciler(port, scanOff(), new MutableClock(START));
+        r.reconcile();
+
+        r.onAdapterResetStarted(7);
+        r.onAdapterResetCompleted(7, "INTERNAL_TIMEOUT");
+
+        assertEquals(DeviceActorState.DISCOVERING, r.productionActorDiagnostics().state(),
+                "a failed reset leaves the adapter no less invalidated; the actor must not stay fenced forever");
+    }
+
     private static DeviceReconciler reconciler(FakeDevicePort port, BooleanSupplier scanIsOff, MutableClock clock) {
         return new DeviceReconciler(logger(), port, scanIsOff, budget(clock), () -> {
         }, clock);
