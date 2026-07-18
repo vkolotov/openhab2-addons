@@ -204,22 +204,30 @@ class ReconcilerTest {
     // sitting on the evidence for up to the backoff cap (the measured 8 s connected-but-unobserved gap).
     // ---------------------------------------------------------------------------------------------
     @Test
-    void expediteNextActBypassesTheBackoff() {
+    void expediteNextActStartsAFreshBackoffSequence() {
         MutableClock clock = new MutableClock(START);
         TestReconciler r = new TestReconciler(clock);
         r.observedValue = false;
 
         for (int i = 0; i < 6; i++) {
-            r.reconcile(); // repeated acts drive the backoff toward its cap
-            clock.advance(200);
+            r.reconcile(); // repeated acts drive the backoff to its cap
+            if (i < 5) {
+                clock.advance(8_000);
+            }
         }
         int actsBefore = r.actCalls;
 
+        clock.advance(200);
         r.reconcile(); // deep inside the backoff window: must not act
         assertEquals(actsBefore, r.actCalls, "without an event the backoff window holds");
 
         r.expediteNextAct(); // a transport event delivered fresh evidence
         r.reconcile();
         assertEquals(actsBefore + 1, r.actCalls, "an expedited tick must act immediately on fresh evidence");
+
+        clock.advance(500);
+        r.reconcile();
+        assertEquals(actsBefore + 2, r.actCalls,
+                "the expedited act starts at the base backoff instead of reapplying the old cap");
     }
 }

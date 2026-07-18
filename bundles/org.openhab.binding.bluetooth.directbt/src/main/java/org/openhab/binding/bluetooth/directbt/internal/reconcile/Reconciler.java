@@ -103,15 +103,15 @@ public abstract class Reconciler<D, O> {
     // --- driver entry point ----------------------------------------------------------------------
 
     /**
-     * Fresh native evidence arrived (a transport event): allow the next act immediately instead of waiting out
-     * the exponential backoff. The backoff throttles repeated corrective actions against an unchanged picture;
-     * an event changes the picture, and refusing to LOOK at it for up to the backoff cap is not throttling
-     * (measured as an ~8 s blind spot between an established connection and the reconciler observing it).
-     * Acting stays naturally rate-limited: one requeued tick per event, and the command paths keep their own
-     * retry spacing (e.g. the connect retry interval).
+     * Fresh native evidence arrived (a transport event): start a fresh correction sequence instead of carrying
+     * exponential backoff accumulated against the old picture. Clearing only {@code nextActNotBefore} lets one
+     * immediate act through, but that act then reapplies the old capped backoff. On a successful BLE connection this
+     * delayed the following 500 ms link-settle handoff by about eight seconds. Acting remains rate-limited by one
+     * coalesced tick per event and by command-specific pacing such as the connect retry interval.
      */
     public final void expediteNextAct() {
         nextActNotBefore = 0;
+        consecutiveActs = 0;
     }
 
     /**
