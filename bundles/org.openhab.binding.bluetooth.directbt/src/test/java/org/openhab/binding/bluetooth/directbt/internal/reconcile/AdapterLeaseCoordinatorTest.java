@@ -16,8 +16,12 @@ import static org.junit.jupiter.api.Assertions.*;
 import static org.openhab.binding.bluetooth.directbt.internal.reconcile.ReconcileTestSupport.*;
 import static org.openhab.binding.bluetooth.directbt.internal.reconcile.adapter.AdapterLeaseCoordinator.*;
 
+import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
+import org.direct_bt.HCIStatusCode;
 import org.eclipse.jdt.annotation.NonNullByDefault;
 import org.junit.jupiter.api.Test;
 import org.openhab.binding.bluetooth.directbt.internal.reconcile.adapter.*;
@@ -28,10 +32,8 @@ import org.openhab.binding.bluetooth.directbt.internal.reconcile.port.*;
 import org.openhab.binding.bluetooth.directbt.internal.reconcile.procedure.*;
 
 /**
- * Regression harness for {@link AdapterLeaseCoordinator} — the radio arbitration that replaced the static
- * "discovery always wins" rollup after the 2026-07-16 2h17m starvation outage (a permanently invisible tank
- * held the scan on; the HP was gated on "waiting for scan to stop" forever), and the hunted-device
- * escalation ladder that cures the stuck-initiator/zombie-connection controller states.
+ * Regression harness for {@link AdapterLeaseCoordinator}: bounded radio arbitration between discovery and
+ * connection establishment, plus evidence-gated recovery for a controller-side connection missing from host state.
  *
  * @author Vlad Kolotov - Initial contribution
  */
@@ -39,12 +41,18 @@ import org.openhab.binding.bluetooth.directbt.internal.reconcile.procedure.*;
 class AdapterLeaseCoordinatorTest {
 
     private static final long STEP_MS = 500;
+    private static final String TARGET_DEVICE = "target-device";
+    private static final String PEER_DEVICE = "peer-device";
+    private static final String OTHER_ADVERTISER = "other-advertiser";
 
     private final MutableClock clock = new MutableClock(START);
     private final AtomicInteger sweeps = new AtomicInteger();
     private final AtomicInteger resets = new AtomicInteger();
-    private final AdapterLeaseCoordinator c = new AdapterLeaseCoordinator(logger(), budget(clock),
-            sweeps::incrementAndGet, resets::incrementAndGet, clock);
+    private final AtomicReference<String> sweepTarget = new AtomicReference<>("");
+    private final AdapterLeaseCoordinator c = new AdapterLeaseCoordinator(logger(), budget(clock), deviceId -> {
+        sweepTarget.set(deviceId);
+        sweeps.incrementAndGet();
+    }, resets::incrementAndGet, clock);
 
     /** decide() under sustained discovery/connect contention. */
     private boolean contended() {
@@ -68,8 +76,8 @@ class AdapterLeaseCoordinatorTest {
         while (contended()) {
             clock.advance(STEP_MS);
             scanOnMs += STEP_MS;
-            assertTrue(scanOnMs <= DISCOVERY_SLICE_MS + STEP_MS, "the discovery slice must be bounded — "
-                    + "discovery holding the radio forever is the 2h17m starvation bug");
+            assertTrue(scanOnMs <= DISCOVERY_SLICE_MS + STEP_MS,
+                    "the discovery slice must be bounded so connection establishment cannot starve");
         }
         // And it keeps alternating: neither demand ever starves the other.
         assertFalse(contended());
@@ -95,94 +103,143 @@ class AdapterLeaseCoordinatorTest {
         assertTrue(c.decide(true, false, false, false, false));
     }
 
-    // --- hunted-device starvation ladder -------------------------------------------------------------
+    // --- evidence-gated recovery ladder -----------------------------------------------------------
 
     @Test
-    void sustainedHuntingEscalatesSweepThenOneBudgetedReset() {
-        for (long t = 0; t < LADDER_RUNG_MS - STEP_MS; t += STEP_MS) {
-            c.decide(true, false, false, false, false);
-            clock.advance(STEP_MS);
-        }
-        assertEquals(0, sweeps.get(), "hunting below the rung threshold is normal cold-start behaviour");
+    void ordinaryAbsenceNeverEscalates() {
+        decideFor(24 * 60 * 60 * 1000L, Map.of(TARGET_DEVICE, 1L), Set.of());
 
-        for (long t = 0; t < LADDER_RUNG_MS + 2 * STEP_MS; t += STEP_MS) {
-            c.decide(true, false, false, false, false);
-            clock.advance(STEP_MS);
-        }
-        assertEquals(1, sweeps.get(), "rung 1: recovery sweep (clears stuck pending create-connections)");
-        assertEquals(1, resets.get(), "rung 2: adapter reset (the only cure for a zombie LL connection)");
-
-        for (long t = 0; t < 4 * LADDER_RUNG_MS; t += STEP_MS) {
-            c.decide(true, false, false, false, false);
-            clock.advance(STEP_MS);
-        }
-        assertEquals(1, sweeps.get(), "one sweep per hunting episode — an absent peer is not an adapter fault");
-        assertEquals(1, resets.get(), "one reset per hunting episode — never reset forever under a dead battery");
+        assertEquals(0, sweeps.get(), "a powered-off/dead-battery device is a valid steady state");
+        assertEquals(0, resets.get(), "absence alone must never reset a shared adapter");
     }
 
     @Test
-    void deniedResetBudgetDoesNotConsumeTheResetRung() {
+    void establishedConnectionTimeoutDoesNotArmRecovery() {
+        c.noteAdvertisement(TARGET_DEVICE, true);
+        c.noteConnectionFailure(TARGET_DEVICE, 7, HCIStatusCode.CONNECTION_TIMEOUT, true);
+        c.noteAdvertisement(OTHER_ADVERTISER, false);
+
+        decideFor(24 * 60 * 60 * 1000L, Map.of(TARGET_DEVICE, 7L), Set.of());
+
+        assertEquals(0, sweeps.get());
+        assertEquals(0, resets.get(), "an established-link timeout must be non-destructive");
+    }
+
+    @Test
+    void ambiguousFailureWithoutOtherAdvertisementsDoesNotEscalate() {
+        armPossibleConnectionLeak(TARGET_DEVICE, 3);
+
+        decideFor(3 * LADDER_RUNG_MS, Map.of(TARGET_DEVICE, 3L), Set.of());
+
+        assertEquals(0, sweeps.get(), "silence is not selective until other advertisements prove scan liveness");
+        assertEquals(0, resets.get());
+    }
+
+    @Test
+    void unconfiguredAdvertisementIsNotRetainedAsConnectEvidence() {
+        c.noteAdvertisement("transient-rpa", false);
+        c.noteConnectionFailure("transient-rpa", 3, HCIStatusCode.CONNECTION_EST_FAILED_OR_SYNC_TIMEOUT, true);
+        c.noteAdvertisement(OTHER_ADVERTISER, false);
+
+        decideFor(3 * LADDER_RUNG_MS, Map.of("transient-rpa", 3L), Set.of(PEER_DEVICE));
+
+        assertEquals(0, sweeps.get());
+        assertEquals(0, resets.get(), "arbitrary rotating advertisers must not become recovery targets");
+    }
+
+    @Test
+    void selectiveDisappearanceGetsTargetedSweepButNoResetWithoutAdapterWideImpact() {
+        armPossibleConnectionLeak(TARGET_DEVICE, 3);
+        c.noteAdvertisement(OTHER_ADVERTISER, false);
+
+        decideFor(24 * 60 * 60 * 1000L, Map.of(TARGET_DEVICE, 3L), Set.of());
+
+        assertEquals(1, sweeps.get(), "the connection-leak signature retains its cheap recovery rung");
+        assertEquals(TARGET_DEVICE, sweepTarget.get(), "the cheap rung must clean up only the suspected device");
+        assertEquals(0, resets.get(), "one selectively absent device must not reset healthy peers");
+    }
+
+    @Test
+    void selectiveDisappearancePlusAnotherContinuouslyStarvedDeviceResetsOnce() {
+        armPossibleConnectionLeak(TARGET_DEVICE, 3);
+        c.noteAdvertisement(OTHER_ADVERTISER, false);
+
+        decideFor(3 * LADDER_RUNG_MS, Map.of(TARGET_DEVICE, 3L), Set.of(PEER_DEVICE));
+
+        assertEquals(1, sweeps.get());
+        assertEquals(1, resets.get(), "sustained impact on a second device makes this adapter-wide");
+
+        decideFor(4 * LADDER_RUNG_MS, Map.of(TARGET_DEVICE, 3L), Set.of(PEER_DEVICE));
+        assertEquals(1, sweeps.get());
+        assertEquals(1, resets.get(), "one sweep and reset per evidence generation");
+    }
+
+    @Test
+    void deniedResetBudgetRetriesWithoutRepeatingTheSweep() {
         ResetBudget budget = new ResetBudget(BUDGET_COOLDOWN_MS, clock);
         AtomicInteger localSweeps = new AtomicInteger();
         AtomicInteger localResets = new AtomicInteger();
         AdapterLeaseCoordinator coordinator = new AdapterLeaseCoordinator(logger(), budget,
-                localSweeps::incrementAndGet, localResets::incrementAndGet, clock);
+                ignored -> localSweeps.incrementAndGet(), localResets::incrementAndGet, clock);
+        coordinator.noteAdvertisement(TARGET_DEVICE, true);
+        coordinator.noteConnectionFailure(TARGET_DEVICE, 3, HCIStatusCode.CONNECTION_EST_FAILED_OR_SYNC_TIMEOUT, true);
+        coordinator.noteAdvertisement(OTHER_ADVERTISER, false);
 
-        for (long t = 0; t < 2 * LADDER_RUNG_MS - STEP_MS; t += STEP_MS) {
-            coordinator.decide(true, false, false, false, false);
+        for (long elapsed = 0; elapsed < 2 * LADDER_RUNG_MS; elapsed += STEP_MS) {
+            coordinator.decide(true, false, false, false, true, Map.of(TARGET_DEVICE, 3L), Set.of(PEER_DEVICE));
             clock.advance(STEP_MS);
         }
-        assertEquals(1, localSweeps.get(), "sweep rung still fires");
         assertTrue(budget.tryReset("other"), "another requester consumes the shared reset budget just before rung 2");
-
-        for (long t = 0; t < 2 * STEP_MS; t += STEP_MS) {
-            coordinator.decide(true, false, false, false, false);
-            clock.advance(STEP_MS);
-        }
-        assertEquals(1, localSweeps.get(), "sweep rung still fires");
-        assertEquals(0, localResets.get(), "reset rung must not fire while the shared budget denies it");
+        coordinator.decide(true, false, false, false, true, Map.of(TARGET_DEVICE, 3L), Set.of(PEER_DEVICE));
+        assertEquals(1, localSweeps.get());
+        assertEquals(0, localResets.get(), "a denied reset must remain pending behind the shared budget");
 
         clock.advance(BUDGET_COOLDOWN_MS);
-        coordinator.decide(true, false, false, false, false);
-        assertEquals(1, localResets.get(), "the reset rung must retry after the budget becomes available");
-
-        for (long t = 0; t < 2 * LADDER_RUNG_MS; t += STEP_MS) {
-            coordinator.decide(true, false, false, false, false);
-            clock.advance(STEP_MS);
-        }
-        assertEquals(1, localResets.get(), "after one successful reset, the episode is exhausted");
+        coordinator.decide(true, false, false, false, true, Map.of(TARGET_DEVICE, 3L), Set.of(PEER_DEVICE));
+        assertEquals(1, localSweeps.get(), "retrying the reset must not repeat the cheap rung");
+        assertEquals(1, localResets.get(), "the reset may proceed once the shared budget is available");
     }
 
     @Test
-    void findingTheDeviceEndsTheEpisodeAndArmsAFreshLadder() {
-        for (long t = 0; t < LADDER_RUNG_MS / 2; t += STEP_MS) {
-            c.decide(true, false, false, false, false);
-            clock.advance(STEP_MS);
-        }
-        c.decide(false, false, false, false, false); // found: episode over
+    void targetAdvertisementClearsConnectionLeakEvidence() {
+        armPossibleConnectionLeak(TARGET_DEVICE, 3);
+        c.noteAdvertisement(OTHER_ADVERTISER, false);
+        c.noteAdvertisement(TARGET_DEVICE, true);
+
+        decideFor(3 * LADDER_RUNG_MS, Map.of(TARGET_DEVICE, 3L), Set.of(PEER_DEVICE));
+
         assertEquals(0, sweeps.get());
+        assertEquals(0, resets.get(), "fresh target evidence disproves the connection-leak hypothesis");
+    }
 
-        // A fresh episode must earn its own full rung interval before escalating.
-        for (long t = 0; t < LADDER_RUNG_MS - STEP_MS; t += STEP_MS) {
-            c.decide(true, false, false, false, false);
-            clock.advance(STEP_MS);
-        }
-        assertEquals(0, sweeps.get(), "the ladder must restart per episode, not carry stale age");
+    @Test
+    void deviceGenerationChangeClearsConnectionLeakEvidence() {
+        armPossibleConnectionLeak(TARGET_DEVICE, 3);
+        c.noteAdvertisement(OTHER_ADVERTISER, false);
 
-        for (long t = 0; t < 2 * STEP_MS; t += STEP_MS) {
-            c.decide(true, false, false, false, false);
-            clock.advance(STEP_MS);
-        }
-        assertEquals(1, sweeps.get());
+        decideFor(3 * LADDER_RUNG_MS, Map.of(TARGET_DEVICE, 4L), Set.of(PEER_DEVICE));
+
+        assertEquals(0, sweeps.get());
+        assertEquals(0, resets.get(), "recovery evidence must never cross connection generations");
     }
 
     @Test
     void inboxOnlyDiscoveryNeverEscalates() {
-        for (long t = 0; t < 3 * LADDER_RUNG_MS; t += STEP_MS) {
-            assertTrue(c.decide(false, true, false, false, false), "idle background discovery scans");
+        decideFor(3 * LADDER_RUNG_MS, Map.of(), Set.of());
+        assertEquals(0, sweeps.get());
+        assertEquals(0, resets.get());
+    }
+
+    private void armPossibleConnectionLeak(String deviceId, long generation) {
+        c.noteAdvertisement(deviceId, true);
+        c.noteConnectionFailure(deviceId, generation, HCIStatusCode.CONNECTION_EST_FAILED_OR_SYNC_TIMEOUT, true);
+    }
+
+    private void decideFor(long durationMs, Map<String, Long> huntingDevices, Set<String> establishingDevices) {
+        for (long elapsed = 0; elapsed <= durationMs; elapsed += STEP_MS) {
+            c.decide(!huntingDevices.isEmpty(), false, false, false, !establishingDevices.isEmpty(), huntingDevices,
+                    establishingDevices);
             clock.advance(STEP_MS);
         }
-        assertEquals(0, sweeps.get(), "the inbox hunting nothing in particular is not starvation");
-        assertEquals(0, resets.get());
     }
 }

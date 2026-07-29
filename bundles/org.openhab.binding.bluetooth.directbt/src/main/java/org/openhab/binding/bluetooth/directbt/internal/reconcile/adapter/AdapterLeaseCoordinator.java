@@ -13,18 +13,22 @@
 package org.openhab.binding.bluetooth.directbt.internal.reconcile.adapter;
 
 import java.time.Clock;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.Set;
+import java.util.function.Consumer;
 
+import org.direct_bt.HCIStatusCode;
 import org.eclipse.jdt.annotation.NonNullByDefault;
+import org.eclipse.jdt.annotation.Nullable;
 import org.openhab.binding.bluetooth.directbt.internal.reconcile.ResetBudget;
 import org.slf4j.Logger;
 
 /**
  * Owns the adapter's radio-arbitration policy: who gets the single radio when discovery and
- * connection-establishment demands conflict, and when a device that can never be discovered warrants
- * escalation. First slice of the adapter coordinator from the frozen FSM/actor design
- * (docs/directbt-device-fsm-actor-proposal-2026-07-16.md, constraints 2 and 5), introduced under the existing
- * reconciler: the bridge feeds it the per-tick demand rollup and it answers "should the scan be on".
- * Single-threaded by construction — only ever called from the bridge reconcile tick.
+ * connection-establishment demands conflict, and when positive controller-failure evidence warrants escalation.
+ * The bridge feeds it the per-tick demand rollup and it answers "should the scan be on". Single-threaded by
+ * construction — only ever called from the bridge reconcile tick.
  *
  * <p>
  * Policies:
@@ -33,15 +37,14 @@ import org.slf4j.Logger;
  * discovery yields to an establishing device, everything yields to an in-flight create-connection).</li>
  * <li><b>Contention time-slice:</b> when one device needs DISCOVERY (no handle) while another is ESTABLISHING
  * (holds a handle, needs the scan off to connect), neither may hold the radio indefinitely. The old rollup let
- * discovery win statically, which starved every connect for as long as the hunted device stayed invisible —
- * the 2026-07-16 16:43-19:00 outage (tank held by a zombie LL connection, HP gated on "waiting for scan to
- * stop" for 2h17m). Now the radio alternates: a connect slice first (the acute need), then a discovery slice
- * (the chronic hunt), bounded both ways.</li>
- * <li><b>Starvation ladder:</b> a wanted device continuously undiscovered for {@link #LADDER_RUNG_MS} gets a
- * budgeted recovery ladder — rung 1: best-effort disconnect sweep (clears stuck pending create-connections;
- * a no-op against a controller-held zombie), rung 2: adapter reset (the only host-side action that reaches a
- * zombie LL connection). One sweep and one reset per hunting episode: a genuinely absent peer (dead battery)
- * must not reset the adapter forever under the healthy devices.</li>
+ * discovery win statically, which starved every connect for as long as the undiscovered device stayed invisible.
+ * The radio therefore alternates: a connect slice first (the acute need), then a discovery slice (the chronic
+ * need), bounded both ways.</li>
+ * <li><b>Evidence-gated recovery ladder:</b> ordinary absence is a valid steady state and never arms recovery.
+ * An ambiguous {@code 0x3e} connect failure followed by selective disappearance while other advertisements
+ * continue suggests that the controller retained a connection that the host does not know about. It gets one
+ * best-effort cleanup; adapter reset additionally requires another device to remain unable to establish, so one
+ * offline peripheral can never reset healthy peers.</li>
  * </ul>
  *
  * @author Vlad Kolotov - Initial contribution
@@ -57,10 +60,13 @@ public class AdapterLeaseCoordinator {
 
     // How long a wanted device may stay continuously undiscovered before each escalation rung fires.
     public static final long LADDER_RUNG_MS = 180_000;
+    // A connect attempt must follow a recent advertisement to be eligible for the selective-disappearance
+    // signature. Handles may wait through one full 30s discovery slice plus connect scheduling.
+    public static final long CONNECT_ADVERT_RECENCY_MS = 60_000;
 
     private final Logger logger;
     private final ResetBudget resetBudget;
-    private final Runnable recoverySweep;
+    private final Consumer<String> recoverySweep;
     private final Runnable requestAdapterReset;
     private final Clock clock;
 
@@ -68,11 +74,15 @@ public class AdapterLeaseCoordinator {
     private long sliceStartedAt;
     private boolean discoverySlice;
 
-    // Starvation-ladder state (0 = nothing being hunted).
-    private long huntingSince;
+    // Recovery evidence is adapter-coordinator state and is touched only on the bridge scheduler/tick thread.
+    private final Map<String, Long> lastAdvertisementAt = new HashMap<>();
+    private long advertisementSequence;
+    private @Nullable ConnectionLeakEvidence connectionLeakEvidence;
     private int ladderRung;
+    private long adapterWideImpactSince;
+    private boolean resetSuppressionLogged;
 
-    public AdapterLeaseCoordinator(Logger logger, ResetBudget resetBudget, Runnable recoverySweep,
+    public AdapterLeaseCoordinator(Logger logger, ResetBudget resetBudget, Consumer<String> recoverySweep,
             Runnable requestAdapterReset, Clock clock) {
         this.logger = logger;
         this.resetBudget = resetBudget;
@@ -82,19 +92,70 @@ public class AdapterLeaseCoordinator {
     }
 
     /**
-     * Decide whether the adapter should be scanning this tick, given the demand rollup. Also advances the
-     * starvation ladder. Called once per reconcile tick, on the tick thread only; the escalation runnables it
-     * fires must themselves be asynchronous (no native work on this thread).
+     * Decide whether the adapter should be scanning this tick, given the demand rollup. This overload performs
+     * radio arbitration only; callers with per-device recovery observations use the full overload.
      */
     public boolean decide(boolean needsDiscovery, boolean backgroundDiscovery, boolean activeScan, boolean connecting,
             boolean establishing) {
+        return decide(needsDiscovery, backgroundDiscovery, activeScan, connecting, establishing, Map.of(), Set.of());
+    }
+
+    /**
+     * Decide scan ownership and advance evidence-gated adapter recovery.
+     *
+     * @param huntingDevices wanted devices currently lacking a native handle, mapped to their actor generation
+     * @param establishingDevices devices currently waiting for or establishing a connection/GATT path
+     */
+    public boolean decide(boolean needsDiscovery, boolean backgroundDiscovery, boolean activeScan, boolean connecting,
+            boolean establishing, Map<String, Long> huntingDevices, Set<String> establishingDevices) {
         long now = clock.millis();
-        updateLadder(needsDiscovery, now);
+        updateRecoveryLadder(huntingDevices, establishingDevices, now);
         if (!connecting && needsDiscovery && establishing) {
             return contentionSlice(now);
         }
         sliceStartedAt = 0;
         return scanWanted(needsDiscovery, backgroundDiscovery, activeScan, connecting, establishing);
+    }
+
+    /**
+     * Record one advertisement. Any advertisement from the suspected target disproves selective disappearance and
+     * clears the evidence immediately; advertisements from other devices prove that the adapter scan remains live.
+     * Only configured/wanted device timestamps are retained, avoiding an unbounded map of rotating private addresses.
+     */
+    public void noteAdvertisement(String deviceId, boolean recoveryTarget) {
+        long now = clock.millis();
+        advertisementSequence++;
+        if (recoveryTarget) {
+            lastAdvertisementAt.put(deviceId, now);
+        }
+        ConnectionLeakEvidence evidence = connectionLeakEvidence;
+        if (evidence != null && evidence.deviceId.equals(deviceId)) {
+            clearRecoveryEvidence("target advertised again", now);
+        }
+    }
+
+    /**
+     * Record a native disconnect/failure callback observed while the actor was waiting for native connection.
+     * Only the ambiguous {@code 0x3e} establishment failure can arm controller-side connection-leak evidence.
+     */
+    public void noteConnectionFailure(String deviceId, long deviceGeneration, HCIStatusCode reason,
+            boolean nativeConnectInFlight) {
+        if (!nativeConnectInFlight || reason != HCIStatusCode.CONNECTION_EST_FAILED_OR_SYNC_TIMEOUT) {
+            return;
+        }
+        long now = clock.millis();
+        Long lastAdvertAt = lastAdvertisementAt.get(deviceId);
+        if (lastAdvertAt == null || now - lastAdvertAt > CONNECT_ADVERT_RECENCY_MS) {
+            logger.debug("[coordinator] ignoring {} for {} generation {}: no recent target advertisement", reason,
+                    deviceId, deviceGeneration);
+            return;
+        }
+        connectionLeakEvidence = new ConnectionLeakEvidence(deviceId, deviceGeneration, now, advertisementSequence);
+        ladderRung = 0;
+        adapterWideImpactSince = 0;
+        resetSuppressionLogged = false;
+        logger.warn("[coordinator] possible controller-side connection leak for {} generation {} after {}; "
+                + "awaiting selective-disappearance evidence", deviceId, deviceGeneration, reason);
     }
 
     /**
@@ -132,39 +193,99 @@ public class AdapterLeaseCoordinator {
         return discoverySlice;
     }
 
-    private void updateLadder(boolean hunting, long now) {
-        if (!hunting) {
-            if (huntingSince != 0) {
-                logger.debug("[coordinator] hunted device found/cleared after {}ms (ladder rung {})",
-                        now - huntingSince, ladderRung);
+    private void updateRecoveryLadder(Map<String, Long> huntingDevices, Set<String> establishingDevices, long now) {
+        ConnectionLeakEvidence evidence = connectionLeakEvidence;
+        if (evidence == null) {
+            return;
+        }
+
+        Long huntingGeneration = huntingDevices.get(evidence.deviceId);
+        if (huntingGeneration == null) {
+            clearRecoveryEvidence("device no longer needs discovery", now);
+            return;
+        }
+        if (huntingGeneration.longValue() != evidence.deviceGeneration) {
+            clearRecoveryEvidence("device generation changed", now);
+            return;
+        }
+
+        // No report after the failure is ambiguous until some OTHER report proves that scanning is alive.
+        if (advertisementSequence <= evidence.advertisementSequenceAtFailure) {
+            return;
+        }
+
+        boolean anotherDeviceEstablishing = establishingDevices.stream()
+                .anyMatch(deviceId -> !evidence.deviceId.equals(deviceId));
+        if (anotherDeviceEstablishing) {
+            if (adapterWideImpactSince == 0) {
+                adapterWideImpactSince = now;
             }
-            huntingSince = 0;
-            ladderRung = 0;
-            return;
+        } else {
+            adapterWideImpactSince = 0;
         }
-        if (huntingSince == 0) {
-            huntingSince = now;
-            return;
-        }
-        if (ladderRung >= 2) {
-            return; // one sweep + one reset per hunting episode; an absent peer is not an adapter fault
-        }
-        long nextRungDue = huntingSince + (ladderRung + 1) * LADDER_RUNG_MS;
-        if (now < nextRungDue) {
-            return;
-        }
+
+        long evidenceAge = now - evidence.startedAt;
         if (ladderRung == 0) {
+            if (evidenceAge < LADDER_RUNG_MS) {
+                return;
+            }
             ladderRung = 1;
-            logger.warn("[coordinator] wanted device undiscovered for {}ms; recovery sweep "
-                    + "(clears stuck pending create-connections)", now - huntingSince);
-            recoverySweep.run();
+            logger.warn(
+                    "[coordinator] possible controller-side connection leak for {} generation {} persisted for "
+                            + "{}ms; targeted recovery cleanup",
+                    evidence.deviceId, evidence.deviceGeneration, evidenceAge);
+            recoverySweep.accept(evidence.deviceId);
+            return;
+        }
+        if (ladderRung >= 2 || evidenceAge < 2 * LADDER_RUNG_MS) {
+            return;
+        }
+
+        // Reset is adapter-wide and invalidates every healthy connection. Selective absence of one target is not
+        // sufficient: another device must itself remain unable to establish for a full rung.
+        boolean adapterWideImpact = adapterWideImpactSince != 0 && now - adapterWideImpactSince >= LADDER_RUNG_MS;
+        if (!adapterWideImpact) {
+            if (!resetSuppressionLogged) {
+                resetSuppressionLogged = true;
+                logger.warn("[coordinator] suppressing adapter reset for possible connection leak affecting {}: "
+                        + "no sustained impact on another configured device", evidence.deviceId);
+            }
             return;
         }
         if (resetBudget.tryReset("coordinator")) {
             ladderRung = 2;
-            logger.warn("[coordinator] wanted device still undiscovered after {}ms and a sweep; adapter reset "
-                    + "(the only cure for a controller-held zombie connection)", now - huntingSince);
+            logger.warn(
+                    "[coordinator] possible controller-side connection leak affecting {} persists for {}ms after "
+                            + "cleanup and another device has been unable to establish for {}ms; adapter reset",
+                    evidence.deviceId, evidenceAge, now - adapterWideImpactSince);
             requestAdapterReset.run();
+        }
+    }
+
+    private void clearRecoveryEvidence(String reason, long now) {
+        ConnectionLeakEvidence evidence = connectionLeakEvidence;
+        if (evidence != null) {
+            logger.debug("[coordinator] clearing connection-leak evidence for {} generation {} after {}ms: {}",
+                    evidence.deviceId, evidence.deviceGeneration, now - evidence.startedAt, reason);
+        }
+        connectionLeakEvidence = null;
+        ladderRung = 0;
+        adapterWideImpactSince = 0;
+        resetSuppressionLogged = false;
+    }
+
+    private static final class ConnectionLeakEvidence {
+        private final String deviceId;
+        private final long deviceGeneration;
+        private final long startedAt;
+        private final long advertisementSequenceAtFailure;
+
+        private ConnectionLeakEvidence(String deviceId, long deviceGeneration, long startedAt,
+                long advertisementSequenceAtFailure) {
+            this.deviceId = deviceId;
+            this.deviceGeneration = deviceGeneration;
+            this.startedAt = startedAt;
+            this.advertisementSequenceAtFailure = advertisementSequenceAtFailure;
         }
     }
 }

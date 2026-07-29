@@ -16,10 +16,12 @@ import java.nio.file.Path;
 import java.time.Clock;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
@@ -49,6 +51,8 @@ import org.openhab.binding.bluetooth.directbt.internal.reconcile.AdapterReconcil
 import org.openhab.binding.bluetooth.directbt.internal.reconcile.DeviceReconciler;
 import org.openhab.binding.bluetooth.directbt.internal.reconcile.ResetBudget;
 import org.openhab.binding.bluetooth.directbt.internal.reconcile.adapter.AdapterLeaseCoordinator;
+import org.openhab.binding.bluetooth.directbt.internal.reconcile.device.DeviceActorDiagnostics;
+import org.openhab.binding.bluetooth.directbt.internal.reconcile.device.DeviceWaitingOn;
 import org.openhab.core.OpenHAB;
 import org.openhab.core.common.ThreadPoolManager;
 import org.openhab.core.thing.Bridge;
@@ -205,6 +209,9 @@ public class DirectBTBridgeHandler extends AbstractBluetoothBridgeHandler<Direct
             logger.debug("Direct-BT deviceDisconnected: {} reason={}", address, reason);
             scheduler.execute(() -> {
                 DirectBTBluetoothDevice ohDevice = getDevice(address);
+                DeviceActorDiagnostics diagnostics = ohDevice.getActorDiagnostics();
+                leaseCoordinator.noteConnectionFailure(address.toString(), diagnostics.generation(), reason,
+                        diagnostics.waitingOn() == DeviceWaitingOn.NATIVE_CONNECT);
                 ohDevice.setDisconnectReason(String.valueOf(reason));
                 ohDevice.noteNativeDisconnectEvent();
                 ohDevice.getReconciler().expediteNextAct(); // act on the failure now, not after the act-backoff
@@ -244,6 +251,7 @@ public class DirectBTBridgeHandler extends AbstractBluetoothBridgeHandler<Direct
 
     private void processDeviceSeen(DirectBTBluetoothDevice device, BTDevice btDevice, boolean requeueAfterUpdate) {
         try {
+            leaseCoordinator.noteAdvertisement(device.getAddress().toString(), device.isWanted());
             handleDeviceFound(device, btDevice);
             if (requeueAfterUpdate) {
                 requeueReconcile(); // hint: a wanted device may now be connectable
@@ -652,10 +660,15 @@ public class DirectBTBridgeHandler extends AbstractBluetoothBridgeHandler<Direct
         boolean[] needsDiscovery = { false };
         boolean[] connecting = { false };
         boolean[] establishing = { false };
+        Map<String, Long> huntingDevices = new LinkedHashMap<>();
+        Set<String> establishingDevices = new HashSet<>();
         forEachDevice(d -> {
             DeviceReconciler rec = d.getReconciler();
+            DeviceActorDiagnostics diagnostics = rec.actorDiagnostics();
+            String deviceId = diagnostics.deviceId();
             if (rec.wantsDiscovery()) {
                 needsDiscovery[0] = true;
+                huntingDevices.put(deviceId, diagnostics.generation());
             }
             DeviceReconciler.Observed o = rec.lastObserved();
             if (o != null && o.flagConnecting) {
@@ -667,55 +680,56 @@ public class DirectBTBridgeHandler extends AbstractBluetoothBridgeHandler<Direct
             // controller can never complete the create-connection (observed as a connect/clear-pending flap).
             if (rec.needsConnection()) {
                 establishing[0] = true;
+                establishingDevices.add(deviceId);
             }
             // Connected but mid-GATT-walk: the scan steals radio slots the walk needs. Fatal on weak links —
             // the walk times out, restarts, and the device never reaches "ready", which keeps the scan on: a
             // self-sustaining starvation loop.
             if (rec.isResolvingGatt()) {
                 establishing[0] = true;
+                establishingDevices.add(deviceId);
             }
         });
         // The needsDiscovery-vs-establishing conflict is arbitrated by the lease coordinator (time-sliced both
         // ways). The old static rollup let discovery win indefinitely, which starved every connect for as long
-        // as a hunted device stayed invisible (the 2026-07-16 2h17m outage). The coordinator also runs the
-        // hunted-device starvation ladder (sweep -> budgeted adapter reset) from the same demand rollup.
+        // as an undiscovered device stayed invisible. The coordinator also evaluates generation-tagged evidence
+        // of controller-side connections missing from host state; ordinary device absence is discovery demand,
+        // never a reset trigger.
         return leaseCoordinator.decide(needsDiscovery[0], backgroundDiscovery, activeScanEnabled, connecting[0],
-                establishing[0]);
+                establishing[0], huntingDevices, establishingDevices);
     }
 
     /**
-     * Best-effort recovery sweep on the lease coordinator's behalf: disconnect every wanted-but-unestablished
-     * device to clear stuck pending create-connections at the controller (the stuck-initiator variant of the
-     * hunted-device failure; a controller-held zombie needs the adapter reset rung instead). Runs the blocking
-     * native disconnects on the blocking-ops pool, and collects targets first so no native call ever runs while
-     * holding the device-map iteration lock (the 2026-07-16 16:30 wedge lesson).
+     * Best-effort recovery sweep on the lease coordinator's behalf: clean up only the suspected target. A
+     * controller-side connection missing from host state has no usable handle and may make this a no-op, but
+     * unrelated devices must never be disconnected as collateral damage. The blocking native call runs on the
+     * blocking-ops pool and the target is resolved before scheduling, so no native call ever runs while holding the
+     * device-map iteration lock.
      */
-    private void recoverySweep() {
-        List<DirectBTBluetoothDevice> targets = new ArrayList<>();
+    private void recoverySweep(String suspectedDeviceId) {
+        List<DirectBTBluetoothDevice> targets = new ArrayList<>(1);
         forEachDevice(d -> {
-            DeviceReconciler rec = d.getReconciler();
-            if (rec.wantsDiscovery() || rec.needsConnection()) {
+            if (suspectedDeviceId.equals(d.getReconciler().actorDiagnostics().deviceId())) {
                 targets.add(d);
             }
         });
         if (targets.isEmpty()) {
             return;
         }
-        logger.warn("Direct-BT recovery sweep: best-effort disconnect of {} wanted-but-unestablished device(s)",
-                targets.size());
+        DirectBTBluetoothDevice suspectedDevice = targets.get(0);
+        logger.warn("Direct-BT recovery sweep: best-effort cleanup of suspected device {}", suspectedDeviceId);
         executor.execute(() -> {
-            for (DirectBTBluetoothDevice d : targets) {
-                d.disconnectNative();
-            }
+            suspectedDevice.disconnectNative();
             requeueReconcile();
         });
     }
 
     /**
-     * Reset the adapter on a device/coordinator's behalf (wedged create-connection, COMMAND_DISALLOWED, or hunted
-     * device recovery). The caller has already consumed the shared reset budget via its own {@code tryReset(...)}
-     * before invoking this, so do not gate on {@code tryReset} again here. This method still owns the in-flight
-     * guard: a hung native reset must not allow more native reset calls to stack up behind it.
+     * Reset the adapter on a device/coordinator's behalf (wedged create-connection, COMMAND_DISALLOWED, or
+     * adapter-wide impact from possible controller-side connection-leak evidence). The caller has already consumed
+     * the shared reset budget via its own {@code tryReset(...)} before invoking this, so do not gate on
+     * {@code tryReset} again here. This method still owns the in-flight guard: a hung native reset must not allow
+     * more native reset calls to stack up behind it.
      */
     void requestAdapterReset() {
         BTAdapter a = adapter;
@@ -783,6 +797,10 @@ public class DirectBTBridgeHandler extends AbstractBluetoothBridgeHandler<Direct
         logger.debug("Direct-BT adapter reset generation {} completed ({}); announcing to device actors",
                 completion.generation, completion.result);
         try {
+            AdapterReconciler ar = adapterReconciler;
+            if (ar != null) {
+                ar.resetScanState();
+            }
             forEachDevice(d -> d.getReconciler().onAdapterResetCompleted(completion.generation, completion.result));
         } finally {
             adapterResetInFlight.set(false);
