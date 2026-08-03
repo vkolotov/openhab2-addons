@@ -52,6 +52,7 @@ import org.openhab.binding.bluetooth.BluetoothAddress;
 import org.openhab.binding.bluetooth.BluetoothBindingConstants;
 import org.openhab.binding.bluetooth.BluetoothCharacteristic;
 import org.openhab.binding.bluetooth.BluetoothDeviceListener;
+import org.openhab.binding.bluetooth.BluetoothService;
 import org.openhab.binding.bluetooth.directbt.internal.reconcile.MutableClock;
 import org.openhab.binding.bluetooth.directbt.internal.reconcile.ResetBudget;
 import org.openhab.binding.bluetooth.directbt.internal.reconcile.device.DeviceActorDiagnostics;
@@ -74,6 +75,7 @@ class DirectBTBluetoothDeviceTest {
 
     private static final BluetoothAddress ADDRESS = new BluetoothAddress("70:B9:50:92:A9:90");
     private static final UUID SERVICE_UUID = UUID.fromString("9f0d7d29-8816-4215-bd7f-2e2a264f0891");
+    private static final UUID SECOND_SERVICE_UUID = UUID.fromString("9f0d7d2a-8816-4215-bd7f-2e2a264f0891");
     private static final UUID CHAR_UUID = UUID.fromString("9f0dd907-8816-4215-bd7f-2e2a264f0891");
 
     @Mock
@@ -641,6 +643,27 @@ class DirectBTBluetoothDeviceTest {
     }
 
     @Test
+    void emptyCharacteristicValueDoesNotInvalidateGatt() throws Exception {
+        BTGattChar gattChar = connectWithChar(GattCharPropertySet.Type.Read);
+        when(gattChar.readValue()).thenReturn(new byte[0]);
+
+        assertArrayEquals(new byte[0], device().readCharacteristic(characteristic()).get());
+        assertTrue(device().hasNativeDevice());
+        verify(nativeDevice(), never()).disconnect();
+    }
+
+    @Test
+    void failedNativeReadInvalidatesGatt() {
+        BTGattChar gattChar = connectWithChar(GattCharPropertySet.Type.Read);
+        when(gattChar.readValue()).thenReturn(null);
+
+        assertThrows(Exception.class, () -> device().readCharacteristic(characteristic()).get());
+        assertFalse(device().hasNativeDevice());
+        verify(nativeDevice()).disconnect();
+        verify(bridge()).requeueReconcile();
+    }
+
+    @Test
     void notificationCallbackDoesNotBlockOnOpenhabListeners() throws Exception {
         BTGattChar gattChar = connectWithChar(GattCharPropertySet.Type.Notify);
         when(gattChar.addCharListener(any())).thenReturn(true);
@@ -710,6 +733,70 @@ class DirectBTBluetoothDeviceTest {
     }
 
     @Test
+    void repeatedCharacteristicUuidIsScopedByService() throws Exception {
+        device().updateBTDevice(nativeDevice());
+        when(nativeDevice().getConnected()).thenReturn(true);
+
+        BTGattChar firstNativeChar = mock(BTGattChar.class);
+        BTGattChar secondNativeChar = mock(BTGattChar.class);
+        BTGattService firstNativeService = mock(BTGattService.class);
+        BTGattService secondNativeService = mock(BTGattService.class);
+        when(firstNativeService.getUUID()).thenReturn(SERVICE_UUID.toString());
+        when(secondNativeService.getUUID()).thenReturn(SECOND_SERVICE_UUID.toString());
+        when(firstNativeService.getChars()).thenReturn(List.of(firstNativeChar));
+        when(secondNativeService.getChars()).thenReturn(List.of(secondNativeChar));
+        for (BTGattChar nativeChar : List.of(firstNativeChar, secondNativeChar)) {
+            when(nativeChar.getUUID()).thenReturn(CHAR_UUID.toString());
+            when(nativeChar.getProperties()).thenReturn(new GattCharPropertySet(GattCharPropertySet.Type.Notify)
+                    .set(GattCharPropertySet.Type.Read).set(GattCharPropertySet.Type.WriteWithAck));
+            when(nativeChar.addCharListener(any())).thenReturn(true);
+            when(nativeChar.enableNotificationOrIndication(any())).thenReturn(true);
+            when(nativeChar.writeValue(any(), eq(true))).thenReturn(true);
+        }
+        when(firstNativeChar.getService()).thenReturn(firstNativeService);
+        when(secondNativeChar.getService()).thenReturn(secondNativeService);
+        when(firstNativeChar.readValue()).thenReturn(new byte[] { 0x01 });
+        when(secondNativeChar.readValue()).thenReturn(new byte[] { 0x02 });
+        when(nativeDevice().getGattServices()).thenReturn(List.of(firstNativeService, secondNativeService));
+
+        assertTrue(device().discoverServices());
+        BluetoothService firstService = Objects.requireNonNull(device().getServices(SERVICE_UUID));
+        BluetoothService secondService = Objects.requireNonNull(device().getServices(SECOND_SERVICE_UUID));
+        BluetoothCharacteristic first = Objects.requireNonNull(firstService.getCharacteristic(CHAR_UUID));
+        BluetoothCharacteristic second = Objects.requireNonNull(secondService.getCharacteristic(CHAR_UUID));
+
+        assertArrayEquals(new byte[] { 0x01 }, device().readCharacteristic(first).get());
+        assertArrayEquals(new byte[] { 0x02 }, device().readCharacteristic(second).get());
+        device().writeCharacteristic(first, new byte[] { 0x11 }).get();
+        device().writeCharacteristic(second, new byte[] { 0x22 }).get();
+        verify(firstNativeChar).writeValue(new byte[] { 0x11 }, true);
+        verify(secondNativeChar).writeValue(new byte[] { 0x22 }, true);
+
+        device().enableNotifications(first).get();
+        device().enableNotifications(second).get();
+        ArgumentCaptor<BTGattCharListener> firstListener = ArgumentCaptor.forClass(BTGattCharListener.class);
+        ArgumentCaptor<BTGattCharListener> secondListener = ArgumentCaptor.forClass(BTGattCharListener.class);
+        verify(firstNativeChar).addCharListener(firstListener.capture());
+        verify(secondNativeChar).addCharListener(secondListener.capture());
+
+        List<UUID> notifiedServices = Collections.synchronizedList(new ArrayList<>());
+        CountDownLatch received = new CountDownLatch(2);
+        BluetoothDeviceListener listener = mock(BluetoothDeviceListener.class);
+        doAnswer(invocation -> {
+            BluetoothCharacteristic characteristic = invocation.getArgument(0);
+            notifiedServices.add(Objects.requireNonNull(characteristic.getService()).getUuid());
+            received.countDown();
+            return null;
+        }).when(listener).onCharacteristicUpdate(any(), any());
+        device().addListener(listener);
+
+        firstListener.getValue().notificationReceived(firstNativeChar, new byte[] { 0x31 }, 1L);
+        secondListener.getValue().notificationReceived(secondNativeChar, new byte[] { 0x32 }, 2L);
+        assertTrue(received.await(2, TimeUnit.SECONDS));
+        assertEquals(List.of(SERVICE_UUID, SECOND_SERVICE_UUID), notifiedServices);
+    }
+
+    @Test
     void notificationCallbackCopiesPayloadBeforeAsyncFanout() throws Exception {
         ExecutorService operationPool = Executors.newSingleThreadExecutor();
         ExecutorService notifyPool = Executors.newSingleThreadExecutor();
@@ -739,6 +826,7 @@ class DirectBTBluetoothDeviceTest {
             BTGattService service = mock(BTGattService.class);
             when(service.getUUID()).thenReturn(SERVICE_UUID.toString());
             when(service.getChars()).thenReturn(List.of(gattChar));
+            when(gattChar.getService()).thenReturn(service);
             when(nativeDevice().getGattServices()).thenReturn(List.of(service));
             dev.discoverServices();
             when(gattChar.addCharListener(any())).thenReturn(true);
@@ -827,6 +915,7 @@ class DirectBTBluetoothDeviceTest {
         BTGattService service = mock(BTGattService.class);
         when(service.getUUID()).thenReturn(SERVICE_UUID.toString());
         when(service.getChars()).thenReturn(List.of(gattChar));
+        when(gattChar.getService()).thenReturn(service);
         when(nativeDevice().getGattServices()).thenReturn(List.of(service));
 
         device().discoverServices();
@@ -834,7 +923,10 @@ class DirectBTBluetoothDeviceTest {
     }
 
     private BluetoothCharacteristic characteristic() {
-        return new BluetoothCharacteristic(CHAR_UUID, 0);
+        BluetoothService service = new BluetoothService(SERVICE_UUID, true);
+        BluetoothCharacteristic characteristic = new BluetoothCharacteristic(CHAR_UUID, 0);
+        service.addCharacteristic(characteristic);
+        return characteristic;
     }
 
     private void enableDevice(boolean enabled) {
