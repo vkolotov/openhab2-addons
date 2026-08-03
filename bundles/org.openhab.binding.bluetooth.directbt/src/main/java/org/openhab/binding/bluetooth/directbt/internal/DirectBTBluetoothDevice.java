@@ -115,10 +115,13 @@ public class DirectBTBluetoothDevice extends BaseBluetoothDevice implements Devi
     // Clock behind the grace/quiet windows (injectable for tests; the reconciler shares it).
     private final Clock clock;
 
-    // Maps an openHAB characteristic UUID to the Direct-BT characteristic handle (populated on discovery).
-    private final Map<UUID, BTGattChar> gattCharByUuid = new ConcurrentHashMap<>();
-    // Active notification listeners per characteristic UUID, so we can unregister on disable/dispose.
-    private final Map<UUID, BTGattCharListener> notifyListeners = new ConcurrentHashMap<>();
+    private record GattCharacteristicKey(UUID serviceUuid, UUID characteristicUuid) {
+    }
+
+    // A characteristic UUID is only unique within its service. Key both maps by service and characteristic so
+    // repeated characteristic types retain independent native handles and notification listeners.
+    private final Map<GattCharacteristicKey, BTGattChar> gattChars = new ConcurrentHashMap<>();
+    private final Map<GattCharacteristicKey, BTGattCharListener> notifyListeners = new ConcurrentHashMap<>();
     // Direct-BT materializes Java service/characteristic wrappers during getGattServices()/getChars(). Running that
     // from two openHAB threads for the same native device races the native Java-object references and has been
     // observed live as DBTGattChar/DBTGattService null-reference failures.
@@ -291,8 +294,8 @@ public class DirectBTBluetoothDevice extends BaseBluetoothDevice implements Devi
 
     /** Best-effort unregister of all active notification listeners (native peers) before the map is cleared. */
     private void releaseNotifyListeners() {
-        for (Map.Entry<UUID, BTGattCharListener> entry : notifyListeners.entrySet()) {
-            BTGattChar gattChar = gattCharByUuid.get(entry.getKey());
+        for (Map.Entry<GattCharacteristicKey, BTGattCharListener> entry : notifyListeners.entrySet()) {
+            BTGattChar gattChar = gattChars.get(entry.getKey());
             try {
                 if (gattChar != null) {
                     gattChar.configNotificationIndication(false, false, new boolean[2]);
@@ -311,7 +314,7 @@ public class DirectBTBluetoothDevice extends BaseBluetoothDevice implements Devi
      */
     private void resetGattModel() {
         clearServices();
-        gattCharByUuid.clear();
+        gattChars.clear();
     }
 
     /**
@@ -354,7 +357,7 @@ public class DirectBTBluetoothDevice extends BaseBluetoothDevice implements Devi
 
     @Override
     public boolean isGattResolved() {
-        return !gattCharByUuid.isEmpty();
+        return !gattChars.isEmpty();
     }
 
     @Override
@@ -739,7 +742,7 @@ public class DirectBTBluetoothDevice extends BaseBluetoothDevice implements Devi
         try {
             if (isGattResolved()) {
                 logger.debug("Direct-BT GATT discovery for {} skipped: already resolved with {} mapped chars", address,
-                        gattCharByUuid.size());
+                        gattChars.size());
                 return true;
             }
             BTDevice dev = device;
@@ -748,8 +751,8 @@ public class DirectBTBluetoothDevice extends BaseBluetoothDevice implements Devi
             }
             // Always refresh the native handle map: on a reconnect the BTGattChar handles are new, so we must
             // re-map every characteristic even for services already present in the openHAB model (otherwise
-            // gattCharByUuid stays empty after a reconnect and read/write/notify fail with "not found").
-            gattCharByUuid.clear();
+            // gattChars stays empty after a reconnect and read/write/notify fail with "not found").
+            gattChars.clear();
             logger.debug("Direct-BT GATT discovery for {} begin: nativeConnected={}, handle=0x{}, native={}", address,
                     dev.getConnected(), Integer.toHexString(dev.getConnectionHandle() & 0xFFFF), dev);
             long getServicesStarted = System.nanoTime();
@@ -775,8 +778,9 @@ public class DirectBTBluetoothDevice extends BaseBluetoothDevice implements Devi
                         BluetoothCharacteristic characteristic = new BluetoothCharacteristic(charUuid, 0);
                         characteristic.setProperties(mapProperties(gattChar.getProperties()));
                         service.addCharacteristic(characteristic);
-                        gattCharByUuid.put(charUuid, gattChar);
-                        logger.trace("Direct-BT GATT discovery for {} mapped new char {} -> {}", address, charUuid,
+                        GattCharacteristicKey key = new GattCharacteristicKey(serviceUuid, charUuid);
+                        gattChars.put(key, gattChar);
+                        logger.trace("Direct-BT GATT discovery for {} mapped new char {} -> {}", address, key,
                                 gattChar);
                     }
                     addService(service);
@@ -789,9 +793,9 @@ public class DirectBTBluetoothDevice extends BaseBluetoothDevice implements Devi
                         charCount++;
                         mapped++;
                         UUID charUuid = UUID.fromString(gattChar.getUUID());
-                        gattCharByUuid.put(charUuid, gattChar);
-                        logger.trace("Direct-BT GATT discovery for {} refreshed char {} -> {}", address, charUuid,
-                                gattChar);
+                        GattCharacteristicKey key = new GattCharacteristicKey(serviceUuid, charUuid);
+                        gattChars.put(key, gattChar);
+                        logger.trace("Direct-BT GATT discovery for {} refreshed char {} -> {}", address, key, gattChar);
                     }
                     logger.debug("Direct-BT GATT discovery for {} refreshed service {} with {} chars in {}ms", address,
                             serviceUuid, mapped, elapsedMillis(serviceStarted));
@@ -800,7 +804,7 @@ public class DirectBTBluetoothDevice extends BaseBluetoothDevice implements Devi
             logger.debug(
                     "Direct-BT GATT discovery for {} complete in {}ms: services={}, newServices={}, chars={}, newChars={}, mappedChars={}, modelServices={}",
                     address, elapsedMillis(started), serviceCount, newServiceCount, charCount, newCharCount,
-                    gattCharByUuid.size(), getServices().size());
+                    gattChars.size(), getServices().size());
         } catch (RuntimeException e) {
             logger.debug("Direct-BT service discovery for {} failed after {}ms", address, elapsedMillis(started), e);
             return false;
@@ -828,8 +832,16 @@ public class DirectBTBluetoothDevice extends BaseBluetoothDevice implements Devi
         return gattDiscoveryInFlight.get();
     }
 
+    private GattCharacteristicKey keyFor(BluetoothCharacteristic characteristic) {
+        BluetoothService service = characteristic.getService();
+        if (service == null) {
+            throw new IllegalArgumentException("Characteristic has no parent service: " + characteristic.getUuid());
+        }
+        return new GattCharacteristicKey(service.getUuid(), characteristic.getUuid());
+    }
+
     /** @return the cached native characteristic, or {@code null} if not connected/known. */
-    private @Nullable BTGattChar connectedChar(UUID charUuid) {
+    private @Nullable BTGattChar connectedChar(BluetoothCharacteristic characteristic) {
         BTDevice dev = device;
         if (dev == null || !dev.getConnected()) {
             // The native link is gone while a read/write is attempted. Requeue a reconcile so the device
@@ -840,7 +852,7 @@ public class DirectBTBluetoothDevice extends BaseBluetoothDevice implements Devi
             }
             return null;
         }
-        return gattCharByUuid.get(charUuid);
+        return gattChars.get(keyFor(characteristic));
     }
 
     @Override
@@ -848,14 +860,14 @@ public class DirectBTBluetoothDevice extends BaseBluetoothDevice implements Devi
         UUID charUuid = characteristic.getUuid();
         return CompletableFuture.supplyAsync(() -> {
             try {
-                BTGattChar gattChar = connectedChar(charUuid);
+                BTGattChar gattChar = connectedChar(characteristic);
                 if (gattChar == null) {
                     throw new IllegalStateException("Characteristic not available (disconnected?): " + charUuid);
                 }
-                byte[] value = gattChar.readValue();
-                if (value.length == 0) {
+                byte @Nullable [] value = gattChar.readValue();
+                if (value == null) {
                     markStaleGatt("read of " + charUuid + " returned no native value");
-                    return value;
+                    throw new IllegalStateException("Native characteristic read failed: " + charUuid);
                 }
                 notifyListeners(BluetoothEventType.CHARACTERISTIC_UPDATED, characteristic, value);
                 return value;
@@ -870,7 +882,7 @@ public class DirectBTBluetoothDevice extends BaseBluetoothDevice implements Devi
         UUID charUuid = characteristic.getUuid();
         return CompletableFuture.runAsync(() -> {
             try {
-                BTGattChar gattChar = connectedChar(charUuid);
+                BTGattChar gattChar = connectedChar(characteristic);
                 if (gattChar == null) {
                     throw new IllegalStateException("Characteristic not available (disconnected?): " + charUuid);
                 }
@@ -887,22 +899,23 @@ public class DirectBTBluetoothDevice extends BaseBluetoothDevice implements Devi
 
     @Override
     public boolean isNotifying(BluetoothCharacteristic characteristic) {
-        return notifyListeners.containsKey(characteristic.getUuid());
+        return notifyListeners.containsKey(keyFor(characteristic));
     }
 
     @Override
     public CompletableFuture<@Nullable Void> enableNotifications(BluetoothCharacteristic characteristic) {
         UUID charUuid = characteristic.getUuid();
+        GattCharacteristicKey key = keyFor(characteristic);
         // Reserve the slot atomically before native registration so two concurrent callers can't both
         // register a native listener (the second put would orphan the first, making it unremovable).
-        BTGattCharListener listener = new DirectBTGattCharListener(charUuid);
-        if (notifyListeners.putIfAbsent(charUuid, listener) != null) {
+        BTGattCharListener listener = new DirectBTGattCharListener(key);
+        if (notifyListeners.putIfAbsent(key, listener) != null) {
             return CompletableFuture.completedFuture(null); // already enabled / being enabled
         }
         return CompletableFuture.runAsync(() -> {
             long started = System.nanoTime();
             try {
-                BTGattChar gattChar = connectedChar(charUuid);
+                BTGattChar gattChar = connectedChar(characteristic);
                 if (gattChar == null) {
                     throw new IllegalStateException("Characteristic not available (disconnected?): " + charUuid);
                 }
@@ -918,7 +931,7 @@ public class DirectBTBluetoothDevice extends BaseBluetoothDevice implements Devi
                 logger.debug("Direct-BT enable notifications for {} char {} complete in {}ms", address, charUuid,
                         elapsedMillis(started));
             } catch (RuntimeException e) {
-                notifyListeners.remove(charUuid, listener); // roll back the reservation on failure
+                notifyListeners.remove(key, listener); // roll back the reservation on failure
                 logger.debug("Direct-BT enable notifications for {} char {} failed after {}ms", address, charUuid,
                         elapsedMillis(started), e);
                 throw new CompletionException(e);
@@ -928,9 +941,9 @@ public class DirectBTBluetoothDevice extends BaseBluetoothDevice implements Devi
 
     @Override
     public CompletableFuture<@Nullable Void> disableNotifications(BluetoothCharacteristic characteristic) {
-        UUID charUuid = characteristic.getUuid();
-        BTGattChar gattChar = gattCharByUuid.get(charUuid);
-        BTGattCharListener listener = notifyListeners.remove(charUuid);
+        GattCharacteristicKey key = keyFor(characteristic);
+        BTGattChar gattChar = gattChars.get(key);
+        BTGattCharListener listener = notifyListeners.remove(key);
         if (gattChar == null || listener == null) {
             return CompletableFuture.completedFuture(null);
         }
@@ -1019,10 +1032,10 @@ public class DirectBTBluetoothDevice extends BaseBluetoothDevice implements Devi
      */
     @NonNullByDefault({})
     private class DirectBTGattCharListener extends BTGattCharListener {
-        private final UUID charUuid;
+        private final GattCharacteristicKey key;
 
-        DirectBTGattCharListener(UUID charUuid) {
-            this.charUuid = charUuid;
+        DirectBTGattCharListener(GattCharacteristicKey key) {
+            this.key = key;
         }
 
         @Override
@@ -1037,24 +1050,21 @@ public class DirectBTBluetoothDevice extends BaseBluetoothDevice implements Devi
 
         private void forward(BTGattChar charDecl, byte[] value) {
             UUID actualCharUuid = UUID.fromString(charDecl.getUUID());
-            if (!charUuid.equals(actualCharUuid)) {
-                logger.debug("Ignoring notification for {} delivered to listener registered for {} on {}",
-                        actualCharUuid, charUuid, address);
+            UUID actualServiceUuid = UUID.fromString(charDecl.getService().getUUID());
+            GattCharacteristicKey actualKey = new GattCharacteristicKey(actualServiceUuid, actualCharUuid);
+            if (!key.equals(actualKey)) {
+                logger.debug("Ignoring notification for {} delivered to listener registered for {} on {}", actualKey,
+                        key, address);
                 return;
             }
             byte[] valueCopy = value.clone();
-            notifyExecutor.execute(() -> forwardOnExecutor(actualCharUuid, valueCopy));
+            notifyExecutor.execute(() -> forwardOnExecutor(actualKey, valueCopy));
         }
 
-        private void forwardOnExecutor(UUID actualCharUuid, byte[] value) {
-            BluetoothCharacteristic characteristic = null;
-            for (BluetoothService s : getServices()) {
-                BluetoothCharacteristic c = s.getCharacteristic(actualCharUuid);
-                if (c != null) {
-                    characteristic = c;
-                    break;
-                }
-            }
+        private void forwardOnExecutor(GattCharacteristicKey actualKey, byte[] value) {
+            BluetoothService service = getServices(actualKey.serviceUuid());
+            BluetoothCharacteristic characteristic = service == null ? null
+                    : service.getCharacteristic(actualKey.characteristicUuid());
             if (characteristic != null) {
                 notifyListeners(BluetoothEventType.CHARACTERISTIC_UPDATED, characteristic, value);
             }
