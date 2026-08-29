@@ -1,0 +1,102 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+
+  <modelVersion>4.0.0</modelVersion>
+
+  <parent>
+    <groupId>org.openhab.addons.bundles</groupId>
+    <artifactId>org.openhab.addons.reactor.bundles</artifactId>
+    <version>5.3.0-SNAPSHOT</version>
+  </parent>
+
+  <artifactId>org.openhab.binding.bluetooth.directbt</artifactId>
+
+  <name>openHAB Add-ons :: Bundles :: Direct-BT Bluetooth Adapter</name>
+
+  <properties>
+    <!-- Widen the micrometer import range. bnd infers a consumer range from the COMPILE-time version (1.16.3 ->
+         "[1.17,2)"), but the runtime resolves these packages from org.openhab.core.io.monitor, which re-exports
+         them as 1.16.0 — the inferred range excludes it and the bundle would not resolve on the runtime. The API
+         used here (Counter/Gauge/Timer/Tags) is stable across 1.x. -->
+    <bnd.importpackage>io.micrometer.core.instrument;version="[1.16,2)",io.micrometer.core.instrument.composite;version="[1.16,2)"</bnd.importpackage>
+  </properties>
+
+  <dependencies>
+
+    <dependency>
+      <groupId>org.openhab.addons.bundles</groupId>
+      <artifactId>org.openhab.binding.bluetooth</artifactId>
+      <version>${project.version}</version>
+      <scope>provided</scope>
+    </dependency>
+
+    <!-- Direct-BT userspace BLE stack (MIT). Compile against the OSGi wrapper so the binding can depend on
+         its native-library readiness service; see src/main/feature/feature.xml. -->
+    <dependency>
+      <groupId>org.direct_bt</groupId>
+      <artifactId>direct-bt-osgi</artifactId>
+      <version>3.3.5</version>
+      <scope>provided</scope>
+    </dependency>
+
+    <!-- Core Micrometer registry (MeterRegistryProvider) for the per-device observability metrics. This bundle
+         also re-exports the io.micrometer.* packages, so micrometer itself is resolved from it at runtime and
+         is only needed on the compile classpath here. -->
+    <dependency>
+      <groupId>org.openhab.core.bundles</groupId>
+      <artifactId>org.openhab.core.io.monitor</artifactId>
+      <version>${project.version}</version>
+      <scope>provided</scope>
+    </dependency>
+
+    <dependency>
+      <groupId>io.micrometer</groupId>
+      <artifactId>micrometer-core</artifactId>
+      <version>1.16.3</version>
+      <scope>provided</scope>
+    </dependency>
+
+    <!-- Test only: the latency-histogram contract can only be proven against a real backend, because
+         SimpleMeterRegistry does not materialise histogram buckets. The io.prometheus artifacts are pinned to
+         the version the metrics add-on ships (its transitive default is not published as a complete set). -->
+    <dependency>
+      <groupId>io.micrometer</groupId>
+      <artifactId>micrometer-registry-prometheus</artifactId>
+      <version>1.16.3</version>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>io.prometheus</groupId>
+      <artifactId>prometheus-metrics-core</artifactId>
+      <version>1.5.0</version>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>io.prometheus</groupId>
+      <artifactId>prometheus-metrics-model</artifactId>
+      <version>1.5.0</version>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>io.prometheus</groupId>
+      <artifactId>prometheus-metrics-config</artifactId>
+      <version>1.5.0</version>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>io.prometheus</groupId>
+      <artifactId>prometheus-metrics-exposition-formats</artifactId>
+      <version>1.5.0</version>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>io.prometheus</groupId>
+      <artifactId>prometheus-metrics-exposition-textformats</artifactId>
+      <version>1.5.0</version>
+      <scope>test</scope>
+    </dependency>
+
+  </dependencies>
+
+</project>

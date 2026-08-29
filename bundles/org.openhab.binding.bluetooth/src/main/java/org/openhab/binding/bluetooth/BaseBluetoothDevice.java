@@ -293,6 +293,19 @@ public abstract class BaseBluetoothDevice extends BluetoothDevice {
         return false;
     }
 
+    /**
+     * Clears the cached GATT service list and marks service discovery incomplete.
+     */
+    protected void clearServices() {
+        deviceLock.lock();
+        try {
+            supportedServices.clear();
+            servicesDiscovered = false;
+        } finally {
+            deviceLock.unlock();
+        }
+    }
+
     @Override
     protected Collection<BluetoothDeviceListener> getListeners() {
         return eventListeners;
