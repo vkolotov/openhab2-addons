@@ -30,10 +30,9 @@ import org.openhab.binding.bluetooth.directbt.internal.reconcile.procedure.*;
 
 /**
  * The implementation-neutral behavioural contract for the device connection lifecycle. Every test here
- * encodes a field failure from production (see docs/directbt-device-fsm-actor-proposal-2026-07-16.md and the
- * 2026-07 incident record in docs/directbt-heatpump-recovery-fix-plan-2026-07-15.md) as EFFECTS on the
- * {@link FakeDevicePort} within timing WINDOWS — never internal mechanics — so the same suite must pass
- * against the current {@link DeviceReconciler} and the future actor/procedure implementation.
+ * encodes a failure observed in the field as EFFECTS on the {@link FakeDevicePort} within timing WINDOWS —
+ * never internal mechanics — so the same suite must pass against the current {@link DeviceReconciler} and
+ * the future actor/procedure implementation.
  *
  * Conventions:
  * <ul>
@@ -140,7 +139,7 @@ abstract class DeviceLifecycleContract {
         fx.setScanActive(true);
         runFor(15_000);
         assertEquals(0, port.connectNativeCalls, "the controller rejects create-connection during a scan; "
-                + "the implementation must not issue one (2026-07-16 COMMAND_DISALLOWED races)");
+                + "the implementation must not issue one (COMMAND_DISALLOWED races)");
 
         fx.setScanActive(false);
         assertTrue(runUntil(() -> port.connectNativeCalls >= 1, 10_000) >= 0,
@@ -170,7 +169,7 @@ abstract class DeviceLifecycleContract {
         }
     }
 
-    // --- evidence handling (the 2026-07-16 event-driven fixes) --------------------------------------
+    // --- evidence handling (event-driven fixes) -----------------------------------------------------
 
     @Test
     void disconnectEventDuringConnectingClearsTheAttemptFast() {
@@ -224,7 +223,7 @@ abstract class DeviceLifecycleContract {
                 + "pairing ends (the deadline was frozen during SMP)");
     }
 
-    // --- fresh-link GATT discipline (settle delay + warm-up, 2026-07-16) ----------------------------
+    // --- fresh-link GATT discipline (settle delay + warm-up) ----------------------------------------
 
     @Test
     void gattIsNotProbedTheInstantTheLinkComesUp() {
@@ -372,7 +371,7 @@ abstract class DeviceLifecycleContract {
 
     @Test
     void scenario_asymmetricRfFade_recoversWhenTheFadePasses() {
-        // 2026-07-16 14:07 (btmon-proven): five establishment failures ~300ms each (the node never heard the
+        // Observed in the field (btmon-proven): five establishment failures ~300ms each (the peer never heard the
         // CONNECT_INDs), then the fade passes and the link must come up and resolve without manual help.
         FakeDevicePort port = connectReady();
         int failures = 0;
@@ -399,7 +398,7 @@ abstract class DeviceLifecycleContract {
 
     @Test
     void scenario_permanentlyInvisibleDevice_doesNotEscalateForever() {
-        // 2026-07-16 zombie/dead-battery lesson: a device that can never be discovered again must keep
+        // Zombie/dead-battery lesson: a device that can never be discovered again must keep
         // wanting discovery without wedging or spamming adapter resets.
         FakeDevicePort port = fx.port();
         port.wanted = true;

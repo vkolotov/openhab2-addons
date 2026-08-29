@@ -23,8 +23,7 @@ import org.openhab.binding.bluetooth.directbt.internal.reconcile.procedure.*;
 /**
  * Implementation-neutral driver for the device connection lifecycle, so the SAME behavioural contract
  * ({@link DeviceLifecycleContract}) runs against both the current {@link DeviceReconciler} and the future
- * actor/procedure implementation (see docs/directbt-device-fsm-actor-proposal-2026-07-16.md, frozen
- * constraints 1-12). The contract asserts EFFECTS on the {@link FakeDevicePort} and timing WINDOWS — never
+ * actor/procedure implementation. The contract asserts EFFECTS on the {@link FakeDevicePort} and timing WINDOWS — never
  * internal mechanics — which is what makes it portable across implementations.
  *
  * Semantics:

@@ -74,7 +74,7 @@ import org.openhab.binding.bluetooth.directbt.internal.reconcile.device.DeviceAc
 @MockitoSettings(strictness = Strictness.LENIENT)
 class DirectBTBluetoothDeviceTest {
 
-    private static final BluetoothAddress ADDRESS = new BluetoothAddress("70:B9:50:92:A9:90");
+    private static final BluetoothAddress ADDRESS = new BluetoothAddress("11:22:33:44:55:66");
     private static final UUID SERVICE_UUID = UUID.fromString("9f0d7d29-8816-4215-bd7f-2e2a264f0891");
     private static final UUID SECOND_SERVICE_UUID = UUID.fromString("9f0d7d2a-8816-4215-bd7f-2e2a264f0891");
     private static final UUID CHAR_UUID = UUID.fromString("9f0dd907-8816-4215-bd7f-2e2a264f0891");

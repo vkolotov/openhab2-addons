@@ -109,7 +109,7 @@ public class DeviceReconciler extends Reconciler<Boolean, DeviceReconciler.Obser
     private static final int RESOLVE_FAIL_STREAK_LIMIT = 3;
 
     // Longest an in-flight GATT discovery is trusted as "progress". A legitimate discovery is bounded by its
-    // native per-op ~12 s timeouts (worst observed on prod: ~9 s; several timing-out ops still finish well
+    // native per-op ~12 s timeouts (worst observed ~9 s; several timing-out ops still finish well
     // under a minute), so an in-flight state older than this means the discovery thread hung and recovery
     // must proceed without it.
     private static final long RESOLVE_IN_FLIGHT_MAX_MS = 120_000;

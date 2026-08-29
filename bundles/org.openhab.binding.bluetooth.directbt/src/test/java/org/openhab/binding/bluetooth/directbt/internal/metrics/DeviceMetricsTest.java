@@ -41,9 +41,9 @@ import io.micrometer.prometheusmetrics.PrometheusMeterRegistry;
 @NonNullByDefault
 class DeviceMetricsTest {
 
-    private static final String DEVICE = "Water Tank";
-    private static final String ADDRESS = "70:B9:50:92:A9:90";
-    private static final String ADAPTER = "00:01:95:4B:42:BC";
+    private static final String DEVICE = "Test Device";
+    private static final String ADDRESS = "11:22:33:44:55:66";
+    private static final String ADAPTER = "AA:BB:CC:DD:EE:FF";
 
     private final MeterRegistry registry = new SimpleMeterRegistry();
 
@@ -169,13 +169,13 @@ class DeviceMetricsTest {
 
     @Test
     void closeLeavesOtherDevicesMetersIntact() {
-        DeviceMetrics other = new DeviceMetrics(registry, "Septic Sensor", "FE:0F:C0:71:5E:01", ADAPTER);
+        DeviceMetrics other = new DeviceMetrics(registry, "Other Device", "11:22:33:44:55:77", ADAPTER);
         other.setUp(true);
         metrics.setUp(true);
 
         metrics.close();
 
-        assertNotNull(registry.find("openhab.bluetooth.device.up").tag("device", "Septic Sensor").gauge(),
+        assertNotNull(registry.find("openhab.bluetooth.device.up").tag("device", "Other Device").gauge(),
                 "closing one device must not remove another device's meters");
         assertNull(registry.find("openhab.bluetooth.device.up").tag("device", DEVICE).gauge());
     }

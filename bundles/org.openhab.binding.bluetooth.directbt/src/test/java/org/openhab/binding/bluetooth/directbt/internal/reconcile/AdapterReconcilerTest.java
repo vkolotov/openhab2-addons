@@ -310,7 +310,7 @@ class AdapterReconcilerTest {
     // isScanOff() gates connectLE in the DEVICE phase, which runs BEFORE the next scan-phase observation.
     // The cached scan state must therefore be refreshed in the SAME call that changes the scan, or the next
     // tick's devices act on a one-tick-stale answer and fire connectLE into an active scan (the ~300 ms
-    // COMMAND_DISALLOWED race seen on prod 2026-07-16 at 16:30:00 and 19:00:22).
+    // COMMAND_DISALLOWED race seen in the field).
     // ---------------------------------------------------------------------------------------------
     @Test
     void scanStartRefreshesTheConnectGateCacheImmediately() {

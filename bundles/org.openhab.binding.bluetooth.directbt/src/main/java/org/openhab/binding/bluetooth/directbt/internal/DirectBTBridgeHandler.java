@@ -903,7 +903,7 @@ public class DirectBTBridgeHandler extends AbstractBluetoothBridgeHandler<Direct
         long adapterGeneration = adapterResetGeneration.incrementAndGet();
         forEachDevice(d -> d.getReconciler().onAdapterResetStarted(adapterGeneration));
         // OFF the reconcile tick, always: DBTAdapter.reset() is a native call observed to hang indefinitely
-        // (2026-07-16: 5+ min inside resetImpl, wedging every reconcile and device operation behind the tick's
+        // (observed: 5+ min inside resetImpl, wedging every reconcile and device operation behind the tick's
         // forEachDevice lock). A hung reset must cost at most one pool thread, never the reconcile loop.
         logger.warn("Direct-BT adapter reset requested (generation {}); running async", adapterGeneration);
         executor.execute(() -> {
@@ -1324,7 +1324,7 @@ public class DirectBTBridgeHandler extends AbstractBluetoothBridgeHandler<Direct
             // Direct-BT L2CAP reader thread (BTGattHandler::disconnect -> l2cap_reader_service.join()), and on a
             // wedged controller / unresponsive socket that read never returns. Running it inline on dispose()
             // hangs the whole JVM on shutdown -> karaf 'stop' never completes -> systemd SIGKILLs openHAB and
-            // leaves the service 'failed' (observed on the production NUC). openHAB gives no reliable
+            // leaves the service 'failed'. openHAB gives no reliable
             // "this is a full JVM shutdown vs a redeploy" signal at dispose() time, so we do NOT try to detect
             // shutdown; instead we cap the blocking work with a timeout. If it doesn't finish, we abandon it:
             // on a real shutdown the OS reclaims the sockets/threads anyway, and on a redeploy only a genuinely

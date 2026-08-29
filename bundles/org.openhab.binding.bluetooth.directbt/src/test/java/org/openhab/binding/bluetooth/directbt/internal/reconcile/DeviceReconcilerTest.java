@@ -813,7 +813,7 @@ class DeviceReconcilerTest {
     }
 
     // ---------------------------------------------------------------------------------------------
-    // Stale-bond self-heal (encryption regression, found live 2026-07-02): a pre-paired reconnect that never
+    // Stale-bond self-heal (encryption regression found in the field): a pre-paired reconnect that never
     // establishes is reusing a stored SMP key the peer no longer honours (peripheral forgot the bond). When the
     // connect deadline fires while the device is pre-paired, the reconciler must CLEAR the stale bond so the next
     // attempt re-pairs fresh — otherwise it loops forever (connectNative->SUCCESS, never a native link).

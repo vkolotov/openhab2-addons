@@ -631,7 +631,7 @@ public class DirectBTBluetoothDevice extends BaseBluetoothDevice implements Devi
         try {
             // The reconciler has already ensured the adapter scan is OFF (the controller rejects create-connection
             // while scanning) and owns the connect lifecycle, so no inline pre-connect cleanup is needed. A former
-            // dev.disconnect() residue-clear here was ablated (2026-06-26, from-scratch CSR rebuild) and proven
+            // dev.disconnect() residue-clear here was ablated (from-scratch controller rebuild) and proven
             // redundant: connect succeeds first-try and holds dead-stable (45/45 reads, 0 disconnects) without it,
             // and the reconciler recovers from the CSR COMMAND_DISALLOWED/INTERNAL_TIMEOUT quirk on its own.
             //

@@ -67,7 +67,7 @@ import org.slf4j.LoggerFactory;
 @MockitoSettings(strictness = Strictness.LENIENT)
 class DirectBTBridgeHandlerTest {
 
-    private static final String DEVICE_ADDR = "70:B9:50:92:A9:90";
+    private static final String DEVICE_ADDR = "AA:BB:CC:11:22:33";
     private static final BluetoothAddress ADDRESS = new BluetoothAddress(DEVICE_ADDR);
 
     @Mock

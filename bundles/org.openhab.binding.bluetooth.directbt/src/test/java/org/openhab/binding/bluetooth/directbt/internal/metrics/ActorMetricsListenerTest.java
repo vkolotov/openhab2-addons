@@ -36,14 +36,14 @@ import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 class ActorMetricsListenerTest {
 
     private final MeterRegistry registry = new SimpleMeterRegistry();
-    private final Tags baseTags = Tags.of("device", "Water Tank", "address", "70:B9:50:92:A9:90", "adapter",
-            "00:01:95:4B:42:BC");
+    private final Tags baseTags = Tags.of("device", "Test Device", "address", "11:22:33:44:55:66", "adapter",
+            "AA:BB:CC:DD:EE:FF");
 
     private @NonNullByDefault({}) ActorMetricsListener listener;
 
     @BeforeEach
     void setUp() {
-        DeviceMetrics metrics = new DeviceMetrics(registry, "Water Tank", "70:B9:50:92:A9:90", "00:01:95:4B:42:BC");
+        DeviceMetrics metrics = new DeviceMetrics(registry, "Test Device", "11:22:33:44:55:66", "AA:BB:CC:DD:EE:FF");
         listener = new ActorMetricsListener(() -> metrics);
     }
 

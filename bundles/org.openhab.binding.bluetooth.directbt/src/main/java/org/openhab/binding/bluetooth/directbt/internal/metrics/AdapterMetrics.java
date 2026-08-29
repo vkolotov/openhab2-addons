@@ -12,6 +12,7 @@
  */
 package org.openhab.binding.bluetooth.directbt.internal.metrics;
 
+import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -95,7 +96,7 @@ public class AdapterMetrics implements AdapterLeaseListener, AutoCloseable {
                 .description("Seconds the controller has been continuously faulted, 0 while healthy").tags(baseTags)
                 .strongReference(true).register(registry);
         // Pre-register so a "did a forced reset ever run?" query returns 0 rather than no series at all.
-        for (String outcome : new String[] { "success", "failure" }) {
+        for (String outcome : List.of("success", "failure")) {
             Counter.builder(FORCED_RESETS).description("Forced resets issued for a controller fault")
                     .tags(baseTags.and("outcome", outcome)).register(registry);
         }
@@ -107,7 +108,7 @@ public class AdapterMetrics implements AdapterLeaseListener, AutoCloseable {
         Counter.builder(DISCOVERY_RESTARTS).description("Discovery restarts issued to flush the discovered list")
                 .tags(baseTags).register(registry);
         // Pre-register both radio modes so the duty split is a complete ratio from the first scrape.
-        for (String mode : new String[] { "scanning", "connecting" }) {
+        for (String mode : List.of("scanning", "connecting")) {
             Counter.builder(RADIO_SECONDS).description("Radio time by mode").tags(baseTags.and("mode", mode))
                     .register(registry);
         }

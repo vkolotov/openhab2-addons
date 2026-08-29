@@ -31,7 +31,7 @@ import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 @NonNullByDefault
 class AdapterMetricsTest {
 
-    private static final String ADAPTER = "00:01:95:4B:42:BC";
+    private static final String ADAPTER = "AA:BB:CC:DD:EE:FF";
 
     private final MeterRegistry registry = new SimpleMeterRegistry();
     private final Tags baseTags = Tags.of("adapter", ADAPTER);
@@ -94,13 +94,13 @@ class AdapterMetricsTest {
     void theRecoveryLadderIsTrackedRungByRung() {
         assertEquals(0.0, rung(), "idle until evidence arms");
 
-        metrics.onRecoveryEvidenceArmed("FE:0F:C0:71:5E:02");
+        metrics.onRecoveryEvidenceArmed("11:22:33:44:55:88");
         assertEquals(1.0, rung());
 
-        metrics.onRecoveryEscalated(1, "FE:0F:C0:71:5E:02", 180_000);
+        metrics.onRecoveryEscalated(1, "11:22:33:44:55:88", 180_000);
         assertEquals(2.0, rung(), "targeted cleanup performed");
 
-        metrics.onRecoveryEscalated(2, "FE:0F:C0:71:5E:02", 360_000);
+        metrics.onRecoveryEscalated(2, "11:22:33:44:55:88", 360_000);
         assertEquals(3.0, rung(), "adapter reset issued");
 
         assertEquals(1.0, recovery("armed"));
@@ -111,8 +111,8 @@ class AdapterMetricsTest {
     @Test
     void evidenceClearingReturnsTheLadderToIdle() {
         // The healthy outcome: evidence arose and resolved without ever touching the radio.
-        metrics.onRecoveryEvidenceArmed("FE:0F:C0:71:5E:02");
-        metrics.onRecoveryEvidenceCleared("FE:0F:C0:71:5E:02", "target advertised again", 4_000);
+        metrics.onRecoveryEvidenceArmed("11:22:33:44:55:88");
+        metrics.onRecoveryEvidenceCleared("11:22:33:44:55:88", "target advertised again", 4_000);
 
         assertEquals(0.0, rung());
         assertEquals(1.0, recovery("cleared"));
@@ -122,8 +122,8 @@ class AdapterMetricsTest {
     void suppressedResetsAreCountedSoTheEvidenceGateIsVisible() {
         // A suppression is the gate WORKING: one unreachable peripheral must never reset healthy peers. Counting
         // it separately distinguishes "the gate held" from "the gate never armed".
-        metrics.onRecoveryEvidenceArmed("FE:0F:C0:71:5E:02");
-        metrics.onResetSuppressed("FE:0F:C0:71:5E:02");
+        metrics.onRecoveryEvidenceArmed("11:22:33:44:55:88");
+        metrics.onResetSuppressed("11:22:33:44:55:88");
 
         assertEquals(1.0, recovery("suppressed"));
         assertEquals(0.0, recovery("reset"), "no reset was issued");
@@ -133,7 +133,7 @@ class AdapterMetricsTest {
     void closeRemovesEveryAdapterMeter() {
         metrics.onScanDecision(true, true);
         metrics.onSliceSwitched(true, 16_000);
-        metrics.onRecoveryEvidenceArmed("FE:0F:C0:71:5E:02");
+        metrics.onRecoveryEvidenceArmed("11:22:33:44:55:88");
 
         metrics.close();
 

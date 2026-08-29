@@ -33,7 +33,7 @@ import org.slf4j.Logger;
  * <p>
  * Policies:
  * <ul>
- * <li><b>No contention:</b> the pre-existing {@link #scanWanted} rules apply unchanged (scan to discover, inbox
+ * <li><b>No contention:</b> the {@link #scanWanted} rules apply (scan to discover, inbox
  * discovery yields to an establishing device, everything yields to an in-flight create-connection).</li>
  * <li><b>Contention time-slice:</b> when one device needs DISCOVERY (no handle) while another is ESTABLISHING
  * (holds a handle, needs the scan off to connect), neither may hold the radio indefinitely. The old rollup let
@@ -186,7 +186,7 @@ public class AdapterLeaseCoordinator {
     }
 
     /**
-     * Pure decision for the non-contention cases, unchanged from the original bridge rollup.
+     * Pure decision for the non-contention cases.
      * <p>
      * Scan when a configured device needs (re)discovery to get a handle ({@code needsDiscovery}), OR discovery
      * is wanted for the inbox ({@code backgroundDiscovery} config or an in-progress manual scan). BOTH inbox
