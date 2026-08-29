@@ -34,9 +34,9 @@
     <!-- Direct-BT userspace BLE stack (MIT). Compile against the OSGi wrapper so the binding can depend on
          its native-library readiness service; see src/main/feature/feature.xml. -->
     <dependency>
-      <groupId>org.direct_bt</groupId>
+      <groupId>io.github.vkolotov</groupId>
       <artifactId>direct-bt-osgi</artifactId>
-      <version>3.3.5</version>
+      <version>3.3.6</version>
       <scope>provided</scope>
     </dependency>
 
