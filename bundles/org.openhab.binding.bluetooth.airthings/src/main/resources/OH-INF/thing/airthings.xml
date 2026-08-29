@@ -9,6 +9,7 @@
 			<bridge-type-ref id="roaming"/>
 			<bridge-type-ref id="bluegiga"/>
 			<bridge-type-ref id="bluez"/>
+			<bridge-type-ref id="directbt"/>
 		</supported-bridge-type-refs>
 
 		<label>Airthings Wave Mini</label>
@@ -41,6 +42,7 @@
 			<bridge-type-ref id="roaming"/>
 			<bridge-type-ref id="bluegiga"/>
 			<bridge-type-ref id="bluez"/>
+			<bridge-type-ref id="directbt"/>
 		</supported-bridge-type-refs>
 
 		<label>Airthings Wave Plus</label>
@@ -75,6 +77,7 @@
 			<bridge-type-ref id="roaming"/>
 			<bridge-type-ref id="bluegiga"/>
 			<bridge-type-ref id="bluez"/>
+			<bridge-type-ref id="directbt"/>
 		</supported-bridge-type-refs>
 
 		<label>Airthings Wave Gen 1</label>
@@ -107,6 +110,7 @@
 			<bridge-type-ref id="roaming"/>
 			<bridge-type-ref id="bluegiga"/>
 			<bridge-type-ref id="bluez"/>
+			<bridge-type-ref id="directbt"/>
 		</supported-bridge-type-refs>
 
 		<label>Airthings Wave Radon / Wave 2</label>
