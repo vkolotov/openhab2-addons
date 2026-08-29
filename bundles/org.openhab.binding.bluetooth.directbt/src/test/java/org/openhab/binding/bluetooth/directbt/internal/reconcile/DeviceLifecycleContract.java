@@ -203,7 +203,7 @@ abstract class DeviceLifecycleContract {
         fx.fireConnectedEvent();
         fx.tick();
         assertTrue(port.flagConnected, "fresh evidence must preempt any wait: the established link must be "
-                + "observed on the event, not after the backoff expires (frozen constraint 11)");
+                + "observed on the event, not after the backoff expires");
     }
 
     @Test
@@ -274,7 +274,7 @@ abstract class DeviceLifecycleContract {
 
         assertTrue(runUntil(() -> port.markDisconnectedCalls >= 1, 180_000) >= 0,
                 "but a discovery in flight beyond any legitimate duration is hung and must not suppress "
-                        + "recovery forever (frozen constraint 5)");
+                        + "recovery forever");
     }
 
     // --- silent drops and steady state ---------------------------------------------------------------
@@ -367,11 +367,11 @@ abstract class DeviceLifecycleContract {
                 "recovery resumes where it left off once the adapter is healthy");
     }
 
-    // --- production incident replays ---------------------------------------------------------------------
+    // --- field failure replays ---------------------------------------------------------------------
 
     @Test
     void scenario_asymmetricRfFade_recoversWhenTheFadePasses() {
-        // Observed in the field (btmon-proven): five establishment failures ~300ms each (the peer never heard the
+        // Observed in the field: five establishment failures ~300ms each (the peer never heard the
         // CONNECT_INDs), then the fade passes and the link must come up and resolve without manual help.
         FakeDevicePort port = connectReady();
         int failures = 0;

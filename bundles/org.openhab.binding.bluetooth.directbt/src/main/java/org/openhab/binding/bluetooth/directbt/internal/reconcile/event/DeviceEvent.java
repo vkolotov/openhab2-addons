@@ -200,7 +200,7 @@ public interface DeviceEvent {
 
     /**
      * A re-attempt request for an in-progress RESOLVE_GATT procedure: the reconciler paces retries (one per
-     * reconcile tick, exactly like the legacy inline branch) and the procedure answers by re-emitting its
+     * reconcile tick, on the reconcile tick) and the procedure answers by re-emitting its
      * resolve effect.
      */
     final class GattResolveRequested implements DeviceEvent {

@@ -32,7 +32,7 @@ import org.openhab.binding.bluetooth.directbt.internal.reconcile.procedure.*;
 /**
  * Regression harness for the {@link DeviceReconciler} — the per-device connection state machine.
  * <p>
- * Each test reproduces a specific field failure we had to fix, so a revert of the fix re-breaks the test.
+ * Each test reproduces a specific field failure, so a revert of the fix re-breaks the test.
  * Timing is driven by a {@link MutableClock} (no sleeps); the native device is modelled by
  * {@link FakeDevicePort}.
  *
@@ -156,7 +156,7 @@ class DeviceReconcilerTest {
     }
 
     @Test
-    void productionRuntimeOwnsConnectCommandWhenScanIsOff() {
+    void runtimeOwnsConnectCommandWhenScanIsOff() {
         FakeDevicePort port = new FakeDevicePort();
         port.wanted = true;
         port.hasNative = true;
@@ -173,7 +173,7 @@ class DeviceReconcilerTest {
     }
 
     @Test
-    void productionRuntimeHandsOffToSettleLinkAfterNativeConnected() {
+    void runtimeHandsOffToSettleLinkAfterNativeConnected() {
         FakeDevicePort port = new FakeDevicePort();
         port.wanted = true;
         port.hasNative = true;
@@ -182,18 +182,18 @@ class DeviceReconcilerTest {
         DeviceReconciler r = reconciler(port, scanOff(), new MutableClock(START));
         r.reconcile();
 
-        r.productionRuntimeForTest().submit(new DeviceEvent.NativeConnected(r.productionRuntimeForTest().generation()));
+        r.runtimeForTest().submit(new DeviceEvent.NativeConnected(r.runtimeForTest().generation()));
 
         assertEquals(0, port.resolveGattCalls,
                 "the settle window separates native-connected from first ATT use; no immediate discovery");
-        assertEquals(0, r.productionRuntimeForTest().drainUnhandledEffects().size(),
-                "the settle handoff is inside the production slice now — every effect must have an executor");
+        assertEquals(0, r.runtimeForTest().drainUnhandledEffects().size(),
+                "the settle handoff is inside the actor slice now — every effect must have an executor");
         assertEquals(DeviceActorState.LINK_SETTLING, r.actorDiagnostics().state());
         assertEquals(DeviceProcedureName.SETTLE_LINK, r.actorDiagnostics().activeProcedureName());
     }
 
     @Test
-    void productionRuntimeScaffoldRecordsCommandDisallowedStreak() {
+    void runtimeRecordsCommandDisallowedStreak() {
         FakeDevicePort port = new FakeDevicePort();
         port.connectResult = HCIStatusCode.COMMAND_DISALLOWED;
         MutableClock clock = new MutableClock(START);
@@ -202,7 +202,7 @@ class DeviceReconcilerTest {
                 clock);
 
         for (int i = 0; i < 3; i++) {
-            r.productionRuntimeForTest().start(new ConnectProcedure(CONNECT_DEADLINE_MS), "test-connect");
+            r.runtimeForTest().start(new ConnectProcedure(CONNECT_DEADLINE_MS), "test-connect");
         }
 
         assertEquals(3, port.connectNativeCalls);
@@ -570,7 +570,7 @@ class DeviceReconcilerTest {
 
     @Test
     void successfulConnectIsNotTornDownByTheParkedActorDeadline() {
-        // After NativeConnected the production actor parks in LINK_SETTLING (the settle procedure is outside
+        // After NativeConnected the actor parks in LINK_SETTLING (the settle procedure is outside
         // the connect-only slice) with the CONNECT deadline still armed. Ticking must be phase-gated: a parked
         // post-success actor firing its stale deadline would disconnect a healthy link 8s after every connect.
         FakeDevicePort port = new FakeDevicePort();
@@ -921,7 +921,7 @@ class DeviceReconcilerTest {
     // --- helpers ---------------------------------------------------------------------------------
 
     // ---------------------------------------------------------------------------------------------
-    // Adapter reset fanout (frozen constraint 12): a reset invalidates every native handle on the adapter at
+    // Adapter reset fanout (design constraint): a reset invalidates every native handle on the adapter at
     // once, so it is a generation boundary for EVERY device actor on it. Everything from the pre-reset world
     // must be fenced as stale, and a wanted device must recover as a cold start afterwards.
     // ---------------------------------------------------------------------------------------------
@@ -934,12 +934,12 @@ class DeviceReconcilerTest {
 
         DeviceReconciler r = reconciler(port, scanOff(), new MutableClock(START));
         r.reconcile();
-        long attemptGeneration = r.productionRuntimeForTest().generation();
+        long attemptGeneration = r.runtimeForTest().generation();
         assertEquals(DeviceActorState.CONNECTING, r.actorDiagnostics().state());
 
         r.onAdapterResetStarted(7);
 
-        assertNotEquals(attemptGeneration, r.productionRuntimeForTest().generation(),
+        assertNotEquals(attemptGeneration, r.runtimeForTest().generation(),
                 "the device generation must bump so the pre-reset attempt's events and effects are stale");
         assertEquals(DeviceWaitingOn.ADAPTER_RESET, r.actorDiagnostics().waitingOn());
         assertEquals(0, port.disconnectNativeCalls, "reset fanout must not issue per-device native cleanup");
@@ -957,11 +957,11 @@ class DeviceReconcilerTest {
 
         DeviceReconciler r = reconciler(port, scanOff(), new MutableClock(START));
         r.reconcile();
-        long staleGeneration = r.productionRuntimeForTest().generation();
+        long staleGeneration = r.runtimeForTest().generation();
 
         r.onAdapterResetStarted(7);
         // The pre-reset connect attempt "succeeds" late, against an adapter that no longer has that link.
-        r.productionRuntimeForTest().submit(new DeviceEvent.NativeConnected(staleGeneration));
+        r.runtimeForTest().submit(new DeviceEvent.NativeConnected(staleGeneration));
 
         assertEquals(DeviceWaitingOn.ADAPTER_RESET, r.actorDiagnostics().waitingOn(),
                 "a stale success must not resurrect the fenced attempt");

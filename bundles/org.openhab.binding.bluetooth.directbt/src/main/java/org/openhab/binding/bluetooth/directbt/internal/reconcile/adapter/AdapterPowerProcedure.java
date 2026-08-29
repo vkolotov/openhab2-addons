@@ -38,7 +38,7 @@ public final class AdapterPowerProcedure {
         /**
          * False once the controller reported an unrecoverable hardware fault. Distinct from {@link #valid} and
          * {@link #powered}, which keep reading true in that state because they reflect cached adapter state rather
-         * than controller liveness - which is why a wedged controller could previously look perfectly healthy here.
+         * than controller liveness - which is why a wedged controller can otherwise look perfectly healthy here.
          */
         public final boolean controllerHealthy;
 
@@ -165,7 +165,7 @@ public final class AdapterPowerProcedure {
             return;
         }
         // Force past the validity precondition once the delta has persisted: an invalid-looking adapter is exactly
-        // the state a wedged controller produces, and refusing to act there is what previously left recovery stuck.
+        // the state a wedged controller produces, and refusing to act there leaves recovery stuck.
         final boolean force = !o.controllerHealthy || !o.valid;
         if (resetBudget.tryReset("adapter")) {
             HCIStatusCode rc = a.reset(force);

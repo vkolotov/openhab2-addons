@@ -53,7 +53,7 @@ import org.slf4j.Logger;
  * stuck create-connection via {@link DevicePort#disconnectNative()}, and past a harder deadline request an
  * adapter reset (shared budget);</li>
  * <li><b>gatt</b> — if connected but GATT not resolved, drive the actor-owned settle/resolve/subscribe
- * pipeline (see {@code driveProductionGattPipeline}).</li>
+ * pipeline (see {@code driveGattPipeline}).</li>
  * </ol>
  * The state-flag sync sub-step runs even while the adapter reconciler is unhealthy (it is pure observe->cleanup
  * with no radio command, and a just-reset adapter means every device must be marked disconnected); the connect /
@@ -91,7 +91,7 @@ public class DeviceReconciler extends Reconciler<Boolean, DeviceReconciler.Obser
     // Minimum spacing between connectNative() attempts.
     private static final long CONNECT_RETRY_MS = 2000;
     // Deadlines for the post-connect pipeline procedures (settle -> resolve -> subscribe). Settle/subscribe
-    // are fallbacks well above their expected sub-second phases; the resolve deadline equals the legacy
+    // are fallbacks well above their expected sub-second phases; the resolve deadline equals the
     // in-flight cap.
     private static final long SETTLE_DEADLINE_MS = 5000;
     private static final long SUBSCRIBE_DEADLINE_MS = 5000;
@@ -99,7 +99,7 @@ public class DeviceReconciler extends Reconciler<Boolean, DeviceReconciler.Obser
     private final DevicePort port;
     private final ResetBudget resetBudget;
     private final Runnable requestAdapterReset;
-    private final DeviceActorRuntime productionRuntime;
+    private final DeviceActorRuntime runtime;
 
     // Epoch millis at which the current attempt's native connect was issued (0 = none / lease not yet
     // granted); drives the pending-stuck pairing freeze and the wedge escalation. Retry pacing lives in the
@@ -136,10 +136,10 @@ public class DeviceReconciler extends Reconciler<Boolean, DeviceReconciler.Obser
     // Epoch millis of the tick at which we first observed pairing in progress during the current CONNECTING window,
     // or 0 if not currently pairing. Used to freeze the connect deadline across an SMP negotiation (see act()).
     private long pairingSince;
-    // Last pairing state mirrored into the production actor (rising/falling edges become Pairing* events, whose
+    // Last pairing state mirrored into the actor (rising/falling edges become Pairing* events, whose
     // transitions reset the actor's state clock — the actor-side equivalent of the connect-deadline freeze).
     private boolean pairingMirroredToActor;
-    // Last connection intent mirrored into the production actor (see syncProductionIntent). Boxed: null means
+    // Last connection intent mirrored into the actor (see syncIntent). Boxed: null means
     // "never mirrored", so the first observation always fires its edge.
     private @Nullable Boolean wantedMirroredToActor;
     // Gate timing diagnostics. These do not drive behavior; they explain where connection setup time is spent.
@@ -172,10 +172,10 @@ public class DeviceReconciler extends Reconciler<Boolean, DeviceReconciler.Obser
         this.port = port;
         this.resetBudget = resetBudget;
         this.requestAdapterReset = requestAdapterReset;
-        this.productionRuntime = new DeviceActorRuntime(new DeviceActor(port.id(), logger, clock, actorListener),
-                DeviceReconciler::createProductionProcedure, scanIsOff, port, this::observeProductionRuntimeEvent,
+        this.runtime = new DeviceActorRuntime(new DeviceActor(port.id(), logger, clock, actorListener),
+                DeviceReconciler::createProcedure, scanIsOff, port, this::observeRuntimeEvent,
                 new SettleTimerEffectExecutor(clock::millis, GATT_FIRST_RESOLVE_DELAY_MS),
-                new DeviceBackoffPolicy(port), this::onProductionBackoff);
+                new DeviceBackoffPolicy(port), this::onBackoff);
     }
 
     /**
@@ -233,8 +233,8 @@ public class DeviceReconciler extends Reconciler<Boolean, DeviceReconciler.Obser
     @Override
     protected void act(Boolean unusedDesired, Observed o) {
         long now = clock.millis();
-        syncProductionIntent();
-        syncProductionRuntime(o);
+        syncIntent();
+        syncRuntime(o);
 
         // (5) STATE-FLAG SYNC — always reconcile our flag to native truth first.
         if (o.hasNative && o.nativeConnected && !o.flagConnected) {
@@ -280,7 +280,7 @@ public class DeviceReconciler extends Reconciler<Boolean, DeviceReconciler.Obser
                 return;
             }
             if (!o.gattResolved) {
-                driveProductionGattPipeline(now);
+                driveGattPipeline(now);
             } else {
                 resolveFailStreak = 0;
                 resolveInFlightSince = 0;
@@ -294,12 +294,12 @@ public class DeviceReconciler extends Reconciler<Boolean, DeviceReconciler.Obser
         // (6) ATTEMPT IN FLIGHT — the actor's CONNECT procedure covers BOTH phases of an attempt: the
         // CONNECT_LEASE wait (scan has not yielded yet; no native command issued) and the native-connect
         // window (connectLE issued, waiting for establishment). Each phase carries its own actor deadline.
-        DeviceActorDiagnostics connectDiagnostics = productionRuntime.diagnostics();
+        DeviceActorDiagnostics connectDiagnostics = runtime.diagnostics();
         boolean attemptInFlight = connectDiagnostics.activeProcedureName() == DeviceProcedureName.CONNECT
                 && connectDiagnostics.state() == DeviceActorState.CONNECTING;
         if (attemptInFlight && !o.flagConnecting) {
             // Lease wait: the adapter coordinator's discovery slice has the radio; the lease effect executor
-            // grants inside the runtime tick (syncProductionRuntime) the moment the scan is observed OFF, and
+            // grants inside the runtime tick (syncRuntime) the moment the scan is observed OFF, and
             // the CONNECT_LEASE deadline bounds a scan that never stops. Nothing to do here but note it.
             if (waitingScanOffSince == 0) {
                 waitingScanOffSince = now;
@@ -350,15 +350,15 @@ public class DeviceReconciler extends Reconciler<Boolean, DeviceReconciler.Obser
                         name, now - connectingSince);
                 // The actor owns the failure handling: ConnectProcedure emits the best-effort native disconnect,
                 // enters BACKING_OFF, the backoff policy marks disconnected (+ stale-bond self-heal when the
-                // device is pre-paired), and onProductionBackoff() closes the connect window.
-                productionRuntime.submit(new DeviceEvent.ConnectFailed(productionRuntime.generation(),
-                        "NATIVE_DISCONNECT_EVENT", port.hasStalePairing()));
+                // device is pre-paired), and onBackoff() closes the connect window.
+                runtime.submit(new DeviceEvent.ConnectFailed(runtime.generation(), "NATIVE_DISCONNECT_EVENT",
+                        port.hasStalePairing()));
                 return;
             }
-            // The 8 s "CONNECTING with no native link" deadline is actor-owned now: syncProductionRuntime()
+            // The 8 s "CONNECTING with no native link" deadline is actor-owned now: syncRuntime()
             // ticks the CONNECT procedure, whose max-residency expiry produces the same disconnect/backoff/
-            // clear sequence as the evented failure above (frozen-design constraint 5). The 16 s wedge
-            // escalation lives in onProductionBackoff(), which sees the pending window's age before it closes.
+            // clear sequence as the evented failure above (design constraint). The 16 s wedge
+            // escalation lives in onBackoff(), which sees the pending window's age before it closes.
             return; // give the current attempt its deadline before issuing another connect
         }
 
@@ -376,7 +376,7 @@ public class DeviceReconciler extends Reconciler<Boolean, DeviceReconciler.Obser
             logger.debug("[reconcile:{}] native handle available after {}ms", name, now - waitingNativeHandleSince);
             waitingNativeHandleSince = 0;
         }
-        long lastConnectStartedAt = productionRuntime.lastConnectStartedAt();
+        long lastConnectStartedAt = runtime.lastConnectStartedAt();
         if (lastConnectStartedAt != 0 && now - lastConnectStartedAt < CONNECT_RETRY_MS) {
             if (waitingRetrySince == 0) {
                 waitingRetrySince = now;
@@ -386,22 +386,22 @@ public class DeviceReconciler extends Reconciler<Boolean, DeviceReconciler.Obser
             logger.debug("[reconcile:{}] connect retry spacing waited {}ms", name, now - waitingRetrySince);
             waitingRetrySince = 0;
         }
-        startProductionConnect(now);
+        startConnect(now);
     }
 
     /**
      * Drive the actor-owned settle -> resolve -> subscribe pipeline for a connected link whose GATT is not yet
-     * resolved. The actor owns the states, deadlines and teardown effects (frozen-design constraints 3+5); the
+     * resolved. The actor owns the states, deadlines and teardown effects (design constraints); the
      * reconciler contributes what only observation can: retry pacing (one resolve request per reconcile tick,
-     * the legacy cadence) and the TRUST-BUT-VERIFY judgment over attempt outcomes, fed to the actor as events
+     * the same cadence) and the trust-but-verify judgment over attempt outcomes, fed to the actor as events
      * instead of acted on the port directly. The judgment is unchanged from the old inline branch: Direct-BT's
      * Java-side getConnected()/getConnectionHandle() can both go stale after a silent link drop, in which state
      * every resolve returns empty (GATTHandler nullptr) — a short streak of failed resolves IS the disconnect
      * signal, with two exemptions: an in-flight discovery is progress (bounded by the in-flight cap), and an
      * INSTANT empty resolve on a young link is ATT warm-up, not evidence (a genuinely dead link fails SLOWLY).
      */
-    private void driveProductionGattPipeline(long now) {
-        DeviceProcedureName active = productionRuntime.diagnostics().activeProcedureName();
+    private void driveGattPipeline(long now) {
+        DeviceProcedureName active = runtime.diagnostics().activeProcedureName();
         boolean inPipeline = active == DeviceProcedureName.SETTLE_LINK || active == DeviceProcedureName.RESOLVE_GATT
                 || active == DeviceProcedureName.SUBSCRIBE_NOTIFICATIONS
                 || active == DeviceProcedureName.ONLINE_MONITOR;
@@ -409,10 +409,10 @@ public class DeviceReconciler extends Reconciler<Boolean, DeviceReconciler.Obser
             // Fresh connection outside the actor's own connect handoff: enter via SETTLE_LINK so the first
             // resolve still honours the fresh-link settle delay. (An ADOPTED live link — flag already
             // connected before this reconciler ever saw the transition — resolves immediately below, exactly
-            // like the legacy inline branch.)
+            // on the reconcile tick.)
             logger.debug("[reconcile:{}] connected but GATT unresolved; entering actor settle/resolve pipeline", name);
-            productionRuntime.start(new SettleLinkProcedure(SETTLE_DEADLINE_MS), "wanted:gattUnresolved");
-            drainUnhandledProductionEffects();
+            runtime.start(new SettleLinkProcedure(SETTLE_DEADLINE_MS), "wanted:gattUnresolved");
+            drainUnhandledEffects();
             return;
         }
         if (active == DeviceProcedureName.RESOLVE_GATT && port.isGattResolving()) {
@@ -427,13 +427,12 @@ public class DeviceReconciler extends Reconciler<Boolean, DeviceReconciler.Obser
                         "[reconcile:{}] GATT resolve in flight for {}ms (cap {}ms); treating the discovery as hung and tearing down",
                         name, now - resolveInFlightSince, RESOLVE_IN_FLIGHT_MAX_MS);
                 resolveInFlightSince = 0;
-                productionRuntime
-                        .submit(new DeviceEvent.GattResolveFailed(productionRuntime.generation(), "RESOLVE_HUNG"));
+                runtime.submit(new DeviceEvent.GattResolveFailed(runtime.generation(), "RESOLVE_HUNG"));
             } else {
                 logger.debug("[reconcile:{}] GATT resolve already in flight; waiting", name);
-                productionRuntime.tick(false);
+                runtime.tick(false);
             }
-            drainUnhandledProductionEffects();
+            drainUnhandledEffects();
             return;
         }
         resolveInFlightSince = 0;
@@ -443,23 +442,23 @@ public class DeviceReconciler extends Reconciler<Boolean, DeviceReconciler.Obser
             // Adopted/settled link with no pipeline running: enter RESOLVE_GATT directly; its start performs
             // the first attempt inside this call (skipped by the executor if a discovery is already in flight).
             logger.debug("[reconcile:{}] connected but GATT unresolved; entering actor resolve pipeline", name);
-            productionRuntime.start(new ResolveGattProcedure(RESOLVE_IN_FLIGHT_MAX_MS), "wanted:gattUnresolved");
+            runtime.start(new ResolveGattProcedure(RESOLVE_IN_FLIGHT_MAX_MS), "wanted:gattUnresolved");
             attempted = true;
         } else if (active == DeviceProcedureName.RESOLVE_GATT) {
             logger.debug("[reconcile:{}] connected but GATT unresolved; resolving", name);
-            productionRuntime.submit(new DeviceEvent.GattResolveRequested(productionRuntime.generation()));
+            runtime.submit(new DeviceEvent.GattResolveRequested(runtime.generation()));
             attempted = true;
         } else {
             // LINK_SETTLING (or a stale later phase): the tick advances the settle timer; its expiry hands
             // off to RESOLVE_GATT, whose start performs the first attempt inside this same call.
-            productionRuntime.tick(false);
-            attempted = productionRuntime.diagnostics().activeProcedureName() == DeviceProcedureName.RESOLVE_GATT
+            runtime.tick(false);
+            attempted = runtime.diagnostics().activeProcedureName() == DeviceProcedureName.RESOLVE_GATT
                     || port.isGattResolved();
             if (!attempted) {
                 logger.debug("[reconcile:{}] connected but GATT unresolved; waiting out the settle window", name);
             }
         }
-        drainUnhandledProductionEffects();
+        drainUnhandledEffects();
         if (!attempted) {
             return;
         }
@@ -480,9 +479,8 @@ public class DeviceReconciler extends Reconciler<Boolean, DeviceReconciler.Obser
                         "[reconcile:{}] GATT resolve failed {} times on a supposedly-connected link; treating as silently dropped",
                         name, resolveFailStreak);
                 resolveFailStreak = 0;
-                productionRuntime
-                        .submit(new DeviceEvent.GattResolveFailed(productionRuntime.generation(), "SILENT_DROP"));
-                drainUnhandledProductionEffects();
+                runtime.submit(new DeviceEvent.GattResolveFailed(runtime.generation(), "SILENT_DROP"));
+                drainUnhandledEffects();
             } else {
                 logger.debug("[reconcile:{}] GATT resolve attempt failed after {}ms (streak {}/{})", name,
                         resolveElapsed, resolveFailStreak, RESOLVE_FAIL_STREAK_LIMIT);
@@ -500,96 +498,96 @@ public class DeviceReconciler extends Reconciler<Boolean, DeviceReconciler.Obser
         pairingSince = 0;
     }
 
-    private void startProductionConnect(long now) {
+    private void startConnect(long now) {
         connectingSince = 0; // stamped when the native connect is actually issued (lease granted)
         pairingMirroredToActor = false;
         logger.debug("[reconcile:{}] starting actor-owned connect attempt", name);
-        productionRuntime.start(new ConnectProcedure(CONNECT_DEADLINE_MS), "wanted:connectReady");
-        drainUnhandledProductionEffects();
+        runtime.start(new ConnectProcedure(CONNECT_DEADLINE_MS), "wanted:connectReady");
+        drainUnhandledEffects();
         if (port.isFlagConnecting()) {
             connectingSince = now; // synchronous lease grant: the scan was already off and connectLE went out
         }
 
-        DeviceActorDiagnostics diagnostics = productionRuntime.diagnostics();
+        DeviceActorDiagnostics diagnostics = runtime.diagnostics();
         if (diagnostics.state() == DeviceActorState.CONNECTING
                 && diagnostics.waitingOn() == DeviceWaitingOn.NATIVE_CONNECT && port.isFlagConnecting()) {
             commandDisallowedStreak = 0;
         }
-        // A synchronous rejection already went through onProductionBackoff() (the runtime applies the backoff
+        // A synchronous rejection already went through onBackoff() (the runtime applies the backoff
         // policy inside start()), which closed the connect window — no diagnostics sniffing needed here.
     }
 
     /**
-     * Mirror the connection INTENT into the production actor on every edge. Intent is the one input the actor
+     * Mirror the connection INTENT into the actor on every edge. Intent is the one input the actor
      * cannot observe for itself, and it outlives any single attempt: {@code AdapterResetCompleted} re-parks the
      * actor by intent (DISCOVERING vs IDLE_DISABLED), so a stale intent would strand a wanted device after a
      * reset. Wanted-offline also cancels whatever is in flight — critically a CONNECT_LEASE wait, where a later
      * lease grant would otherwise issue connectLE for a device nobody wants anymore — and settles a parked
      * pipeline procedure, so diagnostics read IDLE_DISABLED while unwanted.
      */
-    private void syncProductionIntent() {
+    private void syncIntent() {
         boolean wanted = port.isWanted();
         if (wantedMirroredToActor != null && wantedMirroredToActor == wanted) {
             return;
         }
         wantedMirroredToActor = wanted;
-        DeviceActorState before = productionRuntime.diagnostics().state();
-        productionRuntime.submit(wanted ? new DeviceEvent.WantedOnline() : new DeviceEvent.WantedOffline());
-        drainUnhandledProductionEffects();
+        DeviceActorState before = runtime.diagnostics().state();
+        runtime.submit(wanted ? new DeviceEvent.WantedOnline() : new DeviceEvent.WantedOffline());
+        drainUnhandledEffects();
         if (!wanted) {
             clearConnectWindow();
         }
         logger.debug("[reconcile:{}] connection intent -> {} (actor {} -> {})", name, wanted ? "online" : "offline",
-                before, productionRuntime.diagnostics().stateName());
+                before, runtime.diagnostics().stateName());
     }
 
     /**
-     * Mirror the async connect-attempt outcomes into the production actor and drive its deadline. Runs at the
+     * Mirror the async connect-attempt outcomes into the actor and drive its deadline. Runs at the
      * top of every act(). On NativeConnected the CONNECT procedure hands off to the actor-owned post-connect
-     * pipeline (settle -> resolve -> subscribe -> online), which {@link #driveProductionGattPipeline} advances
+     * pipeline (settle -> resolve -> subscribe -> online), which {@link #driveGattPipeline} advances
      * from the connected branch of act().
      */
-    private void syncProductionRuntime(Observed o) {
-        DeviceActorDiagnostics diagnostics = productionRuntime.diagnostics();
+    private void syncRuntime(Observed o) {
+        DeviceActorDiagnostics diagnostics = runtime.diagnostics();
         boolean connectInFlight = diagnostics.activeProcedureName() == DeviceProcedureName.CONNECT
                 && diagnostics.state() == DeviceActorState.CONNECTING;
         if (!connectInFlight) {
-            drainUnhandledProductionEffects();
+            drainUnhandledEffects();
             return;
         }
         if (o.hasNative && o.nativeConnected) {
             // The attempt succeeded: the procedure records it and hands off (the settle handoff effect is
-            // outside the production slice and gets drained below); the rejection streak is over.
+            // outside the actor slice and gets drained below); the rejection streak is over.
             commandDisallowedStreak = 0;
-            productionRuntime.submit(new DeviceEvent.NativeConnected(productionRuntime.generation()));
+            runtime.submit(new DeviceEvent.NativeConnected(runtime.generation()));
         } else {
             // Mirror pairing edges so the actor's state clock freezes/resets exactly like the reconciler's
             // connect-deadline freeze: PairingStarted/Ended transitions restart the residency window, and
             // ticks are paused while pairing so a long SMP ladder cannot expire the deadline mid-negotiation.
             if (o.pairing != pairingMirroredToActor) {
                 pairingMirroredToActor = o.pairing;
-                productionRuntime.submit(o.pairing ? new DeviceEvent.PairingStarted(productionRuntime.generation())
-                        : new DeviceEvent.PairingEnded(productionRuntime.generation()));
+                runtime.submit(o.pairing ? new DeviceEvent.PairingStarted(runtime.generation())
+                        : new DeviceEvent.PairingEnded(runtime.generation()));
             }
-            productionRuntime.tick(o.pairing);
+            runtime.tick(o.pairing);
         }
-        drainUnhandledProductionEffects();
+        drainUnhandledEffects();
     }
 
     /** Safety valve: any actor effect no executor claimed is drained and logged rather than silently dropped. */
-    private void drainUnhandledProductionEffects() {
-        for (DeviceEffect effect : productionRuntime.drainUnhandledEffects()) {
-            logger.debug("[reconcile:{}] actor effect outside the production slice: {}", name, effect.operation());
+    private void drainUnhandledEffects() {
+        for (DeviceEffect effect : runtime.drainUnhandledEffects()) {
+            logger.debug("[reconcile:{}] actor effect outside the actor slice: {}", name, effect.operation());
         }
     }
 
     /**
-     * The production CONNECT procedure entered BACKING_OFF (evented failure, sync rejection, or its deadline).
+     * The CONNECT procedure entered BACKING_OFF (evented failure, sync rejection, or its deadline).
      * The backoff policy has already marked the port disconnected (+ stale-bond self-heal); here the reconciler
      * closes its connect window and applies the wedge escalation the old inline deadline path carried: a pending
      * window that survived past the hard deadline means the create-connection is wedged at the controller.
      */
-    private void onProductionBackoff(DeviceActorDiagnostics diagnostics) {
+    private void onBackoff(DeviceActorDiagnostics diagnostics) {
         if (connectingSince != 0) {
             long connectingFor = clock.millis() - connectingSince;
             if (connectingFor > PENDING_RESET_AFTER_MS && resetBudget.tryReset(name)) {
@@ -606,15 +604,15 @@ public class DeviceReconciler extends Reconciler<Boolean, DeviceReconciler.Obser
     }
 
     /**
-     * Adapter reset fanout (frozen constraint 12): an adapter reset is a generation boundary for every device
+     * Adapter reset fanout (design constraint): an adapter reset is a generation boundary for every device
      * on that adapter. Started cancels the active procedure and bumps the device generation, so every event
      * and effect from the pre-reset world is fenced as stale; the backoff policy clears the port (handles
      * dropped, rediscovery from a fresh advert). Local judgment state falls with it. Must be called on the
      * reconcile tick thread — the actor runtime is caller-threaded.
      */
     public void onAdapterResetStarted(long adapterGeneration) {
-        productionRuntime.submit(new DeviceEvent.AdapterResetStarted(adapterGeneration));
-        drainUnhandledProductionEffects();
+        runtime.submit(new DeviceEvent.AdapterResetStarted(adapterGeneration));
+        drainUnhandledEffects();
         clearConnectWindow();
         commandDisallowedStreak = 0;
         resolveFailStreak = 0;
@@ -626,23 +624,23 @@ public class DeviceReconciler extends Reconciler<Boolean, DeviceReconciler.Obser
      * to be online before, IDLE_DISABLED otherwise — and the next reconcile drives recovery as a cold start.
      */
     public void onAdapterResetCompleted(long adapterGeneration, @Nullable String result) {
-        productionRuntime.submit(new DeviceEvent.AdapterResetCompleted(adapterGeneration, result));
-        drainUnhandledProductionEffects();
+        runtime.submit(new DeviceEvent.AdapterResetCompleted(adapterGeneration, result));
+        drainUnhandledEffects();
     }
 
     public DeviceActorDiagnostics actorDiagnostics() {
-        return productionRuntime.diagnostics();
+        return runtime.diagnostics();
     }
 
-    DeviceActorRuntime productionRuntimeForTest() {
-        return productionRuntime;
+    DeviceActorRuntime runtimeForTest() {
+        return runtime;
     }
 
     int commandDisallowedStreakForTest() {
         return commandDisallowedStreak;
     }
 
-    private void observeProductionRuntimeEvent(DeviceEvent event) {
+    private void observeRuntimeEvent(DeviceEvent event) {
         if (event instanceof DeviceEvent.NativeConnected) {
             commandDisallowedStreak = 0;
             return;
@@ -664,12 +662,12 @@ public class DeviceReconciler extends Reconciler<Boolean, DeviceReconciler.Obser
     }
 
     /**
-     * The production actor runs the full lifecycle chain: CONNECT hands off to SETTLE_LINK on native
+     * The actor runs the full lifecycle chain: CONNECT hands off to SETTLE_LINK on native
      * connection, whose timer expiry hands off to RESOLVE_GATT, then SUBSCRIBE_NOTIFICATIONS, then the
      * (deadline-free) ONLINE_MONITOR. The reconciler paces resolve retries and feeds outcome judgments
-     * as events; see {@link #driveProductionGattPipeline}.
+     * as events; see {@link #driveGattPipeline}.
      */
-    private static @Nullable DeviceProcedure createProductionProcedure(DeviceProcedureName procedureName) {
+    private static @Nullable DeviceProcedure createProcedure(DeviceProcedureName procedureName) {
         if (procedureName == DeviceProcedureName.CONNECT) {
             return new ConnectProcedure(CONNECT_DEADLINE_MS);
         }

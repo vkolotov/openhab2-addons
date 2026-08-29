@@ -46,7 +46,7 @@ public final class DevicePortEffectExecutor implements DeviceEffectExecutor {
                 port.disconnectNative();
                 return true;
             case CLEAR_STALE_PAIRING:
-                // Evidence gate (frozen constraint 9): the effect is emitted on every failed/timed-out connect
+                // Evidence gate (design constraint): the effect is emitted on every failed/timed-out connect
                 // attempt, but keys are only cleared when the device actually holds stored keys — a pre-paired
                 // device whose create-connection failed is the dead-bond case; anything else is a no-op.
                 if (port.hasStalePairing()) {

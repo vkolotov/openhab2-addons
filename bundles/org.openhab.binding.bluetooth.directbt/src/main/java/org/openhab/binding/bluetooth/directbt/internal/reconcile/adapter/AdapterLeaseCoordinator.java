@@ -36,7 +36,7 @@ import org.slf4j.Logger;
  * <li><b>No contention:</b> the {@link #scanWanted} rules apply (scan to discover, inbox
  * discovery yields to an establishing device, everything yields to an in-flight create-connection).</li>
  * <li><b>Contention time-slice:</b> when one device needs DISCOVERY (no handle) while another is ESTABLISHING
- * (holds a handle, needs the scan off to connect), neither may hold the radio indefinitely. The old rollup let
+ * (holds a handle, needs the scan off to connect), neither may hold the radio indefinitely. A static rollup would let
  * discovery win statically, which starved every connect for as long as the undiscovered device stayed invisible.
  * The radio therefore alternates: a connect slice first (the acute need), then a discovery slice (the chronic
  * need), bounded both ways.</li>

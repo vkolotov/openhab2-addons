@@ -35,7 +35,7 @@ public final class ConnectProcedure implements DeviceProcedure {
     /**
      * Residency bound for the CONNECT_LEASE wait. A lease legitimately takes as long as the adapter
      * coordinator's discovery slice (30 s) before the scan yields; this bound only catches a wedged
-     * scan that never stops (no lease may outwait it silently — frozen constraint 5).
+     * scan that never stops (no lease may outwait it silently ).
      */
     public static final long LEASE_WAIT_DEADLINE_MS = 45_000;
 

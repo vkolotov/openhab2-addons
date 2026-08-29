@@ -107,7 +107,8 @@ public class DirectBTBridgeHandler extends AbstractBluetoothBridgeHandler<Direct
     private static final long MIN_OBSERVE_INTERVAL_MS = 300;
     // Hard cap on the best-effort native teardown in dispose() (device disconnect + adapter detach). The native
     // dev.disconnect() joins the L2CAP reader thread and can block forever on a wedged controller; capping it
-    // keeps dispose() bounded so a JVM shutdown cannot hang (which previously got openHAB SIGKILLed by systemd).
+    // keeps dispose() bounded so a JVM shutdown cannot hang (an unbounded dispose lets the service manager SIGKILL
+    // openHAB).
     private static final long DISPOSE_NATIVE_TIMEOUT_MS = 3000;
 
     /** Sink for arbitration decisions made before the adapter address is known; records nothing. */
@@ -142,7 +143,7 @@ public class DirectBTBridgeHandler extends AbstractBluetoothBridgeHandler<Direct
     // events (OH connect/disconnect + native deviceFound/Connected/Disconnected/discoveringChanged) collapses
     // to a single tick that observes the latest native truth; the surplus requests do ZERO native reads.
     private final AtomicBoolean reconcilePending = new AtomicBoolean();
-    // Adapter reset fanout (constraint 12): monotonic generation stamped on every reset announcement, and the
+    // Adapter reset fanout: monotonic generation stamped on every reset announcement, and the
     // completion handed from the async reset thread to the reconcile tick that announces it to the devices.
     private final AtomicLong adapterResetGeneration = new AtomicLong();
     private final AtomicBoolean adapterResetInFlight = new AtomicBoolean();
@@ -846,7 +847,7 @@ public class DirectBTBridgeHandler extends AbstractBluetoothBridgeHandler<Direct
             }
         });
         // The needsDiscovery-vs-establishing conflict is arbitrated by the lease coordinator (time-sliced both
-        // ways). The old static rollup let discovery win indefinitely, which starved every connect for as long
+        // ways). A static rollup lets discovery win indefinitely, starving every connect for as long
         // as an undiscovered device stayed invisible. The coordinator also evaluates generation-tagged evidence
         // of controller-side connections missing from host state; ordinary device absence is discovery demand,
         // never a reset trigger.
@@ -895,7 +896,7 @@ public class DirectBTBridgeHandler extends AbstractBluetoothBridgeHandler<Direct
             logger.debug("Direct-BT adapter reset requested while reset is already in flight; ignoring duplicate");
             return;
         }
-        // FANOUT (frozen constraint 12): an adapter reset is a generation boundary for EVERY device on it —
+        // FANOUT (design constraint): an adapter reset is a generation boundary for EVERY device on it —
         // the reset invalidates all native handles/connections at once. Announcing it BEFORE the native call
         // fences every in-flight attempt's events and effects as stale, so nothing from the pre-reset world can
         // land on the post-reset adapter. Announced on the reconcile tick thread (the actor runtime is
