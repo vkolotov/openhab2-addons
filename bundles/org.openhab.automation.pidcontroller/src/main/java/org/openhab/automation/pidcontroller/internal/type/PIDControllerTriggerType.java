@@ -106,6 +106,22 @@ public class PIDControllerTriggerType extends TriggerType {
                 .withLabel("I-part Upper Limit") //
                 .withDescription("The I-part will be max this value. Can be left empty for no limit.") //
                 .build());
+        configDescriptions.add(ConfigDescriptionParameterBuilder.create(CONFIG_I_MIN_ITEM, Type.TEXT) //
+                .withRequired(false) //
+                .withMultiple(false) //
+                .withContext(ITEM) //
+                .withLabel("I-part Lower Limit Item") //
+                .withDescription("Number Item read on every calculation that overrides the I-part lower limit. "
+                        + "Falls back to the I-part Lower Limit while the Item has no numeric state.") //
+                .build());
+        configDescriptions.add(ConfigDescriptionParameterBuilder.create(CONFIG_I_MAX_ITEM, Type.TEXT) //
+                .withRequired(false) //
+                .withMultiple(false) //
+                .withContext(ITEM) //
+                .withLabel("I-part Upper Limit Item") //
+                .withDescription("Number Item read on every calculation that overrides the I-part upper limit. "
+                        + "Falls back to the I-part Upper Limit while the Item has no numeric state.") //
+                .build());
         configDescriptions.add(ConfigDescriptionParameterBuilder.create(CONFIG_I_DECAY_TIME, Type.DECIMAL) //
                 .withRequired(false) //
                 .withMultiple(false) //

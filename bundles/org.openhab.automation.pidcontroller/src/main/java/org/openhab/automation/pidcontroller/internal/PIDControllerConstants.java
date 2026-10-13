@@ -34,6 +34,8 @@ public class PIDControllerConstants {
     public static final String CONFIG_KD_TIMECONSTANT = "kdTimeConstant";
     public static final String CONFIG_I_MAX = "integralMaxValue";
     public static final String CONFIG_I_MIN = "integralMinValue";
+    public static final String CONFIG_I_MAX_ITEM = "integralMaxItem";
+    public static final String CONFIG_I_MIN_ITEM = "integralMinItem";
     public static final String CONFIG_I_DECAY_TIME = "integralDecayTime";
     public static final String CONFIG_I_HOLD_ITEM = "integralHoldItem";
     public static final String CONFIG_I_HOLD_DIRECTIONAL = "integralHoldDirectional";

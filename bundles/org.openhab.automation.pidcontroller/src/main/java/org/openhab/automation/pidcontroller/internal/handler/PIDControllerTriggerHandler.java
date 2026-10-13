@@ -78,6 +78,10 @@ public class PIDControllerTriggerHandler extends BaseTriggerModuleHandler implem
     private @Nullable ScheduledFuture<?> calculationJob;
     private ItemRegistry itemRegistry;
     private @Nullable String integralHoldItemName;
+    private @Nullable String integralMinItemName;
+    private @Nullable String integralMaxItemName;
+    private final double configuredIntegralMin;
+    private final double configuredIntegralMax;
     private final Set<String> warnedItemProblems = new HashSet<>();
 
     public PIDControllerTriggerHandler(Trigger module, ItemRegistry itemRegistry, EventPublisher eventPublisher,
@@ -118,6 +122,10 @@ public class PIDControllerTriggerHandler extends BaseTriggerModuleHandler implem
         double iMaxValue = getDoubleFromConfig(config, CONFIG_I_MAX);
         double integralDecayTime = getDoubleFromConfig(config, CONFIG_I_DECAY_TIME);
         integralHoldItemName = (String) config.get(CONFIG_I_HOLD_ITEM);
+        integralMinItemName = (String) config.get(CONFIG_I_MIN_ITEM);
+        integralMaxItemName = (String) config.get(CONFIG_I_MAX_ITEM);
+        configuredIntegralMin = iMinValue;
+        configuredIntegralMax = iMaxValue;
         boolean directionalIntegralHold = getBooleanFromConfig(config, CONFIG_I_HOLD_DIRECTIONAL);
         pInspector = (String) config.get(P_INSPECTOR);
         iInspector = (String) config.get(I_INSPECTOR);
@@ -221,6 +229,46 @@ public class PIDControllerTriggerHandler extends BaseTriggerModuleHandler implem
         }
     }
 
+    /**
+     * The I-part limits for this calculation: each limit Item that holds a number overrides the configured value.
+     */
+    private IntegralLimits integralLimits() {
+        IntegralLimits limits = IntegralLimits.resolve(configuredIntegralMin, configuredIntegralMax,
+                integralLimitFromItem(integralMinItemName), integralLimitFromItem(integralMaxItemName));
+        if (limits.crossed()) {
+            if (firstReportOf("limits:crossed")) {
+                logger.warn("I-part limit Items '{}' and '{}' cross, using the configured limits", integralMinItemName,
+                        integralMaxItemName);
+            }
+        } else {
+            clearWarning("limits:crossed");
+        }
+        return limits;
+    }
+
+    /**
+     * The value of an I-part limit Item, or NaN when it has none, in which case the configured limit applies. A
+     * missing Item is reported once; NULL or UNDEF is a normal transient state (e.g. during startup) and is not.
+     */
+    private double integralLimitFromItem(@Nullable String itemName) {
+        if (itemName == null || itemName.isBlank()) {
+            return Double.NaN;
+        }
+        try {
+            Item item = itemRegistry.getItem(itemName);
+            clearWarning("limit:" + itemName);
+            return getItemValueAsNumber(item);
+        } catch (ItemNotFoundException e) {
+            if (firstReportOf("limit:" + itemName)) {
+                logger.warn("I-part limit Item '{}' not found, using the configured limit", itemName);
+            }
+        } catch (PIDException e) {
+            logger.debug("I-part limit Item '{}' has no usable value, using the configured limit: {}", itemName,
+                    e.getMessage());
+        }
+        return Double.NaN;
+    }
+
     private double getDoubleFromConfig(Configuration config, String key) {
         Object rawValue = config.get(key);
 
@@ -292,7 +340,9 @@ public class PIDControllerTriggerHandler extends BaseTriggerModuleHandler implem
 
         long now = System.currentTimeMillis();
 
-        PIDOutputDTO output = controller.calculate(input, setpoint, now - previousTimeMs, loopTimeMs, isIntegralHeld());
+        IntegralLimits limits = integralLimits();
+        PIDOutputDTO output = controller.calculate(input, setpoint, now - previousTimeMs, loopTimeMs, isIntegralHeld(),
+                limits.min(), limits.max());
         previousTimeMs = now;
 
         updateItem(pInspector, output.getProportionalPart());
