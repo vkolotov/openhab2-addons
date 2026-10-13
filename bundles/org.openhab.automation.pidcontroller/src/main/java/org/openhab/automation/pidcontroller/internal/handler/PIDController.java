@@ -33,8 +33,8 @@ class PIDController {
     private double ki;
     private double kd;
     private double derivativeTimeConstantSec;
-    private double iMinResult;
-    private double iMaxResult;
+    private double iMinValue;
+    private double iMaxValue;
     private double integralDecayTimeSec;
     private boolean directionalIntegralHold;
 
@@ -47,17 +47,11 @@ class PIDController {
         this.derivativeTimeConstantSec = derivativeTimeConstantSec;
         this.integralDecayTimeSec = integralDecayTimeSec;
         this.directionalIntegralHold = directionalIntegralHold;
-        this.iMinResult = Double.NaN;
-        this.iMaxResult = Double.NaN;
+        this.iMinValue = iMinValue;
+        this.iMaxValue = iMaxValue;
 
-        // prepare min/max, restore previous state for the integral result accumulator
+        // restore previous state for the integral result accumulator
         if (Double.isFinite(kiAdjuster) && Math.abs(kiAdjuster) > 0.0) {
-            if (Double.isFinite(iMinValue)) {
-                this.iMinResult = iMinValue / kiAdjuster;
-            }
-            if (Double.isFinite(iMaxValue)) {
-                this.iMaxResult = iMaxValue / kiAdjuster;
-            }
             if (Double.isFinite(previousIntegralPart)) {
                 this.integralResult = previousIntegralPart / kiAdjuster;
             }
@@ -82,6 +76,17 @@ class PIDController {
 
     public PIDOutputDTO calculate(double input, double setpoint, long lastInvocationMs, int loopTimeMs,
             boolean integralHold) {
+        return calculate(input, setpoint, lastInvocationMs, loopTimeMs, integralHold, iMinValue, iMaxValue);
+    }
+
+    /**
+     * Runs one calculation with the given I-part limits instead of the configured ones.
+     *
+     * @param iMinValue lower I-part limit in output units for this calculation, NaN for no limit
+     * @param iMaxValue upper I-part limit in output units for this calculation, NaN for no limit
+     */
+    public PIDOutputDTO calculate(double input, double setpoint, long lastInvocationMs, int loopTimeMs,
+            boolean integralHold, double iMinValue, double iMaxValue) {
         final double lastInvocationSec = lastInvocationMs / 1000d;
         final double error = setpoint - input;
         final double errorChange = error - previousError;
@@ -147,11 +152,15 @@ class PIDController {
             integralResult *= Math.exp(-lastInvocationSec / integralDecayTimeSec);
         }
 
-        if (Double.isFinite(iMinResult)) {
-            integralResult = Math.max(integralResult, iMinResult);
-        }
-        if (Double.isFinite(iMaxResult)) {
-            integralResult = Math.min(integralResult, iMaxResult);
+        // The limits are in output units, so they are converted to accumulator units with the current gain. A limit
+        // that tightens below the accumulator takes effect on this calculation: the I-part is clamped, not faded.
+        if (Double.isFinite(ki) && Math.abs(ki) > 0.0) {
+            if (Double.isFinite(iMinValue)) {
+                integralResult = Math.max(integralResult, iMinValue / ki);
+            }
+            if (Double.isFinite(iMaxValue)) {
+                integralResult = Math.min(integralResult, iMaxValue / ki);
+            }
         }
 
         // calculate parts

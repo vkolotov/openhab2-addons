@@ -39,6 +39,8 @@ This is then transferred to the action module.
 | `loopTime`       | Decimal | The interval the output value will be updated in milliseconds. Note: the output will also be updated when the input value or the setpoint changes. | Y        |
 | `integralMinValue` | Decimal | The I-part will be limited (min) to this value.                                                                                                    | N        |
 | `integralMaxValue` | Decimal | The I-part will be limited (max) to this value.                                                                                                    | N        |
+| `integralMinItem` | Item    | Number Item that overrides `integralMinValue` on every calculation while it holds a number.                                                     | N        |
+| `integralMaxItem` | Item    | Number Item that overrides `integralMaxValue` on every calculation while it holds a number.                                                     | N        |
 | `integralDecayTime` | Decimal | Time constant in seconds for fading out the I-part while the deviation is not growing. 0 (default) disables the fade-out.                          | N        |
 | `integralHoldItem` | Item    | Switch or Contact Item that suspends the I-part while the actuator cannot act on the process. Empty (default) always integrates.                     | N        |
 | `integralHoldDirectional` | Boolean | While the hold is active, suspend only the accumulation that takes the I-part further from zero and let a step that brings it back through. `false` (default) suspends both. | N        |
@@ -55,6 +57,16 @@ The I-part can be limited via `integralMinValue`/`integralMaxValue`.
 This is useful if the regulation cannot meet its setpoint from time to time.
 E.g. a heating controller in the summer, which can not cool (min limit) or when the heating valve is already at 100% and the room is only slowly heating up (max limit).
 When controlling a heating valve, reasonable values are 0% (min limit) and 100% (max limit).
+
+### Integral Limit Items
+
+Where the right limits depend on the state of the plant, `integralMinItem` and `integralMaxItem` name Number Items that are read on every calculation and override the configured limits.
+A damper that serves both heating and cooling is the usual example: the I-part needed to open it to its heating maximum differs from the one for its cooling maximum, so a rule can set the limits for the current mode without changing the controller configuration.
+
+The values are in output units, like `integralMinValue`/`integralMaxValue`.
+While a limit Item is NULL, UNDEF or missing, the configured limit for that side applies.
+If the resulting limits cross (lower above upper), both configured limits are used instead and a warning is logged.
+A limit that tightens below the current I-part clamps it on the next calculation.
 
 ### Integral Decay
 
